@@ -1,0 +1,361 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "telemedicine",
+  "category": "Common Problems",
+  "title": "Telemedicine",
+  "seoTitle": "Design a Telemedicine Platform",
+  "description": "Design a telemedicine platform — provider scheduling and booking, virtual waiting rooms, secure video visits, clinical notes and prescriptions, and HIPAA-grade security and auditing.",
+  "tags": [
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🩺",
+      "title": "What is a Telemedicine Platform?",
+      "text": "A telemedicine platform (Teladoc, Practo, Doxy.me) lets patients book and attend medical appointments by video. It combines a booking system, a video call service, and a lightweight medical record: visit notes, prescriptions and documents. Because it handles health data, privacy, security and audit trails are core requirements, not extras."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Patients should be able to find providers by specialty and book an available time slot.",
+        "Patients should join a virtual waiting room and then a secure video visit with the provider.",
+        "Providers should be able to write visit notes and send prescriptions electronically.",
+        "Patients should be able to see their visit history, notes and prescriptions."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Insurance claims and billing.",
+        "Lab orders and integrations with hospital EHR systems (mentioned briefly).",
+        "On-demand urgent care queues."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Security and privacy: health data encrypted in transit and at rest, strict access control, full audit logging (HIPAA/GDPR).",
+        "A time slot can never be double-booked.",
+        "Video calls with low latency (< 300 ms) and good quality on weak connections.",
+        "High availability during clinic hours; a failed call must be recoverable quickly."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Massive scale — ~100k visits per day is a large platform."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- find providers, book slots",
+        "- waiting room + video visit",
+        "- notes + e-prescriptions",
+        "- patient history",
+        "",
+        "Non-functional",
+        "- HIPAA-grade security + audits",
+        "- no double booking",
+        "- low-latency video",
+        "- available during clinic hours"
+      ],
+      "caption": "Telemedicine Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Provider**: specialty, licences (by state/country), schedule, timezone.",
+        "**Patient**: identity, demographics, consent records.",
+        "**Slot**: provider, start, end, status (`open`, `held`, `booked`).",
+        "**Appointment**: patient, provider, slot, status, video room ID.",
+        "**Clinical record**: visit notes, prescriptions, attachments — owned by the patient's chart."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /providers?specialty=&state=&date= -> providers with open slots\nPOST /appointments { slotId, patientId, reason, idempotencyKey }\nPOST /appointments/:id/join -> { roomToken, iceServers }\nPOST /appointments/:id/notes { soapNote }\nPOST /prescriptions { appointmentId, medication, dose, pharmacyId }\nGET  /patients/me/records"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-finding-providers-and-booking",
+      "text": "1) Finding providers and booking"
+    },
+    {
+      "type": "paragraph",
+      "text": "Providers publish recurring availability, which is expanded into **slots**. Search filters providers by specialty and **licence jurisdiction** (a provider can only treat patients located where they're licensed). Booking atomically changes the slot from `open` to `booked` and creates the appointment."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-waiting-room-and-video-visit",
+      "text": "2) Waiting room and video visit"
+    },
+    {
+      "type": "paragraph",
+      "text": "At visit time, the patient opens the appointment and enters a **waiting room** (a presence channel over WebSocket); the provider sees who's waiting and admits them. Both sides get a short-lived **room token** and connect with **WebRTC**. For one-to-one calls, media flows peer-to-peer when possible, via a **TURN relay** when firewalls block it, or through an **SFU** for multi-party visits (interpreter, family member)."
+    },
+    {
+      "type": "diagram",
+      "file": "01-visit.svg",
+      "caption": "Visit"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-notes-and-prescriptions",
+      "text": "3) Notes and prescriptions"
+    },
+    {
+      "type": "paragraph",
+      "text": "Providers write structured visit notes (SOAP format) during or after the call; notes are **signed and locked**, with later changes made as addenda. Prescriptions are sent to the patient's pharmacy through an **e-prescribing network** integration, with status tracked asynchronously."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-patient-records",
+      "text": "4) Patient records"
+    },
+    {
+      "type": "paragraph",
+      "text": "The patient's chart aggregates visits, notes and prescriptions. Reads go through an **authorization layer** that checks the relationship (patient themselves, treating provider, delegated caregiver) and logs every access."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-prevent-double-booking",
+      "text": "1) How do we prevent double booking?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Check then insert",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Check the slot is open, then create the appointment."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Two patients booking the last afternoon slot simultaneously both succeed."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Conditional update",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "`UPDATE slots SET status = 'booked', patient = ? WHERE id = ? AND status = 'open'`, in the same transaction as inserting the appointment."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Patients filling in intake forms may lose the slot halfway through."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Short holds with expiry",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "When a patient starts booking, place a **hold** (`status = 'held'`, `heldUntil = now + 5 min`) with the conditional update; confirm it when intake completes. A sweeper (or a check on read) releases expired holds. Idempotency keys make retries safe, and a unique constraint on `(providerId, start)` for booked appointments backs it up."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Holds briefly hide slots from others, so keep the window short."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-meet-hipaa-grade-security",
+      "text": "2) How do we meet HIPAA-grade security?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Encrypt everything in transit (TLS, SRTP for media) and at rest with keys in a KMS. Use **least-privilege access** with role- and relationship-based checks on every record read, and write an **immutable audit log** of who accessed what and when. Keep health data in dedicated, segregated stores; never put it in logs, analytics or push notification text (\"You have a new message\" rather than the diagnosis). Sign Business Associate Agreements with any vendor (video, SMS) that touches health data."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention data residency: some countries require health data to stay in-country, so deploy regional stacks with region-pinned storage."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-what-happens-when-a-call-drops",
+      "text": "3) What happens when a call drops?"
+    },
+    {
+      "type": "paragraph",
+      "text": "WebRTC connections monitor quality; clients reduce video resolution under poor bandwidth and fall back to **audio-only** before dropping. If the connection fails, both clients automatically rejoin the same room with their still-valid token. A **phone dial-in** fallback lets the visit continue by audio over the phone network."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "How do we prevent two patients booking the same slot?",
+      "options": [
+        "Show fewer slots",
+        "A conditional update from open/held to booked",
+        "Ask the provider",
+        "Refresh the page"
+      ],
+      "answer": 1,
+      "explanation": "The database guarantees only one booking succeeds."
+    },
+    {
+      "question": "Why use a TURN server in a video visit?",
+      "options": [
+        "To record calls",
+        "To relay media when firewalls block peer-to-peer connections",
+        "To encrypt notes",
+        "To book slots"
+      ],
+      "answer": 1,
+      "explanation": "TURN keeps calls working on restrictive networks."
+    },
+    {
+      "question": "Why shouldn't push notifications include diagnoses?",
+      "options": [
+        "They're too long",
+        "Notification content can appear on lock screens and pass through third parties",
+        "Phones can't show medical words",
+        "It's slower"
+      ],
+      "answer": 1,
+      "explanation": "Minimise exposure of protected health information."
+    },
+    {
+      "question": "Why are signed visit notes changed only through addenda?",
+      "options": [
+        "To save storage",
+        "To keep an accurate, auditable medical record",
+        "Editors are expensive",
+        "Notes can't be edited technically"
+      ],
+      "answer": 1,
+      "explanation": "Medical records must show what was known and recorded at the time."
+    }
+  ]
+}

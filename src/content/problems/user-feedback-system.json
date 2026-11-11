@@ -1,0 +1,357 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "user-feedback-system",
+  "category": "Common Problems",
+  "title": "User Feedback System",
+  "seoTitle": "Design a User Feedback System",
+  "description": "Design a user feedback system — in-app feedback and surveys, attachments and context capture, spam filtering, automatic categorisation and deduplication, routing to teams, and closing the loop with users.",
+  "tags": [
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "easy",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "💡",
+      "title": "What is a User Feedback System?",
+      "text": "A user feedback system collects what users say about a product — bug reports, feature requests, ratings, survey answers — from inside the app, the website and support channels. It captures useful context automatically (app version, device, screen), sorts and groups feedback so teams can see trends, routes it to the right owners, and lets users hear back when something is fixed."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to submit feedback (text, optional screenshot, rating) from any app or the website.",
+        "The system should capture context automatically: user, app version, device, page, recent errors.",
+        "Feedback should be categorised (bug, feature request, praise), tagged by product area, and grouped with similar items.",
+        "Product teams should see dashboards of trends, search feedback, and link items to tickets.",
+        "Users should be notified when their reported issue is resolved."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Live chat support.",
+        "App store review scraping (mentioned briefly)."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Submitting feedback never slows the app and works on poor connections (queued and retried).",
+        "No feedback lost once the user hits submit.",
+        "Privacy: screenshots and logs may contain personal data, so access is restricted and data is retained only as long as needed.",
+        "Scale to ~1M submissions per day, with spikes after releases or outages."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Real-time dashboards (minutes of delay is fine)."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- submit text, screenshot, rating",
+        "- auto-capture context",
+        "- categorise, tag, group",
+        "- dashboards, search, tickets",
+        "- notify on resolution",
+        "",
+        "Non-functional",
+        "- never slows the app",
+        "- nothing lost",
+        "- privacy for screenshots + logs",
+        "- 1M / day, release spikes"
+      ],
+      "caption": "Feedback Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Feedback item**: ID, user, channel, text, rating, attachments, context, status.",
+        "**Attachment**: screenshot or log file in object storage.",
+        "**Cluster**: a group of similar items (e.g. \"checkout button unresponsive on Android 15\").",
+        "**Ticket link**: cluster or item linked to an issue in the team's tracker."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /feedback { clientId, text, rating?, category?, context } -> { feedbackId, uploadUrls[] }\nPUT  {uploadUrl}                                  (screenshot direct to storage)\nGET  /feedback?area=&category=&from=&q=           (internal dashboard)\nPOST /clusters/:id/link { ticketUrl }\n(event) ticket resolved -> notify linked users"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-submitting-feedback",
+      "text": "1) Submitting feedback"
+    },
+    {
+      "type": "paragraph",
+      "text": "The in-app SDK collects the text and context, generates a **client ID** (for idempotent retries), and stores the submission locally until the server acknowledges it. The **Feedback API** writes the item and returns **pre-signed URLs** for attachments, which the client uploads directly to object storage."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-processing",
+      "text": "2) Processing"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each new item is published to a queue. A **processing pipeline** filters spam, redacts obvious personal data in text (emails, card numbers), classifies the category and product area with a text classifier, computes an **embedding**, and assigns the item to an existing **cluster** if it's similar enough, or starts a new one."
+    },
+    {
+      "type": "diagram",
+      "file": "01-processing.svg",
+      "caption": "Processing"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-dashboards-and-routing",
+      "text": "3) Dashboards and routing"
+    },
+    {
+      "type": "paragraph",
+      "text": "Items are indexed for search and aggregated into trends (volume per cluster per day, rating by version). Rules route clusters to owning teams; a sudden spike in a cluster after a release raises an alert."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-closing-the-loop",
+      "text": "4) Closing the loop"
+    },
+    {
+      "type": "paragraph",
+      "text": "When a team links a cluster to a ticket and the ticket is resolved, a webhook from the tracker triggers notifications to everyone who reported that issue (\"Thanks — this is fixed in version 5.2\")."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-make-feedback-useful-at-scale",
+      "text": "1) How do we make feedback useful at scale?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "A shared inbox",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Send all feedback to an inbox that people read."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A million items a day can't be read; duplicates hide the real volume of each issue."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Manual tagging and keyword rules",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Triage agents tag items, with keyword rules for common topics."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Slow and inconsistent, and keywords miss paraphrases."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Classification + embedding clusters + trend detection",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Classify each item automatically, and **cluster** by embedding similarity so 3,000 different phrasings of the same bug become one cluster with a count. Show clusters ranked by volume and growth, broken down by version and device. Alert owners when a cluster spikes, especially after a release. Humans review and merge clusters, which also trains the classifier."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Clusters drift over time; periodically recluster and let humans pin canonical clusters."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-handle-sensitive-attachments",
+      "text": "2) How do we handle sensitive attachments?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Screenshots and logs may include personal data. Attachments are stored encrypted with short-lived signed URLs for viewing, accessible only to roles that need them, and deleted after a retention period. The SDK can **blur sensitive fields** in screenshots before upload (marked input fields), and text is scanned to redact identifiers before indexing."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention that context capture should be consented and documented: \"include logs\" is a toggle the user can see."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-cope-with-spikes",
+      "text": "3) How do we cope with spikes?"
+    },
+    {
+      "type": "paragraph",
+      "text": "After a bad release, submissions can jump 50×. The API is stateless and only writes a small record plus queue message, so it scales easily; heavy processing (classification, embeddings) runs asynchronously from the queue and can lag a few minutes without losing anything. Duplicate submissions from retries are dropped by client ID."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why upload screenshots directly to object storage with pre-signed URLs?",
+      "options": [
+        "It's more secure by default",
+        "It keeps large uploads off the API servers",
+        "Screenshots are small",
+        "Browsers require it"
+      ],
+      "answer": 1,
+      "explanation": "The API only handles small records."
+    },
+    {
+      "question": "How do we avoid losing feedback on a bad connection?",
+      "options": [
+        "Ask the user to retry",
+        "The SDK queues it locally and retries with a client ID for deduplication",
+        "Send it by email",
+        "Drop it"
+      ],
+      "answer": 1,
+      "explanation": "Idempotent retries make delivery reliable."
+    },
+    {
+      "question": "What does clustering feedback by embeddings achieve?",
+      "options": [
+        "Encryption",
+        "Groups many phrasings of the same issue so its real volume is visible",
+        "Faster uploads",
+        "Smaller storage"
+      ],
+      "answer": 1,
+      "explanation": "Teams see one issue with a count instead of thousands of items."
+    },
+    {
+      "question": "How is the loop closed with users?",
+      "options": [
+        "It isn't",
+        "When a linked ticket is resolved, reporters are notified",
+        "Users check a website",
+        "Monthly newsletters"
+      ],
+      "answer": 1,
+      "explanation": "Linking clusters to tickets enables targeted notifications."
+    }
+  ]
+}

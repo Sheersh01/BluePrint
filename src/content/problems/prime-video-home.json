@@ -1,0 +1,347 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "prime-video-home",
+  "category": "Common Problems",
+  "title": "Prime Video Home",
+  "seoTitle": "Design the Prime Video (Streaming Service) Home Page",
+  "description": "Design the personalised home page of a video streaming service like Prime Video or Netflix — rows of titles chosen per user, candidate generation and ranking, entitlements, artwork, and serving millions of page loads quickly.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📺",
+      "title": "What is the Prime Video Home Page?",
+      "text": "When you open a streaming app, the home page shows rows like \"Continue watching\", \"Top 10 in your country\" and \"Because you watched…\", each filled with title artwork. Every user sees a different page, it must load almost instantly on TVs, phones and browsers, and it can only include titles the user is entitled to watch in their country."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should see a personalised home page: an ordered list of rows, each with an ordered list of titles.",
+        "Rows include personal ones (continue watching, watchlist, recommendations) and editorial or trending ones.",
+        "Only titles available in the user's region and entitled by their subscription should appear (with clear labels for rent/buy or add-on channels).",
+        "Users can scroll rows horizontally and the page vertically, loading more on demand."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Video playback.",
+        "Search.",
+        "Training recommendation models (see Recommendation Engine)."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "The first screen renders in < 1 second, including on living-room devices.",
+        "Highly available: if personalisation fails, show a sensible non-personalised page rather than an error.",
+        "Scale to ~200M users with a big evening peak (~100k page loads per second).",
+        "\"Continue watching\" reflects what the user just watched within a minute."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Perfect freshness of recommendations (hours old is fine)."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- personalised rows of titles",
+        "- personal + editorial rows",
+        "- only entitled + regional titles",
+        "- lazy-load rows",
+        "",
+        "Non-functional",
+        "- first screen < 1s",
+        "- degrade, never error",
+        "- 100k loads / s peak",
+        "- continue watching fresh"
+      ],
+      "caption": "Home Page Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Title**: movie or series, metadata, artwork variants, availability windows per region.",
+        "**Row**: type (personal, editorial, genre), title and a list of title IDs.",
+        "**Page**: ordered rows for a user on a device.",
+        "**Entitlement**: what a user can watch (subscription, channels, rentals).",
+        "**Viewing progress**: user, title/episode, position."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET /home?device=tv&cursor= -> { rows: [{ id, title, items: [{ titleId, artUrl, badge }] }], nextCursor }\nGET /rows/:rowId?cursor=        -> more items for a row"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-building-rows",
+      "text": "1) Building rows"
+    },
+    {
+      "type": "paragraph",
+      "text": "Row content comes from several sources: **offline recommendation jobs** precompute \"Because you watched\" and \"Top picks\" per user each day; **editorial** rows are curated; **trending** rows are computed per region every few minutes; **continue watching** and **watchlist** come from live user stores."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-assembling-the-page",
+      "text": "2) Assembling the page"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Home Service** gathers candidate rows for the user, filters items by **region and entitlements**, removes duplicates across rows, and ranks the rows themselves (a user who binges documentaries gets that row higher). It then **hydrates** each title with metadata and the right artwork for the device."
+    },
+    {
+      "type": "diagram",
+      "file": "01-page-assembly.svg",
+      "caption": "Page assembly"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-lazy-loading",
+      "text": "3) Lazy loading"
+    },
+    {
+      "type": "paragraph",
+      "text": "Only the first few rows and the first ~10 items per row are returned. More rows arrive as the user scrolls down, and more items as they scroll right, using cursors. This keeps the first response small and fast."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-load-the-page-in-under-a-second",
+      "text": "1) How do we load the page in under a second?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Compute everything on request",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Run recommendation models and query every source when the user opens the app."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Model inference and many sequential calls blow the latency budget at 100k requests per second."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Precomputed rows plus parallel fetches",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Precompute heavy personal rows offline and store them in a key-value store by user. At request time, fetch all row sources **in parallel** with strict timeouts."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Still hydrating hundreds of titles per request."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Precompute + cache shared parts + fallbacks",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Precompute personal rows, and cache **shared rows** (trending, editorial, genre) per region and entitlement segment, since millions of users see the same ones. Title metadata and artwork URLs are cached in memory in the Home Service. Each source has a **timeout and fallback**: if recommendations are slow, substitute a popular-in-region row. Artwork images come from a CDN, sized per device."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Cached shared rows must still be filtered per user's exact entitlements, which must be fast (a bitmap or set check)."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-keep-continue-watching-fresh",
+      "text": "2) How do we keep \"Continue watching\" fresh?"
+    },
+    {
+      "type": "paragraph",
+      "text": "The player sends progress events every few seconds; a stream processor updates the user's **viewing progress** store and removes finished titles (or advances to the next episode). The Home Service always reads this row live, while the rest of the page may come from caches. When the user returns from watching, the app re-requests just that row."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention device differences: a TV home page shows fewer, larger tiles and has more memory constraints than mobile, so the API takes the device type and returns layout-appropriate rows and artwork."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-personalise-row-order-and-artwork",
+      "text": "3) How do we personalise row order and artwork?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Beyond choosing rows, a ranking model orders rows by predicted engagement for the user, with diversity constraints (not five comedy rows in a row). Artwork can be **personalised too**: each title has several artwork variants and a bandit picks the one most likely to appeal to this user. All of this is logged to measure impact with A/B tests."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why precompute personal recommendation rows?",
+      "options": [
+        "They never change",
+        "Running models on every page load is too slow and expensive",
+        "To hide them",
+        "Regulations"
+      ],
+      "answer": 1,
+      "explanation": "Offline jobs store rows per user for fast lookup."
+    },
+    {
+      "question": "What should happen if the recommendation source times out?",
+      "options": [
+        "Show an error page",
+        "Fall back to a popular-in-region row",
+        "Retry forever",
+        "Leave the screen blank"
+      ],
+      "answer": 1,
+      "explanation": "The page should degrade gracefully."
+    },
+    {
+      "question": "Which rows can be cached and shared across users?",
+      "options": [
+        "Continue watching",
+        "Trending and editorial rows per region and segment",
+        "Watchlist",
+        "None"
+      ],
+      "answer": 1,
+      "explanation": "Millions of users see the same shared rows."
+    },
+    {
+      "question": "Why load only the first few rows initially?",
+      "options": [
+        "Users don't scroll",
+        "To keep the first response small so the screen renders fast",
+        "TVs can't show rows",
+        "To save storage"
+      ],
+      "answer": 1,
+      "explanation": "Lazy loading fetches more as the user scrolls."
+    }
+  ]
+}

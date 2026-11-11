@@ -1,0 +1,33 @@
+{
+  "quiz": [
+    {
+      "question": "Which of these techniques is fundamentally about splitting data across multiple servers so each one handles a fraction of the total?",
+      "options": ["Caching frequently accessed data in memory", "Adding indexes to speed up queries", "Compressing data to save space", "Sharding (partitioning data across servers)"],
+      "answer": 3,
+      "explanation": "Sharding partitions data (here, view counters by video ID) so each server owns only part of the load."
+    },
+    {
+      "question": "Which data structure efficiently maintains the K largest counts as views stream in?",
+      "options": ["A min-heap of size K", "A linked list", "A queue", "A trie"],
+      "answer": 0,
+      "explanation": "Compare each new count with the heap's smallest element; only larger ones replace it, in O(log K)."
+    },
+    {
+      "question": "What is the main trade-off of approximate counting such as a Count-Min Sketch?",
+      "options": ["It uses more memory", "It can overestimate counts, giving up precision", "It can't handle streams", "It requires a relational database"],
+      "answer": 1,
+      "explanation": "Sketches use tiny, fixed memory but can over-count — a problem when the requirement is precise top-K."
+    },
+    {
+      "question": "How can top-K for a sliding window (e.g. the last hour) be maintained?",
+      "options": [
+        "Add new views and subtract views as they leave the window",
+        "Recount all-time views every second",
+        "Only keep all-time counts",
+        "Ask clients to compute it"
+      ],
+      "answer": 0,
+      "explanation": "Processing both the head and the tail of the stream keeps window counts current without full recomputation."
+    }
+  ]
+}

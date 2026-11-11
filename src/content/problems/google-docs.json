@@ -1,0 +1,420 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "google-docs",
+  "category": "Common Problems",
+  "title": "Google Docs",
+  "seoTitle": "Design a Collaborative Editor Like Google Docs",
+  "description": "Design Google Docs — real-time collaborative editing with operational transformation or CRDTs, WebSocket sessions, presence and scalable document storage.",
+  "tags": [
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Google",
+      "Microsoft",
+      "Notion"
+    ],
+    "more": 12
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📝",
+      "title": "What is Google Docs?",
+      "text": "Google Docs is a browser-based word processor where many people can edit the same document at the same time and see each other's changes and cursors live."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to create a document.",
+        "Multiple users should be able to edit the same document concurrently.",
+        "Users should see other users' changes in real time.",
+        "Users should see the cursor positions and presence of other editors."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Rich formatting, images and comments.",
+        "Permissions and sharing.",
+        "Offline editing and full version history."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Edits should propagate to other collaborators with low latency (< 100ms).",
+        "All collaborators must converge to the same document state (eventual consistency with convergence).",
+        "The system should scale to millions of concurrent documents, with up to ~100 concurrent editors per document.",
+        "Documents must be durable — no acknowledged edit is ever lost."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Documents larger than a few MB."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- create document",
+        "- concurrent editing",
+        "- see changes in real time",
+        "- see cursors / presence",
+        "",
+        "Non-functional",
+        "- < 100ms propagation",
+        "- all editors converge",
+        "- millions of docs, ~100 editors/doc",
+        "- durable edits"
+      ],
+      "caption": "Google Docs Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "The central challenge is **concurrent edits to the same text**. If two users insert at position 5 at the same time, naively applying both produces different documents on each screen. We need an algorithm that guarantees convergence, plus an architecture that routes all editors of a document together."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Document**: id, title, and its current content (or a snapshot plus operations).",
+        "**Edit (Operation)**: an insert or delete at a position, with the document version it was based on.",
+        "**Cursor / Presence**: a user's position and selection in a document.",
+        "**Editor**: a user connected to a document."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Core Entities",
+        "- Document",
+        "- Edit (operation)",
+        "- Cursor / Presence",
+        "- Editor"
+      ],
+      "caption": "Google Docs Entities"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "paragraph",
+      "text": "Creating a document is plain REST:"
+    },
+    {
+      "type": "code",
+      "code": "POST /docs { \"title\": \"Untitled\" } -> { \"docId\" }"
+    },
+    {
+      "type": "paragraph",
+      "text": "Editing happens over a WebSocket, because changes flow both ways continuously:"
+    },
+    {
+      "type": "code",
+      "code": "WS /docs/:docId\n-> { \"type\": \"insert\", \"pos\": 5, \"text\": \"hi\", \"baseVersion\": 42 }\n-> { \"type\": \"delete\", \"pos\": 3, \"len\": 2, \"baseVersion\": 42 }\n-> { \"type\": \"cursor\", \"pos\": 10 }\n<- { \"type\": \"op\", ...transformed op..., \"version\": 43 }\n<- { \"type\": \"cursor\", \"userId\": \"u2\", \"pos\": 7 }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-should-be-able-to-create-a-document",
+      "text": "1) Users should be able to create a document"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **Document Metadata Service** creates the document record and an empty content snapshot."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-should-be-able-to-edit-concurrently-and-see-changes-in-real-time",
+      "text": "2) Users should be able to edit concurrently and see changes in real time"
+    },
+    {
+      "type": "paragraph",
+      "text": "Clients connect to a **Document Service** over WebSockets. Every edit is sent to the server, which orders it, transforms it against concurrent edits, persists it and broadcasts it to the other connected editors."
+    },
+    {
+      "type": "diagram",
+      "file": "01-collaborative-editing.svg",
+      "caption": "Collaborative editing"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-users-should-see-cursors-and-presence",
+      "text": "3) Users should see cursors and presence"
+    },
+    {
+      "type": "paragraph",
+      "text": "Cursor updates are sent over the same WebSocket but are **ephemeral**: the server broadcasts them to other editors and keeps them in memory only. Losing a cursor update is harmless; the next one replaces it."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-make-concurrent-edits-converge",
+      "text": "1) How do we make concurrent edits converge?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Last write wins on the whole document",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Each client sends the full document; the latest save overwrites."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Concurrent edits silently erase each other. Completely unusable for real-time collaboration."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Operational Transformation (OT) with a central server",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Clients send operations tagged with the version they were based on. The server holds the authoritative sequence: if an incoming op is based on an older version, it is **transformed** against every op applied since — e.g. an insert at position 5 is shifted to 7 if someone else inserted 2 characters before it. The transformed op gets the next version number and is broadcast. Clients similarly transform incoming ops against their own pending, unacknowledged ops."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "OT requires a single ordering authority per document, and transformation functions are subtle to get right (especially with rich text). It's what Google Docs actually uses."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "CRDTs",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Use a Conflict-free Replicated Data Type (e.g. Yjs, Automerge) where every character has a unique, ordered identifier. Operations commute, so replicas converge regardless of the order they apply ops — no central transformation needed, which also enables offline and peer-to-peer editing."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "CRDT metadata (identifiers and tombstones for deleted characters) can make documents larger, and garbage-collecting it is complex. A server is still useful for persistence and fan-out."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-route-all-editors-of-a-document-to-the-same-server",
+      "text": "2) How do we route all editors of a document to the same server?"
+    },
+    {
+      "type": "paragraph",
+      "text": "OT needs one server to order each document's operations. Use **consistent hashing on docId** so every client for a document connects to the same Document Service instance. A coordination service (ZooKeeper/etcd) holds the ring; on scale-out or failure, documents move to their new owner, which loads the latest snapshot plus subsequent ops before accepting edits."
+    },
+    {
+      "type": "callout",
+      "variant": "warning",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "If two servers believe they own the same document (split brain), they will assign conflicting versions. Ownership needs leases with fencing tokens so a stale owner's writes are rejected."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-store-documents-durably-and-load-them-quickly",
+      "text": "3) How do we store documents durably and load them quickly?"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Store every operation forever",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Append every op to a log keyed by `(docId, version)`; replay to build the document."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Opening a document with a million edits means replaying a million ops."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Operation log + periodic snapshots (compaction)",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Persist each op durably before acknowledging it (so no edit is lost), and periodically write a **snapshot** of the full document at version N. Loading a document reads the latest snapshot and replays only the ops after it. Old ops can be archived or deleted once covered by a snapshot."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Snapshotting must not block editing — do it asynchronously from the op log."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What problem do OT and CRDTs solve?",
+      "options": [
+        "Authentication",
+        "Making concurrent edits converge to the same document",
+        "Compressing documents",
+        "Search"
+      ],
+      "answer": 1,
+      "explanation": "Both guarantee all replicas end up identical even when users edit simultaneously.",
+      "section": "1-how-do-we-make-concurrent-edits-converge"
+    },
+    {
+      "question": "Why are all editors of a document routed to the same server in an OT design?",
+      "options": [
+        "To save bandwidth",
+        "OT needs a single authority to order operations",
+        "Browsers require it",
+        "To cache images"
+      ],
+      "answer": 1,
+      "explanation": "One owner assigns versions and transforms ops, so routing by docId (consistent hashing) is used.",
+      "section": "2-how-do-we-route-all-editors-of-a-document-to-the-same-server"
+    },
+    {
+      "question": "How do snapshots help document loading?",
+      "options": [
+        "They encrypt documents",
+        "You replay only ops after the latest snapshot instead of the full history",
+        "They replace the op log entirely",
+        "They store cursors"
+      ],
+      "answer": 1,
+      "explanation": "Snapshots bound replay cost no matter how long the edit history grows.",
+      "section": "3-how-do-we-store-documents-durably-and-load-them-quickly"
+    },
+    {
+      "question": "Why can cursor positions be kept only in memory?",
+      "options": [
+        "They are large",
+        "They are ephemeral — a lost update is replaced by the next one",
+        "They must be encrypted",
+        "Databases can't store them"
+      ],
+      "answer": 1,
+      "explanation": "Presence doesn't need durability; persisting it would only add load."
+    }
+  ]
+}

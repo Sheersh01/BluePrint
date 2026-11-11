@@ -1,0 +1,353 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "parking-lot",
+  "category": "Common Problems",
+  "title": "Parking Lot",
+  "seoTitle": "Design a Parking Lot Management System",
+  "description": "Design a parking lot management system — spot types and allocation, entry and exit gates, tickets and fees, live occupancy display, multi-level garages, and keeping counts correct with concurrent gates.",
+  "tags": [
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "easy",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🚙",
+      "title": "What is a Parking Lot Management System?",
+      "text": "A parking lot system runs a multi-level garage: it issues a ticket (or reads the plate) when a vehicle enters, guides it to a suitable spot, shows how many spots are free on each level, and charges the right fee on exit. It's a classic interview question that can be asked as **object-oriented design** (classes and responsibilities) or as a small **distributed system** (many gates, one source of truth). This breakdown covers both."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Vehicles of different types (motorcycle, car, van, EV) enter through one of several gates and get a ticket.",
+        "The system assigns a suitable spot (compact, regular, large, EV charging, accessible).",
+        "Displays show free spots per level and type in real time.",
+        "On exit, the system computes the fee from duration and rates, takes payment, and opens the gate.",
+        "The lot should never admit a vehicle when no suitable spot is free."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Monthly permits and reservations (mentioned briefly).",
+        "City street parking (see Parking Payment)."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Gates respond in < 1 second; queues at entry are unacceptable.",
+        "Spot counts are correct even with several gates operating at once.",
+        "The lot works if the internet connection or central servers are down.",
+        "Fees are calculated correctly and every transaction is auditable."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Scale beyond a single site (a chain is many independent sites)."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- entry ticket per vehicle type",
+        "- assign suitable spot",
+        "- live free-spot displays",
+        "- fee + payment at exit",
+        "- never admit when full",
+        "",
+        "Non-functional",
+        "- gates < 1s",
+        "- correct counts, concurrent gates",
+        "- works offline",
+        "- correct, auditable fees"
+      ],
+      "caption": "Parking Lot Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**ParkingLot**: levels, gates, rate card.",
+        "**Level**: spots, display board.",
+        "**Spot**: ID, type, level, status (free, occupied, out of service).",
+        "**Vehicle**: plate, type.",
+        "**Ticket**: ID, vehicle, spot, entry time, exit time, fee, payment status.",
+        "**RateCard**: pricing rules (first hour, hourly, daily cap, by vehicle type)."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "In object-oriented terms: `ParkingLot` owns `Level`s and `Gate`s; `Level` owns `Spot`s; a `SpotAllocator` strategy chooses spots; a `FeeCalculator` applies the `RateCard`; `EntryGate` and `ExitGate` coordinate them."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /entries { gateId, plate, vehicleType } -> { ticketId, spotId, level } | { full: true }\nPOST /exits { gateId, ticketId | plate } -> { fee }\nPOST /payments { ticketId, amount, method }\nGET  /levels/:id/availability -> { compact: 12, regular: 40, ev: 3 }\n(spot sensors) POST /spots/:id/occupancy { occupied }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-entry-and-spot-assignment",
+      "text": "1) Entry and spot assignment"
+    },
+    {
+      "type": "paragraph",
+      "text": "The entry gate reads the plate (camera) or takes the vehicle type, asks the **Lot Controller** for a spot, prints a ticket and opens the barrier. The allocator picks the **smallest suitable spot**, preferring levels near the entrance, and marks it reserved for that ticket."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-live-availability",
+      "text": "2) Live availability"
+    },
+    {
+      "type": "paragraph",
+      "text": "Counts per level and type are updated on every assignment and release, and pushed to **display boards** at the entrance and each level. Optional **spot sensors** confirm actual occupancy, catching drivers who park somewhere other than their assigned spot."
+    },
+    {
+      "type": "diagram",
+      "file": "01-gates-and-controller.svg",
+      "caption": "Gates and controller"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-exit-and-payment",
+      "text": "3) Exit and payment"
+    },
+    {
+      "type": "paragraph",
+      "text": "At exit, the ticket or plate is read; the **FeeCalculator** applies the rate card to the duration (with daily caps and grace periods), the driver pays at the gate or a pay station, the ticket is closed, the spot freed and the barrier opens."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-keep-counts-correct-with-several-gates",
+      "text": "1) How do we keep counts correct with several gates?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Each gate keeps its own count",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Every gate tracks free spots locally."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Two gates admit the last car each; counts drift apart."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Central controller with a lock",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Gates ask a single controller, which assigns spots under a lock or database transaction."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Correct, but if the controller is down, no gate can admit anyone."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Atomic spot assignment + local high availability",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "The controller assigns spots with an **atomic conditional update** (`UPDATE spots SET status='reserved', ticket=? WHERE id=? AND status='free'`), so concurrent gates never get the same spot, and counts are derived from spot states. The controller runs as a **primary/standby pair on site** (not in the cloud), so internet outages don't matter. If both fail, gates fall back to **ticket-only mode** (issuing tickets without spot assignment) while the display shows a conservative count, and reconcile afterwards."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Fallback mode needs a safety margin so the lot doesn't overfill."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-should-the-allocator-choose-spots",
+      "text": "2) How should the allocator choose spots?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Use a **strategy** interface so the policy can change: smallest suitable spot (keeps large spots for large vehicles), nearest to the entrance or lifts, EV spots only for EVs while others are available, accessible spots only on request. Keep per-type **free lists** (e.g. a priority queue per level ordered by distance) so allocation is O(log n) instead of scanning every spot."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "In an object-oriented interview, show extensibility: adding a new vehicle type or pricing rule should mean adding a class or config entry, not editing every `if` statement."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-calculate-fees-correctly",
+      "text": "3) How do we calculate fees correctly?"
+    },
+    {
+      "type": "paragraph",
+      "text": "The `FeeCalculator` takes the ticket times and the rate card and returns an itemised fee. Rules are data (first hour, each extra hour rounded up, daily maximum, overnight rates, lost-ticket fee), not hard-coded. Times come from the controller's clock, not the gate, to avoid clock skew. Every calculation and payment is stored with the ticket for audits and disputes."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "How do we stop two gates assigning the same spot?",
+      "options": [
+        "Each gate counts separately",
+        "An atomic conditional update that only claims a free spot",
+        "Drivers choose",
+        "Display boards"
+      ],
+      "answer": 1,
+      "explanation": "Only one assignment can succeed for each spot."
+    },
+    {
+      "question": "Why run the lot controller on site?",
+      "options": [
+        "It's cheaper",
+        "So gates keep working when the internet is down",
+        "Cloud servers can't count",
+        "For security cameras"
+      ],
+      "answer": 1,
+      "explanation": "Physical operations must not depend on connectivity."
+    },
+    {
+      "question": "Why allocate the smallest suitable spot?",
+      "options": [
+        "Drivers prefer it",
+        "To keep larger spots free for vehicles that need them",
+        "It's random",
+        "It's closer"
+      ],
+      "answer": 1,
+      "explanation": "It maximises the number of vehicles the lot can hold."
+    },
+    {
+      "question": "Where should pricing rules live?",
+      "options": [
+        "Hard-coded in gate firmware",
+        "In a configurable rate card applied by a fee calculator",
+        "On the ticket",
+        "In the display board"
+      ],
+      "answer": 1,
+      "explanation": "Data-driven rules can change without code changes."
+    }
+  ]
+}

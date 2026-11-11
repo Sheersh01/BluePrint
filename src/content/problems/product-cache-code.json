@@ -1,0 +1,425 @@
+{
+  "section": "code-review",
+  "slug": "product-cache-code",
+  "category": "Code Review",
+  "title": "Product Cache",
+  "subtitle": "A dictionary cache in front of the database, plus a price-update function. Prices go wrong, memory grows forever, and a popular product can take the database down.",
+  "seoTitle": "Code Review Interview — Fix a Naive Cache-Aside Implementation",
+  "description": "A code-review interview question — a naive Python cache with stale data, unbounded memory, write-ordering bugs and cache stampedes, and how to fix it with Redis, TTLs and delete-on-write.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Per-process caches, eviction and TTLs, write ordering (DB first, then invalidate), caching \"not found\", cache stampedes, shared mutable objects."
+        }
+      ],
+      "title": "Core focus"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "quick-reference-learn-this-first",
+      "text": "Quick Reference (Learn This First)"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Problem",
+          "Wrong Instinct",
+          "Correct Solution"
+        ],
+        [
+          "Each server has its own cache",
+          "Broadcast updates to every server",
+          "**Shared cache (Redis) or short TTL local cache**"
+        ],
+        [
+          "Cache grows forever",
+          "Restart servers regularly",
+          "**TTL + bounded size (LRU)**"
+        ],
+        [
+          "Cache updated before the DB write",
+          "Wrap in try/except",
+          "**Write DB first, then delete the cache key**"
+        ],
+        [
+          "A missing product is cached forever",
+          "Never cache misses",
+          "**Cache \"not found\" with a short TTL**"
+        ],
+        [
+          "Hot key expires → DB stampede",
+          "Bigger database",
+          "**Single-flight lock / refresh ahead / TTL jitter**"
+        ]
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Mental model (decision tree)"
+    },
+    {
+      "type": "code",
+      "code": "More than one server?\n        ↓\n  Shared cache, or accept per-server staleness with a short TTL\n\nData changes?\n        ↓\n  Write DB → delete key (never update the cache first)\n\nKey can be missing?\n        ↓\n  Negative cache with a short TTL\n\nMany requests for one key at once?\n        ↓\n  Single-flight / stale-while-revalidate"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "1-the-starting-point",
+      "text": "1. The Starting Point"
+    },
+    {
+      "type": "code",
+      "code": "cache = {}\n\ndef get_product(product_id):\n    if product_id in cache:\n        return cache[product_id]\n\n    product = db.query_one(\"SELECT * FROM products WHERE id = %s\", product_id)\n    cache[product_id] = product\n    return product\n\n\ndef update_price(product_id, new_price):\n    cache[product_id][\"price\"] = new_price\n    db.execute(\"UPDATE products SET price = %s WHERE id = %s\", new_price, product_id)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "2-what-most-candidates-catch",
+      "text": "2. What Most Candidates Catch ✅"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-1-update-price-crashes-on-a-cache-miss",
+      "text": "2.1 `update_price` Crashes on a Cache Miss"
+    },
+    {
+      "type": "paragraph",
+      "text": "`cache[product_id]` raises `KeyError` if the product isn't cached on this server. A price update shouldn't depend on what happens to be in memory."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-2-no-expiry",
+      "text": "2.2 No Expiry"
+    },
+    {
+      "type": "paragraph",
+      "text": "Nothing ever leaves the cache, so a change made by another process (an admin tool, a batch job) is never picked up."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "3-what-most-candidates-miss",
+      "text": "3. What Most Candidates Miss ⚠️"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-1-every-server-has-its-own-truth",
+      "text": "3.1 Every Server Has Its Own Truth"
+    },
+    {
+      "type": "code",
+      "code": "Server 1: update_price(42, 90)  → its cache: 90\nServer 2:                         its cache: 100   ← customers see two prices\nServer 3:                         its cache: 100"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: A shared cache (Redis), or — if a per-server cache is needed for speed — a short TTL so divergence is bounded."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-2-unbounded-memory",
+      "text": "3.2 Unbounded Memory"
+    },
+    {
+      "type": "paragraph",
+      "text": "One entry per product ever viewed, forever. With a large catalog, the process eventually runs out of memory."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: A bounded LRU and/or TTL on every entry."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-3-cache-written-before-the-database",
+      "text": "3.3 Cache Written Before the Database"
+    },
+    {
+      "type": "code",
+      "code": "cache: price = 90 ✅\nDB write fails ❌\n→ the cache now says 90; the database says 100"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Write the database first. Then **delete** the cache key; the next read loads the fresh value."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-4-none-is-cached-forever",
+      "text": "3.4 `None` Is Cached Forever"
+    },
+    {
+      "type": "paragraph",
+      "text": "If product 42 doesn't exist yet, `None` is cached. When it's created, this server never sees it."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Cache \"not found\" deliberately, with a short TTL (say 30 seconds)."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-5-callers-mutate-the-cache",
+      "text": "3.5 Callers Mutate the Cache"
+    },
+    {
+      "type": "paragraph",
+      "text": "`get_product` returns the cached object itself. Any caller that does `product[\"price\"] *= 0.9` for a discount changes the cached price for everyone."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Store serialized values (as Redis does), or return a copy."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-6-stampede-on-a-hot-key",
+      "text": "3.6 Stampede on a Hot Key"
+    },
+    {
+      "type": "paragraph",
+      "text": "A popular product expires; 5,000 requests per second all miss at once and all query the database."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Single-flight (one request rebuilds, others wait or get stale data), refresh-ahead, and TTL jitter."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "4-why-delete-instead-of-update",
+      "text": "4. Why Delete Instead of Update?"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"After a price update, why delete the cache key instead of writing the new price into the cache?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Two writers updating the cache can finish in the opposite order to their database writes:"
+    },
+    {
+      "type": "code",
+      "code": "Writer A: DB = 90 ……………………………… cache = 90\nWriter B:        DB = 80 → cache = 80\n→ DB says 80, cache says 90 (stale until TTL)"
+    },
+    {
+      "type": "paragraph",
+      "text": "Deleting is order-independent: whoever writes, the next reader loads the current database value."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"I write the database first and then delete the key. Updating the cache directly can leave it holding an older value when writes race; deleting means the next read always loads what's actually in the database. The TTL is a safety net if a delete is ever lost.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "5-the-delete-fails",
+      "text": "5. The Delete Fails"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"The database update succeeded but deleting the cache key failed. Now what?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "**The TTL** bounds how long the stale value can live — keep it short for prices.",
+        "**Retry the delete** asynchronously: write an invalidation event to an outbox in the same transaction as the price change, and let a worker delete the key (retrying until it succeeds).",
+        "At larger scale, drive invalidation from **change data capture** (database change stream → cache invalidator), so every change invalidates the cache without application code remembering to."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "6-hot-key-stampede",
+      "text": "6. Hot Key Stampede"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"A product goes viral and its cache entry expires. What happens to the database?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Every request misses simultaneously and runs the same query. Fixes, from simplest:"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Technique",
+          "How"
+        ],
+        [
+          "TTL jitter",
+          "Random ±10% on TTLs so keys don't expire together"
+        ],
+        [
+          "Single-flight lock",
+          "`SET lock:product:42 NX EX 5` — only the lock holder queries the DB"
+        ],
+        [
+          "Serve stale while revalidating",
+          "Return the old value while one worker refreshes it"
+        ],
+        [
+          "Refresh ahead",
+          "Rebuild popular keys shortly before they expire"
+        ]
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "See [Caching Failure Scenarios](/learn/system-design/tips/caching-failure-scenarios) for the full list."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "7-master-interview-answer",
+      "text": "7. Master Interview Answer"
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"The cache is a plain dict per process, so servers disagree, it grows without bound, and nothing ever expires. The update writes the cache before the database, which leaves the cache wrong if the DB write fails, and it crashes on a miss. It also caches 'not found' forever and hands callers the cached object to mutate. I'd use Redis with a TTL on every key, write the database first and then delete the key, cache misses with a short TTL, store serialized values, and protect hot keys with a single-flight lock and TTL jitter.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "8-the-fixed-code",
+      "text": "8. The Fixed Code"
+    },
+    {
+      "type": "code",
+      "code": "import json\nimport random\nimport time\nimport redis\n\nr = redis.Redis()\nTTL_S = 300\nMISSING_TTL_S = 30\nMISSING = \"__missing__\"\n\ndef _ttl(base):\n    return int(base * random.uniform(0.9, 1.1))            # jitter\n\ndef get_product(product_id):\n    key = f\"product:{product_id}\"\n    cached = r.get(key)\n    if cached is not None:\n        return None if cached == MISSING.encode() else json.loads(cached)\n\n    # Single-flight: one request rebuilds, the others briefly wait and re-read\n    if not r.set(f\"lock:{key}\", \"1\", nx=True, ex=5):\n        time.sleep(0.05)\n        cached = r.get(key)\n        if cached is not None:\n            return None if cached == MISSING.encode() else json.loads(cached)\n\n    row = db.query_one(\n        \"SELECT id, name, price, currency FROM products WHERE id = %s\", product_id)\n    if row is None:\n        r.set(key, MISSING, ex=MISSING_TTL_S)                 # negative cache\n        r.delete(f\"lock:{key}\")\n        return None\n\n    product = dict(row)\n    r.set(key, json.dumps(product, default=str), ex=_ttl(TTL_S))\n    r.delete(f\"lock:{key}\")\n    return product                                         # a fresh copy, not shared\n\n\ndef update_price(product_id, new_price):\n    with db.transaction():\n        db.execute(\"UPDATE products SET price = %s WHERE id = %s\",\n                   new_price, product_id)\n        db.execute(\"INSERT INTO outbox (type, payload) VALUES ('INVALIDATE', %s)\",\n                   json.dumps({\"key\": f\"product:{product_id}\"}))\n    r.delete(f\"product:{product_id}\")   # fast path; outbox worker retries"
+    },
+    {
+      "type": "paragraph",
+      "text": "**What changed:** shared Redis cache with TTL and jitter; explicit columns instead of `SELECT *`; negative caching; single-flight lock against stampedes; serialized values so callers can't mutate shared state; DB first, then delete, with an outbox as a retry path."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "9-the-full-learning-escalation",
+      "text": "9. The Full Learning Escalation"
+    },
+    {
+      "type": "code",
+      "code": "KeyError on a miss\n    ↓\nTTL / eviction\n    ↓\nPer-server vs shared cache\n    ↓\nWrite ordering (DB → delete)\n    ↓\nNegative caching\n    ↓\nStampede protection\n    ↓\nReliable invalidation (outbox / CDC)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "10-next-challenge-hld",
+      "text": "10. Next Challenge — HLD"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Design the caching layer itself — a distributed cache used by hundreds of services.\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "That's [Distributed Cache](/learn/system-design/problem-breakdowns/distributed-cache) — consistent hashing, replication, eviction and hot keys. See also the [Scaling Reads](/learn/system-design/patterns/scaling-reads) pattern and [Redis](/learn/system-design/deep-dives/redis)."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "appendix-problem-solution-cheat-sheet",
+      "text": "Appendix: Problem → Solution Cheat Sheet"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Problem",
+          "Solution"
+        ],
+        [
+          "Servers disagree",
+          "Shared cache or short TTL"
+        ],
+        [
+          "Memory grows",
+          "TTL + LRU bound"
+        ],
+        [
+          "Cache written before DB",
+          "DB first, then delete key"
+        ],
+        [
+          "Delete lost",
+          "TTL + outbox / CDC invalidation"
+        ],
+        [
+          "Missing rows",
+          "Negative cache, short TTL"
+        ],
+        [
+          "Callers mutate cached object",
+          "Serialize / copy"
+        ],
+        [
+          "Hot key stampede",
+          "Single-flight, stale-while-revalidate, jitter"
+        ]
+      ]
+    }
+  ],
+  "quiz": []
+}

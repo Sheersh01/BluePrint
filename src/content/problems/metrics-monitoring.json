@@ -1,0 +1,419 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "metrics-monitoring",
+  "category": "Common Problems",
+  "title": "Metrics Monitoring",
+  "seoTitle": "Design a Metrics Monitoring System Like Datadog",
+  "description": "Design a metrics monitoring and alerting system — collecting time-series metrics from thousands of hosts, storing them efficiently, querying dashboards and firing alerts.",
+  "tags": [
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Datadog",
+      "Google",
+      "Amazon"
+    ],
+    "more": 13
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📊",
+      "title": "What is a Metrics Monitoring System?",
+      "text": "A metrics monitoring system (like Datadog or Prometheus) collects numeric measurements — CPU usage, request latency, error counts — from servers and applications, shows them on dashboards, and alerts engineers when something looks wrong."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Services should be able to emit metrics (name, tags, value, timestamp).",
+        "Users should be able to query metrics over time ranges for dashboards, with aggregation (avg, max, p99) and grouping by tags.",
+        "Users should be able to define alert rules (e.g. \"error rate > 5% for 5 minutes\") and be notified when they fire."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Logs and distributed tracing.",
+        "Anomaly detection with ML."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Ingest ~10M data points per second from ~100k hosts.",
+        "Dashboards over the last few hours should load in < 1s.",
+        "Alerts should fire within ~1 minute of a condition becoming true.",
+        "Ingestion should be highly available; losing a tiny fraction of points during failures is acceptable, but the pipeline must not fall over.",
+        "Retain data for a year, at lower resolution for older data."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Strong consistency between dashboards."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- emit metrics (name, tags, value, ts)",
+        "- query & aggregate for dashboards",
+        "- alert rules + notifications",
+        "",
+        "Non-functional",
+        "- 10M points/sec ingest",
+        "- dashboards < 1s",
+        "- alerts within ~1 min",
+        "- highly available ingest",
+        "- 1 year retention (downsampled)"
+      ],
+      "caption": "Metrics Monitoring Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "This is a **write-heavy time-series** problem. The decisions that matter are how we absorb the ingest rate, how we store points compactly so queries are fast, and how we evaluate alerts continuously without hammering storage."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Metric series**: a metric name plus a unique set of tags (e.g. `http.latency{service=api, region=us-east}`).",
+        "**Data point**: (series, timestamp, value).",
+        "**Alert rule**: a query, a threshold, a duration, and notification targets.",
+        "**Alert**: an instance of a rule firing or resolving."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Core Entities",
+        "- Metric series (name + tags)",
+        "- Data point",
+        "- Alert rule",
+        "- Alert"
+      ],
+      "caption": "Metrics Entities"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /metrics\n[{ \"name\": \"http.latency\", \"tags\": { \"service\": \"api\" }, \"value\": 123, \"ts\": 1730700000 }]\n\nGET /query?q=avg:http.latency{service=api} by {region}&from&to&step=60 -> Series[]\n\nPOST /alerts\n{ \"query\": \"avg:errors.rate{service=api}\", \"op\": \">\", \"threshold\": 0.05, \"for\": \"5m\", \"notify\": [\"pagerduty:team-api\"] }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-services-should-be-able-to-emit-metrics",
+      "text": "1) Services should be able to emit metrics"
+    },
+    {
+      "type": "paragraph",
+      "text": "An **agent** on each host collects local metrics and application metrics, aggregates them over 10 seconds, and sends batches to an **Ingestion Service**. Batching on the host turns millions of tiny writes into far fewer requests."
+    },
+    {
+      "type": "diagram",
+      "file": "01-ingest-metrics.svg",
+      "caption": "Ingest metrics"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-should-be-able-to-query-metrics-for-dashboards",
+      "text": "2) Users should be able to query metrics for dashboards"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **Query Service** parses queries, fetches the relevant series for the time range from the time-series database, and aggregates them — grouping by tags and rolling up into steps (e.g. one point per minute)."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-users-should-be-able-to-define-alerts",
+      "text": "3) Users should be able to define alerts"
+    },
+    {
+      "type": "paragraph",
+      "text": "Alert rules are stored in a relational database. An **Alert Evaluator** runs each rule's query on a schedule (e.g. every 30 seconds), tracks how long the condition has held, and sends notifications through a notification service when a rule fires or resolves."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-absorb-10m-points-per-second-reliably",
+      "text": "1) How do we absorb 10M points per second reliably?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Write directly from the API into the database",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "The Ingestion Service writes each batch synchronously to storage."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Any storage slowdown backs up ingestion and agents start dropping data. Spikes (a deploy restarting every host) can overwhelm the database."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Buffer through a partitioned log",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "The Ingestion Service validates batches and appends them to **Kafka**, partitioned by series ID so each series is written in order by one consumer. Storage writers consume at their own pace; if storage is slow, Kafka absorbs the backlog for hours. Agents also buffer locally and retry if ingestion is briefly unavailable."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Data appears on dashboards slightly behind real time (seconds), which is fine. Partition count must be planned for growth."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-store-time-series-data-efficiently",
+      "text": "2) How do we store time-series data efficiently?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "A row per data point in a relational database",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "`points(series_id, ts, value)` with an index."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Billions of rows per day, massive indexes, and slow range scans — row-oriented storage wastes space on repetitive data."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "A purpose-built time-series store with compression and downsampling",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Group points into blocks per series per time window (e.g. 2 hours). Compress timestamps with **delta-of-delta** encoding and values with **XOR (Gorilla) encoding** — regular metrics compress to about 1-2 bytes per point. Keep raw 10s data for ~2 weeks, then **downsample** to 1-minute and 1-hour rollups (min, max, sum, count) for long-term retention. Use an inverted index from tags to series IDs so `{service=api}` finds matching series instantly."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "High-cardinality tags (like `userId`) explode the number of series and the index. Enforce cardinality limits per metric."
+        }
+      ]
+    },
+    {
+      "type": "callout",
+      "variant": "warning",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Cardinality is the number one way monitoring systems fall over in practice. A single metric tagged with a request ID can create millions of series overnight."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-evaluate-alerts-quickly-without-hammering-storage",
+      "text": "3) How do we evaluate alerts quickly without hammering storage?"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Evaluate rules by querying the TSDB on a schedule",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Every 30 seconds, run each rule's query against recent data."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Tens of thousands of rules × frequent queries is a heavy, constant load on the database that dashboards also depend on."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Stream evaluation on recent data",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Alert evaluators consume the same Kafka stream and maintain in-memory rolling windows for only the series referenced by alert rules. Conditions are evaluated as points arrive; state (\"condition true since 12:03\") is checkpointed so evaluators can restart without losing track. Rules are sharded across evaluators."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "More complex than polling, and complex queries spanning long windows may still need the TSDB. A hybrid of both is common."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why put Kafka between ingestion and storage?",
+      "options": [
+        "To encrypt metrics",
+        "It absorbs spikes and storage slowdowns so ingestion never backs up",
+        "Kafka is a time-series database",
+        "To reduce data size"
+      ],
+      "answer": 1,
+      "explanation": "The log buffers data durably while storage writers catch up.",
+      "section": "1-how-do-we-absorb-10m-points-per-second-reliably"
+    },
+    {
+      "question": "What is downsampling?",
+      "options": [
+        "Deleting all old data",
+        "Replacing old high-resolution points with coarser rollups like 1-minute min/max/avg",
+        "Sampling hosts randomly",
+        "Compressing JSON"
+      ],
+      "answer": 1,
+      "explanation": "Rollups keep long-term trends at a fraction of the storage.",
+      "section": "2-how-do-we-store-time-series-data-efficiently"
+    },
+    {
+      "question": "Why are high-cardinality tags dangerous?",
+      "options": [
+        "They are slow to type",
+        "Each unique tag combination creates a new series, exploding storage and index size",
+        "They break dashboards' colours",
+        "They disable alerts"
+      ],
+      "answer": 1,
+      "explanation": "Tags like userId or requestId can create millions of series."
+    },
+    {
+      "question": "Which encoding makes timestamps at regular intervals extremely compact?",
+      "options": [
+        "Base64",
+        "Delta-of-delta encoding",
+        "UTF-8",
+        "Gzip of each point"
+      ],
+      "answer": 1,
+      "explanation": "Regular intervals produce deltas-of-deltas of zero, which need almost no bits."
+    }
+  ]
+}

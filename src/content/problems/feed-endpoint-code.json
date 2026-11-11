@@ -1,0 +1,424 @@
+{
+  "section": "code-review",
+  "slug": "feed-endpoint-code",
+  "category": "Code Review",
+  "title": "Feed Endpoint",
+  "subtitle": "A home-feed endpoint that's fine with 10 test users and falls over with real ones. Count the queries, then fix them.",
+  "seoTitle": "Code Review Interview — Fix N+1 Queries and Pagination in a Feed Endpoint",
+  "description": "A code-review interview question — a Python feed endpoint with N+1 queries, in-memory sorting, unbounded page sizes and offset pagination, and how to fix it with joins, cursors and denormalized counts.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "N+1 queries, doing work in the database instead of in Python, limits and indexes, cursor pagination, denormalized counters, authorization."
+        }
+      ],
+      "title": "Core focus"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "quick-reference-learn-this-first",
+      "text": "Quick Reference (Learn This First)"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Problem",
+          "Wrong Instinct",
+          "Correct Solution"
+        ],
+        [
+          "One query per followee / per post",
+          "Add a cache in front",
+          "**Batch: one query with `IN` / `JOIN`**"
+        ],
+        [
+          "Loads every post, then slices in Python",
+          "Faster server",
+          "**`ORDER BY … LIMIT` in SQL, with an index**"
+        ],
+        [
+          "Client chooses `page_size=100000`",
+          "Trust the client",
+          "**Cap the page size**"
+        ],
+        [
+          "Items repeat or vanish while scrolling",
+          "Ignore it",
+          "**Cursor (keyset) pagination**"
+        ],
+        [
+          "`COUNT(*)` of likes per post per request",
+          "Index the likes table",
+          "**Denormalized `like_count` column / counter**"
+        ],
+        [
+          "`user_id` comes from the query string",
+          "—",
+          "**Take identity from the session/token**"
+        ]
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Mental model (decision tree)"
+    },
+    {
+      "type": "code",
+      "code": "Query inside a loop?\n        ↓\n  Batch it (IN / JOIN)\n\nSorting or slicing in application code?\n        ↓\n  ORDER BY + LIMIT in the database\n\nUser controls the size?\n        ↓\n  Cap it\n\nData changes while paging?\n        ↓\n  Cursor pagination\n\nAggregate recomputed on every read?\n        ↓\n  Store it (counter)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "1-the-starting-point",
+      "text": "1. The Starting Point"
+    },
+    {
+      "type": "code",
+      "code": "@app.get(\"/feed\")\ndef get_feed():\n    user_id = request.args[\"user_id\"]\n    page = int(request.args.get(\"page\", 1))\n    page_size = int(request.args.get(\"page_size\", 20))\n\n    following = db.query(\n        \"SELECT followee_id FROM follows WHERE follower_id = %s\", user_id)\n\n    posts = []\n    for f in following:\n        posts += db.query(\"SELECT * FROM posts WHERE author_id = %s\", f.followee_id)\n\n    posts.sort(key=lambda p: p.created_at, reverse=True)\n    result = posts[(page - 1) * page_size : page * page_size]\n\n    for p in result:\n        p.author = db.query_one(\"SELECT * FROM users WHERE id = %s\", p.author_id)\n        p.like_count = db.query_one(\n            \"SELECT COUNT(*) FROM likes WHERE post_id = %s\", p.id)[0]\n\n    return [serialize(p) for p in result]"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "2-what-most-candidates-catch",
+      "text": "2. What Most Candidates Catch ✅"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-1-too-many-queries",
+      "text": "2.1 Too Many Queries"
+    },
+    {
+      "type": "paragraph",
+      "text": "There's a query inside a loop — \"this will be slow\". Correct; the next section counts exactly how slow."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-2-select",
+      "text": "2.2 `SELECT *`"
+    },
+    {
+      "type": "paragraph",
+      "text": "It fetches every column (including large ones like post bodies or user bios) when the feed needs a few. Select the columns you use."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "3-what-most-candidates-miss",
+      "text": "3. What Most Candidates Miss ⚠️"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-1-count-the-queries-n1-three-times-over",
+      "text": "3.1 Count the Queries (N+1, Three Times Over)"
+    },
+    {
+      "type": "paragraph",
+      "text": "For a user following 500 accounts, one page of 20 posts:"
+    },
+    {
+      "type": "code",
+      "code": "1   query  for follows\n500 queries for posts (one per followee)\n20  queries for authors\n20  queries for like counts\n= 541 queries for one page"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Batch every loop into one query."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-2-loading-everything-to-show-20",
+      "text": "3.2 Loading Everything to Show 20"
+    },
+    {
+      "type": "paragraph",
+      "text": "The loop loads **every post ever written** by every followee into memory, sorts them in Python, and throws all but 20 away. A user following a few prolific accounts makes the server load hundreds of thousands of rows per request."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Let the database sort and limit: `ORDER BY created_at DESC LIMIT 20`, backed by an index on `(author_id, created_at)`."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-3-the-client-picks-the-page-size",
+      "text": "3.3 The Client Picks the Page Size"
+    },
+    {
+      "type": "paragraph",
+      "text": "`page_size=1000000` is one request away. That's a cheap denial-of-service."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Cap it (e.g. `min(page_size, 50)`)."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-4-offset-pagination-on-a-live-feed",
+      "text": "3.4 Offset Pagination on a Live Feed"
+    },
+    {
+      "type": "code",
+      "code": "Load page 1 (posts 1–20)\n3 new posts are published\nLoad page 2 (offset 20) → posts 18–37   ← 18, 19, 20 shown twice"
+    },
+    {
+      "type": "paragraph",
+      "text": "And `OFFSET 10000` still makes the database walk past 10,000 rows."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Cursor pagination — \"give me 20 posts older than the last one I saw\"."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-5-count-on-every-read",
+      "text": "3.5 `COUNT(*)` on Every Read"
+    },
+    {
+      "type": "paragraph",
+      "text": "Counting likes on every feed load scans the likes table for every post, for every user, every time — and viral posts have millions of likes."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Store `like_count` on the post (updated when likes change, or by an async counter), and read it with the post."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-6-anyone-can-read-anyone-s-feed",
+      "text": "3.6 Anyone Can Read Anyone's Feed"
+    },
+    {
+      "type": "paragraph",
+      "text": "`user_id` comes from the query string. Change the number, read someone else's feed."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Take the user from the authenticated session or token."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "4-how-many-queries",
+      "text": "4. How Many Queries?"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"A user follows 2,000 accounts. How many database queries does one page of this endpoint make, and how would you get that down?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "common-mistake",
+      "text": "⚠️ Common Mistake"
+    },
+    {
+      "type": "paragraph",
+      "text": "\"Put a cache in front of it.\" A cache hides the problem for repeat requests and makes the first one — and every cache miss — just as slow."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "correct-answer-batch-then-let-the-database-do-the-work",
+      "text": "✅ Correct Answer — Batch, Then Let the Database Do the Work"
+    },
+    {
+      "type": "code",
+      "code": "SELECT p.id, p.author_id, p.body, p.created_at, p.like_count,\n       u.name AS author_name, u.avatar_url\nFROM posts p\nJOIN follows f ON f.followee_id = p.author_id\nJOIN users  u ON u.id = p.author_id\nWHERE f.follower_id = %(me)s\n  AND (p.created_at, p.id) < (%(cursor_time)s, %(cursor_id)s)\nORDER BY p.created_at DESC, p.id DESC\nLIMIT 20;"
+    },
+    {
+      "type": "paragraph",
+      "text": "One query, an index on `posts (author_id, created_at)`, and no sorting in Python."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"It's an N+1 problem in three places — about 2,000 queries for the posts alone. I'd replace the loops with one query that joins follows, posts and users, sorts and limits in the database using an index on author and time, and reads a stored like count instead of counting per post.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "5-pagination",
+      "text": "5. Pagination"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"New posts keep arriving while the user scrolls. What goes wrong with page numbers, and what would you use instead?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Offsets shift as rows are inserted, so items repeat or get skipped, and deep offsets get slower. Use a **cursor**: the client sends back the `(created_at, id)` of the last post it saw, and the next query asks for posts strictly older than that. The `id` breaks ties between posts with the same timestamp."
+    },
+    {
+      "type": "code",
+      "code": "GET /feed?limit=20                     → { posts: [...], next_cursor: \"1731300000.123:98765\" }\nGET /feed?limit=20&cursor=1731300000.123:98765"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "6-at-twitter-scale",
+      "text": "6. At Twitter Scale"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"This works for thousands of users. What changes for 200 million?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Joining across everyone you follow on every read stops scaling when users follow thousands of accounts and read far more than they write. The standard answer is to **precompute feeds**: when someone posts, push the post id into each follower's feed list (fan-out on write), and pull posts from celebrities at read time (fan-out on read) so one celebrity post doesn't trigger 50 million writes. See [FB News Feed](/learn/system-design/problem-breakdowns/fb-news-feed)."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "7-master-interview-answer",
+      "text": "7. Master Interview Answer"
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"This endpoint has N+1 queries in three places — posts per followee, an author per post and a like count per post — so one page can run hundreds or thousands of queries. It also loads every post into memory to sort and slice in Python, lets the client choose any page size, uses offset pagination that repeats items while new posts arrive, and trusts a user id from the query string. I'd take the user from the session, replace the loops with one joined query that sorts and limits in the database using an index on author and time, store like counts on the post, cap the page size, and use cursor pagination. At large scale I'd move to precomputed feeds with fan-out on write.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "8-the-fixed-code",
+      "text": "8. The Fixed Code"
+    },
+    {
+      "type": "code",
+      "code": "from datetime import datetime, timezone\n\nMAX_PAGE_SIZE = 50\n\n@app.get(\"/feed\")\n@login_required\ndef get_feed():\n    me = current_user.id                                    # identity from the session\n    limit = min(int(request.args.get(\"limit\", 20)), MAX_PAGE_SIZE)\n    cursor_time, cursor_id = decode_cursor(request.args.get(\"cursor\"))\n\n    rows = db.query(\n        \"\"\"\n        SELECT p.id, p.author_id, p.body, p.created_at, p.like_count,\n               u.name AS author_name, u.avatar_url\n        FROM posts p\n        JOIN follows f ON f.followee_id = p.author_id\n        JOIN users  u ON u.id = p.author_id\n        WHERE f.follower_id = %s\n          AND (p.created_at, p.id) < (%s, %s)\n        ORDER BY p.created_at DESC, p.id DESC\n        LIMIT %s\n        \"\"\",\n        me, cursor_time, cursor_id, limit + 1)             # one extra row = \"has more\"\n\n    page, has_more = rows[:limit], len(rows) > limit\n    next_cursor = encode_cursor(page[-1].created_at, page[-1].id) if has_more else None\n    return {\"posts\": [serialize(r) for r in page], \"next_cursor\": next_cursor}\n\n\ndef decode_cursor(raw):\n    if not raw:\n        return datetime.max, 2**63 - 1                      # start from the newest\n    ts, post_id = raw.split(\":\")\n    return datetime.fromtimestamp(float(ts), tz=timezone.utc), int(post_id)"
+    },
+    {
+      "type": "paragraph",
+      "text": "**What changed:** identity from the session; one query instead of hundreds; sorting and limiting in SQL (index on `posts(author_id, created_at)`); a stored `like_count`; a capped page size; cursor pagination with a tie-breaker; fetching `limit + 1` rows to know whether there's a next page."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "9-the-full-learning-escalation",
+      "text": "9. The Full Learning Escalation"
+    },
+    {
+      "type": "code",
+      "code": "SELECT *\n    ↓\nN+1 queries\n    ↓\nSort / limit in the database + indexes\n    ↓\nCaps on client input\n    ↓\nCursor pagination\n    ↓\nDenormalized counters\n    ↓\nPrecomputed feeds (fan-out)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "10-next-challenge-hld",
+      "text": "10. Next Challenge — HLD"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Design the home timeline for Twitter.\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "See [Twitter](/learn/system-design/problem-breakdowns/twitter) and [FB News Feed](/learn/system-design/problem-breakdowns/fb-news-feed), plus [Like Counter](/learn/system-design/problem-breakdowns/like-counter) for counting at scale."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "appendix-problem-solution-cheat-sheet",
+      "text": "Appendix: Problem → Solution Cheat Sheet"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Problem",
+          "Solution"
+        ],
+        [
+          "Query in a loop (N+1)",
+          "One batched query (`IN` / `JOIN`)"
+        ],
+        [
+          "Sorting/slicing in Python",
+          "`ORDER BY … LIMIT` + index"
+        ],
+        [
+          "`SELECT *`",
+          "Select needed columns"
+        ],
+        [
+          "Unbounded page size",
+          "Cap it"
+        ],
+        [
+          "Shifting pages",
+          "Cursor (keyset) pagination"
+        ],
+        [
+          "Count per read",
+          "Stored counter"
+        ],
+        [
+          "`user_id` from the client",
+          "Identity from session/token"
+        ],
+        [
+          "Huge scale",
+          "Precomputed feeds, fan-out on write/read"
+        ]
+      ]
+    }
+  ],
+  "quiz": []
+}

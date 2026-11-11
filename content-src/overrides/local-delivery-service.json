@@ -1,0 +1,39 @@
+{
+  "solutions": [
+    { "verdict": "bad", "title": "Simple SQL Distance" },
+    { "verdict": "great", "title": "Travel Time Estimation Against Nearby DCs" },
+    { "verdict": "good", "title": "Query Inventory Through Cache" },
+    { "verdict": "great", "title": "Postgres Read Replicas and Partitioning" }
+  ],
+  "quiz": [
+    {
+      "question": "How do delivery systems efficiently aggregate inventory across multiple warehouse locations?",
+      "options": ["Pick random warehouse inventory", "Use only the largest warehouse within delivery range", "Sum quantities from nearby warehouses", "Average all warehouse quantities"],
+      "answer": 2,
+      "explanation": "Effective availability is the union of inventory in every DC that can deliver within the time window, so quantities are summed."
+    },
+    {
+      "question": "Why is straight-line distance a poor way to decide which DCs can deliver within 1 hour?",
+      "options": [
+        "It is too expensive to compute",
+        "Real travel time depends on roads and traffic, not distance",
+        "Latitude and longitude are not precise enough",
+        "DCs move frequently"
+      ],
+      "answer": 1,
+      "explanation": "Two DCs at the same distance can have very different drive times, so a travel-time estimate is needed."
+    },
+    {
+      "question": "What guarantees two customers can't both buy the last unit of an item?",
+      "options": ["A cache with a long TTL", "A database transaction over the inventory rows", "Eventual consistency", "Client-side validation"],
+      "answer": 1,
+      "explanation": "Ordering requires strong consistency: decrement inventory and create the order atomically in one transaction."
+    },
+    {
+      "question": "Why can the list of DCs be kept in the availability service's memory?",
+      "options": ["DCs rarely change", "There are billions of DCs", "Memory is free", "DC data is encrypted"],
+      "answer": 0,
+      "explanation": "DCs are buildings — they change rarely — so syncing them periodically into memory is safe and fast."
+    }
+  ]
+}

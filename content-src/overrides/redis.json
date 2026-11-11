@@ -1,0 +1,48 @@
+{
+  "quiz": [
+    {
+      "question": "What are the key architectural characteristics that make Redis particularly fast?",
+      "options": [
+        "Multi-threaded processing and disk-based storage",
+        "Sharded databases and connection pooling",
+        "In-memory storage and single-threaded execution",
+        "Distributed architecture and query optimization"
+      ],
+      "answer": 2,
+      "explanation": "Everything lives in memory and commands execute one at a time, avoiding locks."
+    },
+    {
+      "question": "Which Redis structure is ideal for leaderboards?",
+      "options": [
+        "List",
+        "Sorted set",
+        "String",
+        "HyperLogLog"
+      ],
+      "answer": 1,
+      "explanation": "Sorted sets keep members ordered by score with O(log n) updates and rank queries."
+    },
+    {
+      "question": "How can Redis implement a simple distributed lock?",
+      "options": [
+        "SET key value NX EX ttl",
+        "LPUSH",
+        "PUBLISH",
+        "INCRBY"
+      ],
+      "answer": 0,
+      "explanation": "SET with NX only succeeds if the key doesn't exist, and EX releases the lock after a timeout."
+    },
+    {
+      "question": "What is a main durability risk of using Redis as a primary store?",
+      "options": [
+        "It can't store strings",
+        "Data in memory can be lost on crash depending on persistence settings",
+        "It is too slow",
+        "It doesn't support replication"
+      ],
+      "answer": 1,
+      "explanation": "RDB snapshots and AOF reduce, but don't eliminate, the window of possible data loss."
+    }
+  ]
+}

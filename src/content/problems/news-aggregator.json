@@ -1,0 +1,404 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "news-aggregator",
+  "category": "Common Problems",
+  "title": "News Aggregator",
+  "seoTitle": "Design a News Aggregator Like Google News",
+  "description": "Design a news aggregator — crawling publisher feeds, deduplicating stories, and serving a fast paginated feed of recent articles by category.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Google",
+      "Microsoft",
+      "Yahoo"
+    ],
+    "more": 7
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📰",
+      "title": "What is a News Aggregator?",
+      "text": "A news aggregator (like Google News) collects articles from thousands of publishers, groups them, and shows users a single feed of the latest stories — linking out to the original publisher to read the full article."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to view a feed of recent articles, newest first.",
+        "Users should be able to filter the feed by category (e.g. Technology, Sports).",
+        "Users should be able to page through the feed with infinite scroll.",
+        "Clicking an article should take the user to the publisher's site."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Personalised ranking and recommendations.",
+        "User accounts, comments and saved articles."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "New articles should appear within ~30 minutes of publication.",
+        "The feed should load fast (< 200ms) and be highly available.",
+        "The system should scale to 100M daily users with traffic spikes during breaking news.",
+        "The same story shouldn't appear multiple times from syndicated copies."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Paywall handling.",
+        "Content moderation."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- feed of recent articles",
+        "- filter by category",
+        "- infinite scroll",
+        "- click through to publisher",
+        "",
+        "Non-functional",
+        "- fresh within 30 min",
+        "- feed < 200ms, highly available",
+        "- 100M DAU, breaking-news spikes",
+        "- dedupe syndicated stories"
+      ],
+      "caption": "News Aggregator Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "There are two halves: an **ingestion pipeline** that pulls content in, and a **serving path** that's overwhelmingly read-heavy. We'll design each, then go deep on freshness, pagination and caching."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Publisher**: a news source with one or more RSS/Atom feeds.",
+        "**Article**: title, summary, thumbnail URL, link, category, publishedAt.",
+        "**Category**: a topic used for filtering."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Core Entities",
+        "- Publisher",
+        "- Article",
+        "- Category"
+      ],
+      "caption": "News Aggregator Entities"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET /feed?category={category}&cursor={cursor}&limit=20 -> { articles: Article[], nextCursor }"
+    },
+    {
+      "type": "paragraph",
+      "text": "Clicks go straight to the publisher URL; if we want click tracking, we can redirect through `GET /articles/:id/visit -> 302`."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-ingest-articles-from-publishers",
+      "text": "1) Ingest articles from publishers"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **Feed Collector** fetches each publisher's RSS feed on a schedule, parses new entries, and writes Articles to the database. Thumbnails are downloaded once and stored in blob storage so we don't hotlink publisher images."
+    },
+    {
+      "type": "diagram",
+      "file": "01-ingestion.svg",
+      "caption": "Ingestion"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-should-be-able-to-view-and-filter-the-feed",
+      "text": "2) Users should be able to view and filter the feed"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **Feed Service** queries the latest articles, optionally filtered by category, ordered by `publishedAt DESC`, and returns a page plus a cursor."
+    },
+    {
+      "type": "diagram",
+      "file": "02-serving-the-feed.svg",
+      "caption": "Serving the feed"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-keep-the-feed-fresh-without-hammering-publishers",
+      "text": "1) How do we keep the feed fresh without hammering publishers?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Poll every feed every minute",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Fetch every one of ~50k publisher feeds on a fixed short interval."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Most feeds haven't changed, so the vast majority of requests are wasted, and aggressive polling can get us rate-limited or blocked by publishers."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Adaptive polling with conditional requests",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Poll each feed at an interval based on how often it publishes (busy outlets every few minutes, quiet blogs hourly), and use `ETag` / `If-Modified-Since` headers so unchanged feeds return a cheap `304 Not Modified`."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Still polling, so freshness is bounded by each feed's interval — but well within our 30-minute target."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Adaptive polling plus push where available",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Subscribe via **WebSub** (PubSubHubbub) for publishers that support it so new articles are pushed to us instantly; fall back to adaptive polling for everyone else. Collectors are sharded by publisher and fed from a scheduling queue."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Push endpoints need verification and must be idempotent, since the same item can arrive by both push and poll."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-paginate-a-feed-that-keeps-changing",
+      "text": "2) How do we paginate a feed that keeps changing?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Offset pagination",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "`LIMIT 20 OFFSET 40` for page three."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "New articles arriving at the top shift everything down, so users see duplicates when they scroll. Large offsets are also slow."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Cursor pagination",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Return a cursor encoding the last article's `(publishedAt, id)` and query `WHERE (published_at, id) < (:ts, :id) ORDER BY published_at DESC, id DESC LIMIT 20`. With an index on `(category, published_at, id)` each page is a fast index range scan, and new articles never cause duplicates."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "You can't jump to an arbitrary page number — which infinite scroll doesn't need."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-serve-100m-users-and-survive-breaking-news-spikes",
+      "text": "3) How do we serve 100M users and survive breaking-news spikes?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Everyone sees the same feed for a given category, which makes it extremely cacheable. Precompute the first few pages of each category feed into Redis whenever new articles are ingested, and put a **CDN** in front of the feed API with a short TTL (30-60 seconds). During a spike, nearly all requests are served from the edge and the database barely notices."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Deduplicate syndicated stories (the same wire story on 40 sites) during ingestion: normalise the title and compute a similarity hash (e.g. SimHash) over the text, and group near-duplicates so the feed shows one entry."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "03-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why is offset pagination a problem for a live news feed?",
+      "options": [
+        "It is not supported by SQL",
+        "New articles shift results and cause duplicates while scrolling",
+        "It needs a cache",
+        "It sorts incorrectly"
+      ],
+      "answer": 1,
+      "explanation": "Cursor pagination anchors on the last item seen, so inserts at the top don't affect later pages.",
+      "section": "2-how-do-we-paginate-a-feed-that-keeps-changing"
+    },
+    {
+      "question": "What do ETag / If-Modified-Since headers save when polling RSS feeds?",
+      "options": [
+        "Unchanged feeds return a cheap 304 instead of the full body",
+        "They encrypt the feed",
+        "They push updates to us",
+        "They remove the need for a scheduler"
+      ],
+      "answer": 0,
+      "explanation": "Conditional requests make polling an unchanged feed nearly free for both sides."
+    },
+    {
+      "question": "Why does a non-personalised feed scale so well?",
+      "options": [
+        "It is smaller",
+        "Every user sees the same pages, so they can be cached at a CDN",
+        "It doesn't need a database",
+        "It never changes"
+      ],
+      "answer": 1,
+      "explanation": "Shared responses can be served from edge caches with short TTLs.",
+      "section": "3-how-do-we-serve-100m-users-and-survive-breaking-news-spikes"
+    },
+    {
+      "question": "How can syndicated copies of the same story be grouped?",
+      "options": [
+        "Exact URL matching",
+        "Similarity hashing such as SimHash over normalised text",
+        "Random sampling",
+        "Sorting by date"
+      ],
+      "answer": 1,
+      "explanation": "Near-duplicate detection catches the same wire story published on many sites with small edits."
+    }
+  ]
+}

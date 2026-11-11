@@ -1,0 +1,50 @@
+{
+  "solutions": [
+    { "verdict": "bad", "title": "Run Code in the API Server" },
+    { "verdict": "good", "title": "Run Code in a Virtual Machine (VM)" },
+    { "verdict": "great", "title": "Run Code in a Container (Docker)" },
+    { "verdict": "great", "title": "Run Code in a Serverless Function" },
+    { "verdict": "bad", "title": "Polling with Database Queries" },
+    { "verdict": "good", "title": "Caching with Periodic Updates" },
+    { "verdict": "great", "title": "Redis Sorted Set with Periodic Polling" },
+    { "verdict": "bad", "title": "Vertical Scaling" },
+    { "verdict": "good", "title": "Dynamic Horizontal Scaling" },
+    { "verdict": "great", "title": "Horizontal Scaling with a Queue" }
+  ],
+  "quiz": [
+    {
+      "question": "Which technique prevents infinite loops in user-submitted code?",
+      "options": ["Database indexing", "Load balancers distributing requests across multiple worker instances", "API caching", "Execution timeouts"],
+      "answer": 3,
+      "explanation": "A hard execution time limit kills runaway code so it can't monopolise a worker."
+    },
+    {
+      "question": "Why is running user code directly on the API server a bad idea?",
+      "options": [
+        "It is too slow to start",
+        "Malicious code could compromise the server and other users' data",
+        "It cannot support multiple languages",
+        "It requires a GPU"
+      ],
+      "answer": 1,
+      "explanation": "Untrusted code needs isolation. On the API server it can read files, exhaust resources, or attack the host."
+    },
+    {
+      "question": "What data structure makes a real-time competition leaderboard cheap to maintain?",
+      "options": ["A Redis sorted set", "A linked list", "A Bloom filter", "A B-tree index on every column"],
+      "answer": 0,
+      "explanation": "Sorted sets keep members ordered by score, so updates and top-N reads are O(log n)."
+    },
+    {
+      "question": "What does adding a queue between the API server and code-execution containers buy you?",
+      "options": [
+        "Stronger isolation between languages",
+        "Buffering submissions during spikes so none are dropped",
+        "Lower per-submission latency in every case",
+        "Automatic code grading"
+      ],
+      "answer": 1,
+      "explanation": "The queue absorbs bursts (e.g. at the start of a contest) while workers scale out and drain it."
+    }
+  ]
+}

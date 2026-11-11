@@ -1,0 +1,461 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "online-auction",
+  "category": "Common Problems",
+  "title": "Online Auction",
+  "seoTitle": "Design an Online Auction Platform Like eBay",
+  "description": "Design an online auction system — listing items, placing bids with strong consistency, real-time bid updates and reliably closing auctions on time.",
+  "tags": [
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "eBay",
+      "Amazon",
+      "Meta"
+    ],
+    "more": 8
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🔨",
+      "title": "What is an Online Auction?",
+      "text": "An online auction platform (like eBay) lets sellers list items with a starting price and end time, and lets buyers place bids. When the auction ends, the highest bidder wins."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to post an item for auction with a starting price and an end time.",
+        "Users should be able to bid on an item; a bid is accepted only if it is higher than the current highest bid.",
+        "Users should be able to view an auction, including the current highest bid, updated in real time."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Search and browse.",
+        "Payments and shipping.",
+        "Proxy (automatic) bidding."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Bidding must be strongly consistent — every user must agree on the current highest bid, and no accepted bid can be lost.",
+        "Bid updates should reach viewers in near real time (< 1s).",
+        "The system should handle popular auctions with thousands of concurrent bidders.",
+        "The system should scale to 10M concurrent auctions."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Fraud and shill-bidding detection."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- post item (start price, end time)",
+        "- bid (must beat current high)",
+        "- view auction w/ real-time high bid",
+        "",
+        "Non-functional",
+        "- strong consistency for bids",
+        "- real-time updates (< 1s)",
+        "- thousands of bidders per hot auction",
+        "- 10M concurrent auctions"
+      ],
+      "caption": "Online Auction Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "Bidding is a classic **contention** problem: many users racing to update the same value. We'll start simple and then focus deep dives on correctness under contention, real-time fan-out, and closing auctions."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Item**: what's being sold — title, description, images.",
+        "**Auction**: an item listing with starting price, end time, status, and current max bid.",
+        "**Bid**: an amount placed by a user on an auction, with a timestamp and acceptance status.",
+        "**User**: a buyer or seller."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Core Entities",
+        "- Item",
+        "- Auction",
+        "- Bid",
+        "- User"
+      ],
+      "caption": "Auction Entities"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /auctions\n{ \"item\": {...}, \"startingPrice\": 100, \"endTime\": \"2026-12-01T18:00:00Z\" } -> Auction\n\nPOST /auctions/:auctionId/bids\n{ \"amount\": 150 } -> Bid\n\nGET /auctions/:auctionId -> Auction & Item"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-should-be-able-to-post-an-item-for-auction",
+      "text": "1) Users should be able to post an item for auction"
+    },
+    {
+      "type": "paragraph",
+      "text": "An **Auction Service** writes the Item and Auction rows. Images go to blob storage via presigned URLs, and the Auction stores references to them."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-should-be-able-to-bid-on-an-item",
+      "text": "2) Users should be able to bid on an item"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **Bidding Service** handles bids. For every bid it reads the auction's current max, checks the new amount is higher, and writes the Bid while updating the max."
+    },
+    {
+      "type": "diagram",
+      "file": "01-placing-a-bid.svg",
+      "caption": "Placing a bid"
+    },
+    {
+      "type": "paragraph",
+      "text": "Done naively, two bids arriving together can both read the same max and both be accepted. We'll fix that in the first deep dive."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-users-should-be-able-to-view-an-auction-with-real-time-updates",
+      "text": "3) Users should be able to view an auction with real-time updates"
+    },
+    {
+      "type": "paragraph",
+      "text": "Viewing an auction reads the Auction row (with its cached `maxBid`). To keep the price live, clients open a persistent connection and receive new highest bids as they happen — covered in the deep dives."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-guarantee-bids-are-processed-correctly-under-contention",
+      "text": "1) How do we guarantee bids are processed correctly under contention?"
+    },
+    {
+      "type": "pattern",
+      "title": "Pattern: Dealing with Contention",
+      "text": "Many writers racing to change the same row is the heart of this pattern. The tools are atomic conditional updates, locks, or serialising writes through a single owner.",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Read, check, then write in application code",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Read `maxBid`, compare in the service, then insert the bid and update the max as separate statements."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Classic race condition: two bids of 150 and 160 can both read max = 140 and both succeed, or a lower bid can overwrite a higher one."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Row lock with SELECT ... FOR UPDATE",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "In one transaction, `SELECT max_bid FROM auctions WHERE id = ? FOR UPDATE`, compare, insert the bid, update `max_bid`, commit. Concurrent bidders on the same auction serialise on the row lock."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Correct, and fine for most auctions. For a very hot auction, bidders queue on the lock and latency grows; long-held locks also tie up connections."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Atomic conditional update (optimistic)",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Skip the explicit lock and let the database compare-and-set in one statement:"
+        },
+        {
+          "type": "code",
+          "code": "UPDATE auctions\nSET max_bid = :amount, max_bidder = :userId\nWHERE id = :auctionId AND max_bid < :amount AND status = 'OPEN';"
+        },
+        {
+          "type": "paragraph",
+          "text": "If one row is updated, the bid wins and we insert it as accepted; if zero rows are updated, it lost and we record it as rejected. No lock is held across round trips."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Losing bids get a fast rejection, which is the desired behaviour. For extreme cases you can route all bids for one auction through a single partition of a queue (e.g. Kafka keyed by auctionId) so they are processed strictly in order by one consumer."
+        }
+      ]
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Always persist every bid — accepted or rejected — with its timestamp. Disputes (\"I bid first!\") are common, and an append-only bid log is your audit trail."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-push-bid-updates-to-viewers-in-real-time",
+      "text": "2) How do we push bid updates to viewers in real time?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Client polling",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Clients poll `GET /auctions/:id` every second."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Thousands of viewers per hot auction × one request per second is a lot of wasted load, and updates are still delayed by up to the poll interval."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Server-Sent Events with pub/sub",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Viewers open an SSE connection to a **Notification Service**. When a bid is accepted, the Bidding Service publishes to a Redis Pub/Sub channel `auction:{id}`. Each notification server subscribes to the channels for the auctions its connected viewers are watching and pushes the new max to them."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Connections are stateful, so notification servers need connection-aware load balancing and clients must reconnect (SSE does this automatically) and re-fetch current state after a reconnect."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-close-auctions-reliably-and-on-time",
+      "text": "3) How do we close auctions reliably and on time?"
+    },
+    {
+      "type": "paragraph",
+      "text": "When `endTime` passes, the auction must stop accepting bids and a winner must be declared exactly once."
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Cron job scanning for ended auctions",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Every minute, query `WHERE end_time <= now() AND status = 'OPEN'` and close them."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Up to a minute of slack where late bids could be accepted unless the bid query also checks `end_time`. Scanning gets heavier as data grows."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Delayed message + guard in the bid path",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "When an auction is created, schedule a delayed message (e.g. SQS delay, a durable timer, or a job scheduler) for its end time. The consumer marks the auction `CLOSED` with a conditional update and emits a \"winner\" event. In the meantime, the bid's conditional update already includes `end_time > now()`, so no bid can sneak in after the deadline even if closing is delayed."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Clock skew between servers matters near the deadline; use the database's clock as the single source of truth. Closing must be idempotent in case the message is delivered twice."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What prevents two concurrent bids from both being accepted against the same old max?",
+      "options": [
+        "Client-side validation",
+        "An atomic conditional UPDATE ... WHERE max_bid < :amount",
+        "Caching the max bid",
+        "Polling more frequently"
+      ],
+      "answer": 1,
+      "explanation": "The database evaluates the condition and writes atomically, so only one of the racing bids can win.",
+      "section": "1-how-do-we-guarantee-bids-are-processed-correctly-under-contention"
+    },
+    {
+      "question": "Why is SSE a good fit for live auction prices?",
+      "options": [
+        "Viewers mostly receive updates; traffic is one-way from server to client",
+        "It supports file uploads",
+        "It is a database",
+        "It guarantees ordering across auctions"
+      ],
+      "answer": 0,
+      "explanation": "Bids go through normal HTTP requests; SSE efficiently pushes new prices down to many viewers."
+    },
+    {
+      "question": "How do you ensure no bid is accepted after the auction ends, even if closing is delayed?",
+      "options": [
+        "Trust the client clock",
+        "Include end_time > now() in the bid's conditional update",
+        "Close auctions early",
+        "Disable caching"
+      ],
+      "answer": 1,
+      "explanation": "The bid path itself enforces the deadline using the database clock.",
+      "section": "3-how-do-we-close-auctions-reliably-and-on-time"
+    },
+    {
+      "question": "Why record rejected bids too?",
+      "options": [
+        "To fill the database",
+        "For auditing and resolving disputes",
+        "To speed up reads",
+        "It is required by SSE"
+      ],
+      "answer": 1,
+      "explanation": "An append-only log of every bid and its outcome is the evidence when users dispute results."
+    }
+  ]
+}

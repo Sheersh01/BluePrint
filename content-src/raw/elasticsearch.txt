@@ -1,0 +1,1502 @@
+Key Technologies
+Elasticsearch
+Learn about how you can use Elasticsearch to solve a large number of problems in System Design.
+
+Watch Video Walkthrough
+Watch the author walk through the problem step-by-step
+
+Many system design problems will involve some aspect of search and retrieval: I've got a lot of "things" and I want to be able to find the right one(s). While most database systems are pretty good at this (e.g. Postgres with a full-text index is sufficient for many problems!), at a certain scale or level of sophistication you'll want to bring out a purpose-built system. And usually this involves a lot of similar requirements like sorting, filtering, ranking, faceting, etc. Enter one of the most well-known search engines: Elasticsearch.
+From an interview perspective, this deep dive will tackle two different angles to understanding Elasticsearch:
+First, you'll learn how to use Elasticsearch. This will give you a powerful tool for your arsenal. Rarely are you going to find a search and retrieval question which is too complex for Elasticsearch. If you're interviewing for a startup or interviewing at a product architecture-style interview, knowing Elasticsearch will help. You can skip this section if you've used it before!
+Secondly, you'll learn how Elasticsearch works under the hood. As an incredible piece of distributed systems engineering, Elasticsearch brings together a lot of different concepts which can be used even outside search and retrieval problems. And some gnarly interviewers (I'm not the only one, I promise!) might ask you to pretend Elasticsearch doesn't exist and explain some of the top-level concepts yourself. This is more common for infra- heavy roles, particularly at cloud companies.
+Elasticsearch is an enormous project built over more than a decade so there's a ton of features and functionality that we won't cover here, but we'll try to cover important bits in as we dig all the way in to this project. Off we go.
+Basic Concepts
+Let's start with names. The important concepts of Elasticsearch from a client perspective are documents, indices, mappings, and fields.
+Doc 1
+- Title: Great Gatsby
+- Price: 10.99
+Doc 2
+- Title: 1984
+- Price: 9.99
+Books
+Title: Text
+Price: Float
+Document
+Mapping
+Index
+Field
+Key Concepts
+Documents
+Documents are the individual units of data that you're searching over. A "document" doesn't have to be a website or a blog post, so don't get too hung up on the terminology. Just think of it like any JSON object. Like books in our bookstore:
+{
+  "id": "XYZ123",
+  "title": "The Great Gatsby",
+  "author": "F. Scott Fitzgerald",
+  "price": 10.99,
+  "createdAt": "2024-01-01T00:00:00.000Z"
+}
+Indices
+An index is a collection of documents. Each document is associated with a unique ID and a set of fields, which are key-value pairs that contain the data you're searching over. Think of an index as a database table. Searches happen against these indices and return document results which match the search criteria.
+Note this terminology overloads the more general term "index" which is often used to describe auxilary data structures which make searches faster. We'll try to clarify which "index" we're talking about to avoid confusion.
+We'll create an index for our books, but we might have indexes for any number of different entities relevant to our business. Reviews, users, orders, etc.
+Mappings and Fields
+Finally, a mapping is the schema of the index. It defines the fields that the index will have, the data type of each field, and any other properties like how the field is processed and indexed. You can put whatever data you want in the document, but the mapping determines which fields are searchable and what type of data they contain.
+These types can be arbitrarily complex. For example, you can nest objects and arrays within your documents, use special geospatial types like geo_point and geo_shape, define custom analyzers, or even use embeddings for semantic search. We won't go into all of these but if you suspect you'll need something else for search, there's a solid chance Elasticsearch already has you covered.
+Here's an example of a mapping:
+{
+  "properties": {
+    "id": { "type": "keyword" },
+    "title": { "type": "text" },
+    "author": { "type": "text" },
+    "price": { "type": "float" },
+    "createdAt": { "type": "date" }
+  }
+}
+The mapping is crucial because it tells Elasticsearch how to interpret the data you're storing. For example, in the mapping above we define id as a keyword type. This means that the id field is treated as a whole value rather than as a string that can be tokenized. This is important because it allows for more efficient searching and sorting. While I'm usually looking up a single value of id (think: hash table!), searches against title might include queries that try to see whether a given title contains a certain value (think: reverse index!).
+Mappings also have some important implications on the performance of your cluster: if you include a lot of fields in your mapping that aren't actually used in search, this increases the memory overhead of each index. This can lead to performance issues and increased costs. Say you have a User object with 10 fields, but you only allow searching by 2 of them. If you map the entire object, you're wasting memory on the 8 fields that you're not using. This is notable because a lot of the control that you will exert over query performance depends on adjustments to the mapping and various cluster parameters. We'll touch on that later.
+Basic Use
+Next, let's walk through a series of operations to create an index, store some data, and perform a search to get an idea of the essential functionality. Elasticsearch has a nice, clean REST API that makes it easy to perform these operations although there are plenty of GUIs and clients available.
+Create an Index
+A simple PUT request will create an index with a dynamic mapping, 1 shard, and 1 replica. These are parameters you can update after the index is created.
+// PUT /books
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 1
+  }
+}
+Set a Mapping
+If dynamic mapping isn't appropriate (maybe most of the fields in my data aren't searchable), I can set a mapping for the index up front. This lets Elasticsearch know that certain fields should be treated as searchable and what types to expect in those fields.
+// PUT /books/_mapping
+{
+  "properties": {
+    "title": { "type": "text" },
+    "author": { "type": "keyword" },
+    "description": { "type": "text" },
+    "price": { "type": "float" },
+    "publish_date": { "type": "date" },
+    "categories": { "type": "keyword" },
+    "reviews": {
+      "type": "nested",
+      "properties": {
+        "user": { "type": "keyword" },
+        "rating": { "type": "integer" },
+        "comment": { "type": "text" }
+      }
+    }
+  }
+}
+Here I've pre-registered the fields I want to be searchable for my bookstore. When I add documents, Elasticsearch will extract values for these fields and index them so that they're ready to be searched.
+Mappings can be very complex and can change over time as you add more data and new use cases emerge. As one example, note the nested review field. In this case, each review is a nested document with its own fields. This is different from a flat structure where each review is a separate document.
+Your decision of whether to nest reviews within the individual books largely depends on the data update and query patterns and is fair game for a picky interviewer. If reviews are infrequently updated and frequently queried, it may be more efficient to nest them within the book documents. Otherwise you'll probably want to create a separate index for reviews. Think of this like the normalization/denormalization tradeoff that might be familiar if you've worked with SQL databases.
+Add Documents
+So I got an index and a mapping, great. Next, I need to add documents to the index! This is a simple HTTP POST to the /_doc endpoint.
+// POST /books/_doc
+{
+  "title": "The Great Gatsby",
+  "author": "F. Scott Fitzgerald",
+  "description": "A novel about the American Dream in the Jazz Age",
+  "price": 9.99,
+  "publish_date": "1925-04-10",
+  "categories": ["Classic", "Fiction"],
+  "reviews": [
+    {
+      "user": "reader1",
+      "rating": 5,
+      "comment": "A masterpiece!"
+    },
+    {
+      "user": "reader2",
+      "rating": 4,
+      "comment": "Beautifully written, but a bit sad."
+    }
+  ]
+}
+If I want to add another, I can make another request.
+// POST /books/_doc
+{
+  "title": "To Kill a Mockingbird",
+  "author": "Harper Lee",
+  "description": "A novel about racial injustice in the American South",
+  "price": 12.99,
+  "publish_date": "1960-07-11",
+  "categories": ["Classic", "Fiction"],
+  "reviews": [
+    {
+      "user": "reader3",
+      "rating": 5,
+      "comment": "Powerful and moving."
+    }
+  ]
+}
+Each of these requests will return a document ID along with data about how the document was persisted across the cluster.
+{
+  "_index": "books",
+  "_id": "kLEHMYkBq7V9x4qGJOnh",
+  "_version": 1, // NOTE!
+  "result": "created",
+  "_shards": {
+    "total": 2,
+    "successful": 1,
+    "failed": 0
+  },
+  "_seq_no": 0,
+  "_primary_term": 1
+}
+Take special note of that _version field. This is a special field that Elasticsearch uses to ensure the document can be updated atomically.
+Updating Documents
+Updating a document is similar to creating a document, but you need to specify the document ID in the URL. We can raise our price by specifying the entire document:
+// PUT /books/_doc/kLEHMYkBq7V9x4qGJOnh
+{
+  "title": "To Kill a Mockingbird",
+  "author": "Harper Lee",
+  "description": "A novel about racial injustice in the American South",
+  "price": 13.99,
+  "publish_date": "1960-07-11",
+  "categories": ["Classic", "Fiction"],
+  "reviews": [
+    {
+      "user": "reader3",
+      "rating": 5,
+      "comment": "Powerful and moving."
+    }
+  ]
+}
+And this might be appropriate in some instances, but it can be risky! If another process is updating the same document concurrently, you could overwrite their changes.
+If we want to guard against this we can use the _version field from above to specify that we only want to update the document if the version matches. The following request will only update the document if the version is 1. Otherwise it will throw an error.
+// PUT /books/_doc/kLEHMYkBq7V9x4qGJOnh?version=1
+...
+These errors give clients an opportunity to handle the conflict and retry the request, a simple example of optimistic concurrency control.
+Finally, the _update endpoint (note POST) allows you to update some fields of a document without having to fetch the entire document.
+// POST /books/_update/kLEHMYkBq7V9x4qGJOnh
+{
+  "doc": {
+    "price": 14.99
+  }
+}
+It may be obvious why this would be useful for clients, but remember that Elasticsearch is distributed, asynchronous, and concurrent. Your request is potentially sent to many different nodes and the requests can arrive out of order. Being explicit about the update semantics makes sure that the updates happen as you expect.
+Take note of some of these mechanics for the API design questions of your interview. Some companies and interview types go dramatically deeper on API design and learning from popular open source projects is a great way to develop your skills.
+Search
+Ok, so we've got an index with documents, how do we actually search for them? Elasticsearch makes this straightforward! The Elasticsearch query syntax is very similar to that of SQL, and it's also JSON based which makes it very easy to work with.
+A simple query might be to search for books with "Great" in the title:
+// GET /books/_search
+{
+  "query": {
+    "match": {
+      "title": "Great"
+    }
+  }
+}
+Is this a body in a GET request? Yes and no. Elasticsearch will respond to GET requests with bodies, or if you're dealing with a pedantic proxy you'll need to pack this object into the query string or use the POST endpoint. I've written it this way to make it more readable.
+We can also search for books with "Great" in the title that are priced less than 15 dollars:
+// GET /books/_search
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "match": { "title": "Great" } },
+        { "range": { "price": { "lte": 15 } } }
+      ]
+    }
+  }
+}
+Finally, we can search within our nested "reviews" field for books with an "excellent" review:
+// GET /books/_search
+{
+  "query": {
+    "nested": {
+      "path": "reviews",
+      "query": {
+        "bool": {
+          "must": [
+            { "match": { "reviews.comment": "excellent" } },
+            { "range": { "reviews.rating": { "gte": 4 } } }
+          ]
+        }
+      }
+    }
+  }
+}
+The response might look like this:
+{
+  "took": 7,
+  "timed_out": false,
+  "_shards": {
+    "total": 5,
+    "successful": 5,
+    "skipped": 0,
+    "failed": 0
+  },
+  "hits": {
+    "total": {
+      "value": 2,
+      "relation": "eq"
+    },
+    "max_score": 2.1806526,
+    "hits": [
+      {
+        "_index": "books",
+        "_type": "_doc",
+        "_id": "1",
+        "_score": 2.1806526,
+        "_source": {
+          "title": "The Great Gatsby",
+          "author": "F. Scott Fitzgerald",
+          "price": 12.99
+        }
+      },
+      {
+        "_index": "books",
+        "_type": "_doc",
+        "_id": "2",
+        "_score": 1.9876543,
+        "_source": {
+          "title": "Great Expectations",
+          "author": "Charles Dickens",
+          "price": 10.50
+        }
+      }
+    ]
+  }
+}
+We're utilizing the mapping and applying a series of constraints/filters to the data to get our results. The results contain both the document ids of the matching books, scores based on relevance (more on this in a second), and the source documents (in this case, my books JSON) if I didn't explicitly specify otherwise.
+Geospatial Search
+One of Elasticsearch's most powerful (and interview-relevant) capabilities is its native support for geospatial data. If you're designing something like Yelp, Uber, or any location-based service, this is where Elasticsearch really shines compared to a traditional relational database.
+Elasticsearch supports two primary geospatial field types:
+geo_point: Stores a single latitude/longitude pair. Use this for things like restaurant locations, user check-ins, or delivery addresses.
+geo_shape: Stores arbitrary geometries — polygons, lines, circles, bounding boxes. Use this for delivery zones, city boundaries, or service coverage areas.
+To use geospatial search, you first need to define the field type in your mapping:
+{
+  "properties": {
+    "name": { "type": "text" },
+    "location": { "type": "geo_point" },
+    "delivery_zone": { "type": "geo_shape" }
+  }
+}
+Then when you add a document, include the coordinates:
+// POST /restaurants/_doc
+{
+  "name": "Joe's Pizza",
+  "location": { "lat": 40.7128, "lon": -74.0060 },
+  "delivery_zone": {
+    "type": "polygon",
+    "coordinates": [[[-74.01, 40.71], [-74.00, 40.71], [-74.00, 40.72], [-74.01, 40.72], [-74.01, 40.71]]]
+  }
+}
+Now you can run geospatial queries. The most common is geo_distance, which finds documents within a radius of a point:
+// GET /restaurants/_search
+{
+  "query": {
+    "geo_distance": {
+      "distance": "5km",
+      "location": { "lat": 40.7128, "lon": -74.0060 }
+    }
+  }
+}
+You can combine this with other filters in a bool query — find Italian restaurants within 2 miles, sorted by rating. That's exactly the kind of multi-faceted search that makes Elasticsearch a natural fit for location-based applications.
+Under the hood, Elasticsearch uses a combination of geospatial indexing strategies — including geohashes, BKD trees (a variant of k-d trees optimized for block storage), and R-tree-like structures — to make these queries fast even across millions of documents. The geo_point type specifically uses a BKD tree to index coordinates, which allows Elasticsearch to efficiently narrow the search space in two dimensions without the limitations of a standard B-tree index on latitude and longitude separately.
+Sort
+Once we've narrowed down the results to a set of books that we think are interesting, how do we sort them so that our users get the best results at the top of the page?
+Sorting is a crucial feature in Elasticsearch that allows you to order your search results based on specific fields.
+Basic Sorting
+To sort results, you can use the sort parameter in your search query. Here's a basic example that sorts books by price in ascending order:
+// GET /books/_search
+{
+  "sort": [
+    { "price": "asc" }
+  ],
+  "query": {
+    "match_all": {}
+  }
+}
+You can also sort by multiple fields. For instance, to sort by price ascending and then by publish date descending:
+// GET /books/_search
+{
+  "sort": [
+    { "price": "asc" },
+    { "publish_date": "desc" }
+  ],
+  "query": {
+    "match_all": {}
+  }
+}
+Sorting by Script
+Elasticsearch also allows sorting based on custom scripts (using the "Painless" scripting language). This is useful when you need to sort by a computed value. Here's an example that sorts books by a discounted price (10% off) - which you would never do because the sort order is identical:
+// GET /books/_search
+{
+  "sort": [
+    {
+      "_script": {
+        "type": "number",
+        "script": {
+          "source": "doc['price'].value * 0.9"
+        },
+        "order": "asc"
+      }
+    }
+  ],
+  "query": {
+    "match_all": {}
+  }
+}
+Sorting on Nested Fields
+When dealing with nested fields, you need to use a nested sort. This ensures that the sort values come from the same nested object. Here's how you might sort books by their highest review rating:
+// GET /books/_search
+{
+  "sort": [
+    {
+      "reviews.rating": {
+        "order": "desc",
+        "mode": "max",
+        "nested": {
+          "path": "reviews"
+        }
+      }
+    }
+  ],
+  "query": {
+    "match_all": {}
+  }
+}
+Relevance-Based Sorting
+If we don't specify a sort order, Elasticsearch sorts results by relevance score (_score). This is configurable, but the default scoring algorithm is related closely to TF-IDF (Term Frequency-Inverse Document Frequency).
+If you haven't already heard about TF-IDF, it's worth 10 minutes of your time to learn about it as it's useful in a wide variety of contexts!
+Pagination and Cursors
+Our last concern after specifying how we filter and sort our results is how to get them back to the user, basically how we can paginate them. Pagination in Elasticsearch allows you to retrieve a subset of search results, typically used to display results across multiple pages. While we need to determine how we're going to specify the results on each page (either by number or by filtering criteria), we also need to consider whether we want to maintain state or re-run our search query on every page/request.
+From/Size Pagination
+This is the simplest form of pagination, where you specify:
+from: The starting index of the results
+size: The number of results to return
+Example query:
+// GET /my_index/_search
+{
+  "from": 0,
+  "size": 10,
+  "query": {
+    "match": {
+      "title": "elasticsearch"
+    }
+  }
+}
+However, this method becomes inefficient for deep pagination (e.g., beyond 10,000 results) due to the overhead of sorting and fetching all preceding documents. The cluster needs to retrieve and sort all these documents on each request, which can be prohibitively expensive.
+Search After
+This method is more efficient for deep pagination. It uses the last result's sort values as a boundary for the next search. Elasticsearch returns matching hits that sort after that boundary, instead of collecting and skipping every earlier page.
+Example:
+// GET /my_index/_search
+{
+  "size": 10,
+  "query": {
+    "match": {
+      "title": "elasticsearch"
+    }
+  },
+  "sort": [
+    {"date": "desc"},
+    {"_id": "desc"}
+  ],
+  "search_after": [1463538857, "654323"]
+}
+The search_after parameter uses the sort values from the last result of the previous page. Here's how it works:
+In your initial query, you don't include the search_after parameter.
+From the results of your initial query, you take the sort values of the last document.
+These sort values become the search_after parameter for your next query.
+In the example above:
+1463538857 is a timestamp (the date field's value for the last document in the previous page).
+"654323" is the _id of the last document in the previous page.
+Those values are a bookmark in the sorted results, not an address on disk. Elasticsearch still runs the query for the next page.
+If documents are added or changed between requests, results can move around that bookmark. You might miss one or see it twice. Use a point in time (PIT) when you need a consistent view. The client also has to save the last hit's sort values, and you can only page forward.
+Cursors
+Cursors in Elasticsearch provide a stateful way to paginate through search results, solving the problem of the documents shifting underneath you. Cursors maintain consistency across paginated requests, and thus require a lot more overhead than the pagination methods we've already discussed.
+Elasticsearch uses the point in time (PIT) API in conjunction with search_after for cursor-based pagination:
+Create a PIT:
+// POST /my_index/_pit?keep_alive=1m
+This returns a PIT ID.
+Use the PIT in searches:
+// GET /_search
+{
+  "size": 10,
+  "query": {
+    "match": {
+      "title": "elasticsearch"
+    }
+  },
+  "pit": {
+    "id": "46To...",
+    "keep_alive": "1m"
+  },
+  "sort": [
+    {"_score": "desc"},
+    {"_id": "asc"}
+  ]
+}
+For subsequent pages, add search_after:
+// GET /_search
+{
+  "size": 10,
+  "query": {
+    "match": {
+      "title": "elasticsearch"
+    }
+  },
+  "pit": {
+    "id": "46To...",
+    "keep_alive": "1m"
+  },
+  "sort": [
+    {"_score": "desc"},
+    {"_id": "asc"}
+  ],
+  "search_after": [1.0, "1234"]
+}
+Close the PIT when done:
+// DELETE /_pit
+{
+  "id" : "46To..."
+}
+Using PITs with search_after provides a consistent view of the data throughout the pagination process, even if the underlying index is being updated.
+How it works
+Woo! So now that you have a basic understanding of how you might use Elasticsearch as a client, the natural next step for us is to dive into how it works under the covers. How are each of these operations implemented?
+Elasticsearch can be thought of as a high-level orchestration framework for Apache Lucene, the highly optimized low-level search library. Elasticsearch handles the distributed systems aspects: cluster coordination, APIs, aggregations, and real-time capabilities while the "heart" of the search functionality is handled by Lucene.
+There's enough here to talk for hours so let's start with the high-level architecture of an Elasticsearch cluster and then we'll dive into some of the most interesting bits of indexing and searching.
+Cluster Architecture
+Node Types
+Elasticsearch is a distributed search engine. When you spin up an Elasticsearch cluster, you're actually spinning up multiple nodes. Nodes can be of 5 types which are specified when the instance is started.
+Master Node is responsible for coordinating the cluster. It's the only node that can perform cluster-level operations like adding or removing nodes, and creating or deleting indices. Think of it like the "admin".
+Data Node is responsible for storing the data. It's where your data is actually stored. You'll have lots of these in a big cluster.
+Coordinating Node is responsible for coordinating the search requests across the cluster. It's the node that receives the search request from the client and sends it to the appropriate nodes. This is the frontend for your cluster.
+Ingest Node is responsible for data ingestion. It's where your data is transformed and prepared for indexing.
+Machine Learning Node is responsible for machine learning tasks.
+These nodes work together in pretty straightforward ways. Here's a sequence diagram of Ingest nodes loading data into Data nodes which are then queried via Coordinating Nodes:
+Client
+Client
+Ingest Node
+Ingest Node
+Coordinating Node
+Coordinating Node
+Data Node 1
+Data Node 1
+Data Node 2
+Data Node 2
+Send document for indexing
+Forward processed document
+Forward processed document (replica)
+Acknowledge indexing
+Acknowledge indexing
+Confirm document indexed
+Send search request
+Query relevant shards
+Query relevant shards
+Return partial results
+Return partial results
+Merge results
+Return final results
+Process document (ingest pipeline)
+Sequence Diagram
+Every instance of Elasticsearch can be of multiple types, and the type is determined by the node's configuration. For example, an instance can be configured to be a master-eligible node AND coordinating node. In more sophisticated deployments, you might have dedicated hosts for each of these types (e.g. your ingest node host might be CPU bound and have many processors while your data node host might have high disk I/O or more memory).
+Each of these node types also has specializations. As an example, data nodes can be hot, warm, cold, or frozen depending on how likely the data is to be queried (e.g. recent or not) and whether it can change.
+When the cluster starts, you'll specify a list of seed nodes (these are master-eligible) which will perform a leader election algorithm to choose a master for the cluster. Only one node should be the active master at a time, while the other master-eligible nodes are on standby.
+While ingest and coordinating nodes are interesting, data nodes are where the magic of search happens, so let's start there.
+Data Nodes
+The primary function of data nodes is to store documents and make them rapidly searchable. Elasticsearch does this by separating the raw _source data (remember seeing this in our search results above?) from Lucene indexes that are used in search. You can think of it like having a separate document database.
+Requests proceed in two phases: first the "query" phase is when the relevant documents are identified using the optimized index data structures and the "fetch" phase is when those document IDs are (optionally) pulled from the nodes.
+The ideal queries are ones that can be answered without ever touching the source documents, sometimes by pulling the relevant data into the index via included fields.
+Data nodes house our indices (from earlier) which are comprised of shards and their replicas. Inside those shards are Lucene indexes which are made up of Lucene segments.
+Elasticsearch Index
+Shard 1 - A
+Replicas
+Lucene Index
+Segment 1
+Segment 2
+Segment 3
+Shard 1 - B
+Lucene Index
+Segment 1
+Segment 2
+Segment 3
+Shard 2 - A
+Lucene Index
+Segment 1
+Segment 2
+Segment 3
+Shard 2 - B
+Lucene Index
+Segment 1
+Segment 2
+Segment 3
+Different Documents
+Elasticsearch Russian Dolls
+Shards allows Elasticsearch to split data (and the accompanying indexes) across hosts. This allows Elasticsearch to distribute both your documents and the corresponding index structures across multiple nodes in your cluster, which significantly improve performance and scalability.
+Searches will be executed across all relevant shards in parallel, and the results will be merged and sorted by the coordinating node. Queries are generally executed on the coordinating node, which then distributes the query to the appropriate shards.
+A replica is an exact copy of a shard. Elasticsearch allows you to create one or more copies of your index's shards, which are called replica shards, or just replicas.
+Replicas serve two primary purposes: high availability and increased throughput. If our shard can handle X TPS, then by having Y replicas we can handle X * Y TPS (all other things equal).
+The coordinating node can leverage replicas to improve search performance by distributing search requests across all available shard copies (primary and replica), effectively load balancing the search workload across the cluster.
+Lastly, Elasticsearch shards are 1:1 with Lucene indexes. Remember earlier that Lucene is the low-level, highly optimized search library at the heart of Elasticsearch. Many of the operations that Elasticsearch needs to perform with shards (merging, splitting, refreshing, searching) are actually proxy operations on the Lucene indexes underneath.
+At this point we can start to oversimplify Elasticsearch like a bunch of availability and scalability on top of a big bag of Lucene indexes.
+Lucene Segment CRUD
+Lucene indexes are made up of segments, the base unit of our search engine. Segments are immutable containers of indexed data. Let that word sink in for one second before we continue. Don't we need to be able to update, add, and delete documents from our Elasticsearch index?
+Elasticsearch Index
+Shard 1 - A
+Lucene Index
+Segment 1
+Segment 2
+Segment 3
+Shard 1 - B
+Lucene Index
+Segment 1
+Segment 2
+Segment 3
+Shard 2 - A
+Lucene Index
+Segment 1
+Segment 2
+Segment 3
+Shard 2 - B
+Lucene Index
+Segment 1
+Segment 2
+Segment 3
+Lucene Segments
+The way that Lucene indexes work is by batching writes and constructing segments. When we insert a document, we don't immediately store it in the index. Instead, we add it to a segment. When we have a batch of documents, we construct a segment and flush it out to disk.
+When segments get too numerous, we can merge them: we create a new segment from the segments we want to merge and remove the previous segments.
+Deletions are tricky: each segment actually has a set of deleted identifiers. When a segment is queried for data against a deleted document, it pretends it doesn't exist - but the data is still there! During merge operations, the merged segments clean up deleted documents.
+Finally for update events we don't actually update the segment. Instead, we soft delete the old document and insert a new document with the updated data. That old document gets cleaned up on segment merge events later. This makes deletions super fast but have some lasting performance penalties until we merge and clean up those segments. Ideally we're not doing it a lot!
+Note here that updates actually have worse performance than insertions because we need to handle the bookkeeping of soft deletions. This is part of why Elasticsearch isn't a great fit for data that is rapidly updating.
+This immutable architecture carries a number of benefits for Lucene:
+Improved write performance: New documents can be quickly added to new segments without modifying existing ones.
+Efficient caching: Since segments are immutable, they can be safely cached in memory or on SSD without worrying about consistency issues.
+Simplified concurrency: Read operations don't need to worry about the data changing mid-query, simplifying concurrent access.
+Easier recovery: In case of a crash, it's easier to recover from immutable segments as their state is known and consistent.
+Optimized compression: Immutable data can be more effectively compressed, saving disk space.
+Faster searches: The immutable nature allows for optimized data structures and algorithms for searching.
+However, this design also introduces some challenges, such as the need for periodic segment merges and the temporary increased storage requirements before cleanup operations. Elasticsearch and Lucene have sophisticated mechanisms to manage these trade-offs effectively.
+These kind of design decisions (how to use immutability to your advantage) are a big consideration in data-heavy infrastructure system design interviews! Hopefully they're inspiring some ideas for how you think about other systems you might build.
+Lucene Segment Features
+Segments aren't just dumb containers of document data, they also house highly-optimized data structures relevant for search operations. Two of the most important ones are the inverted index and doc values.
+Inverted Index
+If Lucene is the heart of Elasticsearch, the inverted index is the heart of Lucene. Fundamentally, if you want to make finding things fast you have two options:
+You can organize your data according to how you want to retrieve it. If you wanted to look up specific instances, a poor choice would be a table which you need to scan through every item (O(n)), a better one would be a sorted list (O(log(n))), and the best strategy would be a hash table (O(1)).
+You can copy your data and organize the copy like (1).
+Let's pretend we have 1 billion books, a small number of which the title contains the word "lazy". We want to create some code that can find all the books that contain the word "lazy" as fast as possible. How might we do this?
+ID: 12
+lazy dog
+ID: 53
+lazy days are best days
+...
+Documents
+Index
+lazy: [12, 53]
+dog: [12]
+days: [53]
+are: [53]
+best: [53]
+Inverted Index
+An inverted index is a data structure used to store mapping from content, such as words or numbers, to its locations in a database, or in this case, documents. This is what makes keyword search with Elasticsearch fast. It lists every unique word that appears in any document and identifies all the documents each word occurs in. In this case, a map from strings like "lazy" to the documents that contain that token (above, documents #12 and #53).
+Now instead of having to scan every document to find the documents that contain the word "lazy", we can just look up the inverted index and find the documents that contain the word "lazy" in constant time.
+We've exploited (1) and (2) above - by creating copies of our data and cleverly arranging it, we turn an O(n) scan into an O(1) lookup. Clever!
+Doc Values
+Now, what if we want to sort all those results by price? This is where doc values come in. While the documents contain a bunch of other fields like author, title, etc. we really want to get only the price for all the matched results. This is a very common problem for row-oriented databases like relational databases! Even though I only need to access a single column, I need to read the entire row and index into it.
+The secret to the performance of analytics workhorses like Spark or AWS's Redshift is they use a columnar format to store data in contiguous chunks of memory. When you query a column, you're really just reading a contiguous chunk of memory. The doc values structure does just this with a columnar, contiguous representation of a single field for all documents across the segment. Our inverted index gives us the mapping of tokens to documents, and doc values give us the data we need to perform that final sort.
+Coordinating Nodes
+Remember that we talked about how Elasticsearch is a distributed system? Coordinating nodes are responsible for taking requests from end clients and coordinating their execution across the cluster. They are the entry point for a user request and are responsible for parsing the query, determining which nodes are responsible for the query, and returning the results to the user.
+One of the most important steps in execution on a coordinating node is query planning. Query planners are algorithms that determine the most efficient way to execute a search query. After a query is parsed by the coordinating node, the query planner evaluates how to best retrieve the relevant documents. This involves deciding whether to use an inverted index, determining the best order to execute parts of the query, and orchestrating how results from multiple nodes should be combined.
+Order Optimization
+Let's talk about this in simple terms. You are searching through millions of documents for the string "bill nye". In your inverted index, "bill" has millions of entries and "nye" has a few hundred. How might you go about this?
+You could generate a hash set of all the documents that contain "nye" and then scan over the documents that contain "bill" looking for an intersection, then do a string search for "bill nye"
+You could generate a hash set of all the documents that contain "bill" and then scan over the documents that contain "nye" looking for an intersection, then do a string search for "bill nye".
+You could load all the documents that contain "nye" and do a string search for "bill nye".
+You could load all the documents that contain "bill" and do a string search for "bill nye".
+...
+There are lots of options! And the difference in performance between these options can vary by orders of magnitude.
+By keeping statistics on the types of fields that are present, the keywords that are popular, and the length of documents, Elasticsearch's query planner will choose between options so as to minimize the time it takes to return results to the user. This optimization is crucial for maintaining performance as the size and complexity of datasets grow.
+If you're dealing with an infrastructure-style system design interview, these questions should be familiar to you. Query planners, by adding a layer of statistics and an indirection allow the system to dynamically respond to the data in the index. Being able to handle data dependence is why database systems in general tend to be so powerful!
+In Your Interview
+Elasticsearch should fit obviously into many system design interview questions. Anything that involves complex searches is probably a good candidate. The majority of the time Elasticsearch is invoked in interviews it will be attached via Change Data Capture (CDC) to an authoritative data store like Postgres or DynamoDB.
+Using Elasticsearch
+Some things to keep in mind when using Elasticsearch in your interview:
+It's usually not a good idea to use Elasticsearch as your database. It's a search engine first and foremost, and while it's incredibly powerful it's not meant to replace a traditional database. Earlier versions of Elasticsearch had a lot of issues with consistency and durability, and many of the issues that plagued CouchDB are issues that have plagued Elasticsearch. All to say: if you need the data to persist, put it somewhere else.
+Elasticsearch is designed for read-heavy workloads. If you're dealing with a write-heavy system, you might want to consider other options or implement a write buffer. While it might be convenient that you can add field for e.g. the number of likes on a post or impression counts, there's a lot of reasons this will cause ElasticSearch to struggle.
+Ensure you account for the eventual consistency model of Elasticsearch. Your results will be stale, sometimes significantly. If your use-case can't tolerate this, you may need to consider alternatives.
+Elasticsearch is not a relational database. You'll want to denormalize your data as much as possible to make search queries efficient. This may require some additional transformation logic on the write side to make it happen. You should aim for your results to be provided by 1 or 2 queries.
+Not all search problems require it! If your data is small (< 100k documents) or doesn't change often, there are many other and faster solutions. See if a simple query against your primary data store is sufficient and only consider Elasticsearch if you find that to be insufficient.
+You need to be careful you're keeping Elasticsearch in sync with the underlying data. Failures in synchronization can lead to drift and are a common source of bugs with Elasticsearch.
+Remember, while Elasticsearch is a powerful tool, it's not a silver bullet. Be prepared to justify why you're choosing Elasticsearch over other options, and be ready to discuss its limitations as well as its strengths.
+Lessons from Elasticsearch
+Even if we're not using Elasticsearch, we can borrow a number of lessons from its construction in designing performant infrastructure:
+Immutability can be a powerful tool when used at the right layer of the stack. By keeping data static, we enhance our ability to cache, compress, and otherwise optimize our data. We also don't need to worry about synchronization and integrity issues which are much harder to solve with mutable data.
+By separating the query execution from the storage of our data, we can optimize each independently. Elasticsearch's data nodes and coordination nodes complement each other beautifully by focusing on the respective responsibilities of each node type.
+Indexing strategies can significantly impact search performance. Elasticsearch's inverted index structure allows for fast full-text searches, while doc values enable efficient sorting and aggregations. When designing systems that require fast data retrieval, consider how you can structure your data to support the most common query patterns.
+Distributed systems can provide scalability and fault tolerance, but they also introduce complexity. Elasticsearch's cluster architecture allows it to handle large amounts of data and high query loads, but it also requires careful consideration of data consistency and network partitions. When designing distributed systems, always consider the trade-offs between consistency, availability, and partition tolerance (CAP theorem).
+The importance of efficient data structures cannot be overstated. Elasticsearch's use of specialized data structures like skip lists and finite state transducers for its inverted index shows how tailored data structures can dramatically improve performance for specific use cases. Always consider the access patterns of your data when choosing or designing data structures.
+**Title:** Elasticsearch Deep Dive for System Design Interviews | Hello Interview System Design in a Hurry
+
+**Author:** Stefan Mai
+
+**Date:** 9/5/2024
+
+**Source:** [https://www.hellointerview.com/learn/system-design/deep-dives/elasticsearch](https://www.hellointerview.com/learn/system-design/deep-dives/elasticsearch)
+
+---
+
+# Page Structure Map
+```text
+Elasticsearch Deep Dive for System Design Interviews | Hello Interview System Design in a Hurry
+├── Key Technologies
+├── Elasticsearch
+├── Basic Concepts
+│   ├── Documents
+│   ├── Indices
+│   └── Mappings and Fields
+├── Basic Use
+│   ├── Create an Index
+│   ├── Set a Mapping
+│   ├── Add Documents
+│   ├── Updating Documents
+│   ├── Search
+│   ├── Geospatial Search
+│   ├── Sort
+│   │   ├── Basic Sorting
+│   │   ├── Sorting by Script
+│   │   ├── Sorting on Nested Fields
+│   │   └── Relevance-Based Sorting
+│   └── Pagination and Cursors
+│       ├── From/Size Pagination
+│       ├── Search After
+│       └── Cursors
+├── How it works
+├── Cluster Architecture
+│   ├── Node Types
+│   ├── Data Nodes
+│   │   ├── Lucene Segment CRUD
+│   │   └── Lucene Segment Features
+│   │       ├── Inverted Index
+│   │       └── Doc Values
+│   └── Coordinating Nodes
+│       └── Order Optimization
+├── In Your Interview
+│   ├── Using Elasticsearch
+│   └── Lessons from Elasticsearch
+└── References
+    └── Test Your Knowledge
+```
+
+---
+
+###### Key Technologies
+
+## Elasticsearch
+
+Learn about how you can use Elasticsearch to solve a large number of problems in System Design.
+
+Many system design problems will involve some aspect of search and retrieval: I've got a lot of "things" and I want to be able to find the right one(s). While most database systems are pretty good at this (e.g. Postgres with a full-text index is sufficient for many problems!), at a certain scale or level of sophistication you'll want to bring out a purpose-built system. And usually this involves a lot of similar requirements like sorting, filtering, ranking, faceting, etc. Enter one of the most well-known search engines: **Elasticsearch**.
+
+From an interview perspective, this deep dive will tackle two different angles to understanding Elasticsearch:
+
+1. First, you'll learn how to *use* Elasticsearch. This will give you a powerful tool for your arsenal. Rarely are you going to find a search and retrieval question which is too complex for Elasticsearch. If you're interviewing for a startup or interviewing at a product architecture-style interview, knowing Elasticsearch will help. You can skip this section if you've used it before!
+2. Secondly, you'll learn how Elasticsearch *works* under the hood. As an incredible piece of distributed systems engineering, Elasticsearch brings together a lot of different concepts which can be used even outside search and retrieval problems. And some gnarly interviewers (I'm not the only one, I promise!) might ask you to pretend Elasticsearch doesn't exist and explain some of the top-level concepts yourself. This is more common for infra- heavy roles, particularly at cloud companies.
+
+Elasticsearch is an enormous project built over more than a decade so there's a ton of features and functionality that we won't cover here, but we'll try to cover important bits in as we dig all the way in to this project. Off we go.
+
+## Basic Concepts
+
+Let's start with names. The important concepts of Elasticsearch from a client perspective are documents, indices, mappings, and fields.
+
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 708.2461814880371 535.47265625"><defs></defs><rect x="0" y="0" width="708.2461814880371" height="535.47265625" fill="#ffffff"></rect><g stroke-linecap="round" transform="translate(151.7696189880371 90.3515625) rotate(0 119.025390625 50.513671875)"><path d="M25.26 0 C72.57 -1.67, 117.13 0.3, 212.79 0 M25.26 0 C75.09 0.95, 125.17 0.83, 212.79 0 M212.79 0 C228.72 -1.06, 239.02 8.82, 238.05 25.26 M212.79 0 C231.12 0.82, 239.42 8.7, 238.05 25.26 M238.05 25.26 C236.53 43.19, 237.12 63.38, 238.05 75.77 M238.05 25.26 C238.44 39.66, 238.77 52.07, 238.05 75.77 M238.05 75.77 C238.96 92.91, 228.73 99.55, 212.79 101.03 M238.05 75.77 C239.63 90.35, 231.55 100.98, 212.79 101.03 M212.79 101.03 C159.04 99.04, 103.43 99.63, 25.26 101.03 M212.79 101.03 C158.62 102.48, 103.35 103.2, 25.26 101.03 M25.26 101.03 C10.11 101.52, 0.49 92.56, 0 75.77 M25.26 101.03 C9.7 98.99, -1.21 90.94, 0 75.77 M0 75.77 C-0.76 56.61, 0.8 41.55, 0 25.26 M0 75.77 C0.02 62.48, 0.17 48.92, 0 25.26 M0 25.26 C1.67 9.55, 9.33 -0.17, 25.26 0 M0 25.26 C-1.49 9.65, 8.99 -0.48, 25.26 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(196.6993064880371 115.6484375) rotate(0 88.7199478149414 30)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Doc 1</text> <text x="0" y="20" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">- Title: Great Gatsby</text> <text x="0" y="40" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">- Price: 10.99</text></g> <g stroke-linecap="round" transform="translate(153.5332908630371 214.134765625) rotate(0 119.025390625 50.513671875)"><path d="M25.26 0 C70.42 -2.77, 116.27 -0.63, 212.79 0 M25.26 0 C86.61 -0.85, 149.35 -0.12, 212.79 0 M212.79 0 C230.93 0.71, 239.24 8.66, 238.05 25.26 M212.79 0 C231.61 0.1, 239.8 6.65, 238.05 25.26 M238.05 25.26 C237.24 37.19, 237.21 48.08, 238.05 75.77 M238.05 25.26 C238.78 44.02, 237.87 61.75, 238.05 75.77 M238.05 75.77 C239.43 90.65, 231.3 100.98, 212.79 101.03 M238.05 75.77 C237.76 90.59, 228.26 101.14, 212.79 101.03 M212.79 101.03 C164.46 100.63, 118.14 101.58, 25.26 101.03 M212.79 101.03 C159.36 102.43, 104.48 102.16, 25.26 101.03 M25.26 101.03 C9.54 99.26, -1.05 91.16, 0 75.77 M25.26 101.03 C9.64 102.31, -0.17 92.06, 0 75.77 M0 75.77 C-1.06 62.26, 1.58 51.32, 0 25.26 M0 75.77 C0.96 61.78, 0.59 46.58, 0 25.26 M0 25.26 C-1.29 9.49, 8.92 -0.42, 25.26 0 M0 25.26 C1.5 7.48, 7.66 1.39, 25.26 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(198.4629783630371 239.431640625) rotate(0 50.687965393066406 30)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Doc 2</text> <text x="0" y="20" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">- Title: 1984</text> <text x="0" y="40" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">- Price: 9.99</text></g> <g stroke-linecap="round" transform="translate(55.34774398803711 10) rotate(0 321.44921875 189.58007812499994)"><path d="M32 0 C148.99 0.14, 265.64 -0.57, 610.9 0 M32 0 C175.26 -0.32, 318.24 -0.41, 610.9 0 M610.9 0 C633.95 0.09, 644.42 9.12, 642.9 32 M610.9 0 C630.43 -1.09, 641.9 10.01, 642.9 32 M642.9 32 C643.2 138.83, 641.34 244.79, 642.9 347.16 M642.9 32 C642.38 130.53, 642.49 230.44, 642.9 347.16 M642.9 347.16 C642.64 366.73, 631.04 379.26, 610.9 379.16 M642.9 347.16 C641.9 366.61, 631.91 378.95, 610.9 379.16 M610.9 379.16 C441.16 379.87, 272.07 380.78, 32 379.16 M610.9 379.16 C423.21 378.75, 234.86 378.82, 32 379.16 M32 379.16 C11.73 380.28, -0.14 368.02, 0 347.16 M32 379.16 C9.15 380.4, 1.67 367.59, 0 347.16 M0 347.16 C-2.23 278.88, -2.79 212.52, 0 32 M0 347.16 C-1.47 235.24, -0.84 122.42, 0 32 M0 32 C1.3 9.85, 10.01 1.21, 32 0 M0 32 C1.89 11.65, 12.63 -0.54, 32 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(91.09383773803711 34.671875) rotate(0 28.64997100830078 12.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Books</text></g> <g stroke-linecap="round" transform="translate(433.7539939880371 51.72265625) rotate(0 106.37109375 149.974609375)"><path d="M132.22 4.97 C143.23 6.4, 154.51 15.97, 164.14 24.79 C173.76 33.61, 182.99 45.43, 189.96 57.91 C196.94 70.38, 202.28 84.52, 206 99.64 C209.72 114.77, 212.12 132.22, 212.27 148.64 C212.42 165.06, 210.54 182.69, 206.9 198.18 C203.26 213.67, 197.26 228.69, 190.4 241.58 C183.55 254.48, 175.42 266.57, 165.77 275.57 C156.12 284.57, 143.71 291.68, 132.48 295.59 C121.24 299.51, 109.87 300.26, 98.37 299.06 C86.87 297.85, 74.25 294.58, 63.49 288.37 C52.73 282.15, 42.22 272.82, 33.82 261.76 C25.42 250.7, 18.63 236.49, 13.1 222.02 C7.58 207.55, 2.63 191, 0.68 174.95 C-1.27 158.91, -0.44 141.7, 1.4 125.75 C3.23 109.8, 6.3 93.51, 11.7 79.25 C17.09 64.99, 25.07 51.15, 33.77 40.18 C42.47 29.2, 53.38 20.05, 63.89 13.41 C74.4 6.76, 84.82 1.44, 96.84 0.3 C108.87 -0.85, 129.08 4.88, 136.03 6.54 C142.97 8.21, 139.11 7.94, 138.52 10.3 M61.65 15.26 C70.93 6.65, 83.29 2.38, 94.43 0.57 C105.57 -1.24, 117.07 0.91, 128.51 4.4 C139.95 7.89, 153.28 12.94, 163.05 21.52 C172.82 30.1, 180.08 43.29, 187.13 55.87 C194.17 68.46, 201.13 82.2, 205.33 97.03 C209.53 111.87, 211.67 128.49, 212.31 144.89 C212.95 161.28, 212.43 179.81, 209.18 195.41 C205.94 211.01, 200.02 225.43, 192.84 238.52 C185.67 251.6, 175.63 264.68, 166.12 273.92 C156.62 283.15, 146.57 289.72, 135.82 293.92 C125.07 298.12, 113.26 299.79, 101.62 299.12 C89.98 298.45, 76.6 295.79, 65.97 289.9 C55.34 284.02, 46.24 274.69, 37.85 263.83 C29.45 252.98, 21.44 238.76, 15.6 224.77 C9.76 210.78, 5.37 195.6, 2.82 179.87 C0.27 164.15, -0.91 146.47, 0.3 130.42 C1.5 114.36, 5.01 98.12, 10.07 83.55 C15.13 68.97, 22.11 54.44, 30.67 42.96 C39.23 31.48, 56.18 19, 61.43 14.67 C66.69 10.33, 61.34 14.94, 62.21 16.96" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g stroke-linecap="round" transform="translate(469.9961814880371 114.54296875) rotate(0 73.021484375 24.3828125)"><path d="M12.19 0 C43.52 0.71, 74.76 0.6, 133.85 0 M12.19 0 C50.94 -0.83, 87.39 -0.53, 133.85 0 M133.85 0 C141.11 -0.57, 146.77 3.46, 146.04 12.19 M133.85 0 C142.45 1.58, 147.27 2.62, 146.04 12.19 M146.04 12.19 C144.6 21.99, 144.12 30.71, 146.04 36.57 M146.04 12.19 C145.41 19.5, 145.58 25.89, 146.04 36.57 M146.04 36.57 C145.76 44.52, 141.84 50.43, 133.85 48.77 M146.04 36.57 C146.98 44.46, 141.31 50.18, 133.85 48.77 M133.85 48.77 C87.02 50.18, 38.52 48.01, 12.19 48.77 M133.85 48.77 C106.12 49.21, 77.87 49.99, 12.19 48.77 M12.19 48.77 C5.52 47.98, -1.69 46.55, 0 36.57 M12.19 48.77 C3.13 48.49, -0.6 43.53, 0 36.57 M0 36.57 C-0.31 25.93, 0.94 18.38, 0 12.19 M0 36.57 C-0.49 30.38, 0.66 23.4, 0 12.19 M0 12.19 C1.71 3.59, 5.16 1.28, 12.19 0 M0 12.19 C-1.06 5.38, 2.02 1.72, 12.19 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(509.8653221130371 128.92578125) rotate(0 33.15234375 10)"><text x="33.15234375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Title: Text</text></g> <g stroke-linecap="round" transform="translate(468.2286033630371 201.40625) rotate(0 73.021484375 24.3828125)"><path d="M12.19 0 C56.83 0.99, 101.06 0.79, 133.85 0 M12.19 0 C38.88 0.29, 66.79 0.28, 133.85 0 M133.85 0 C142.39 1.37, 147.11 2.81, 146.04 12.19 M133.85 0 C143.03 0.34, 145.01 2.36, 146.04 12.19 M146.04 12.19 C145.76 20.93, 144.04 28.98, 146.04 36.57 M146.04 12.19 C145.8 19.54, 145.87 27.9, 146.04 36.57 M146.04 36.57 C146.86 44.49, 141.4 49.99, 133.85 48.77 M146.04 36.57 C147.99 45.27, 142.54 48.71, 133.85 48.77 M133.85 48.77 C89.11 49.19, 48.38 47.98, 12.19 48.77 M133.85 48.77 C100.98 49.03, 65.81 50.35, 12.19 48.77 M12.19 48.77 C3.25 48.53, -0.52 43.68, 0 36.57 M12.19 48.77 C5.98 50.06, 1.05 44.51, 0 36.57 M0 36.57 C-0.55 32.14, -0.95 24.44, 0 12.19 M0 36.57 C0.65 27.55, 0.35 19.63, 0 12.19 M0 12.19 C-0.93 5.21, 2.29 1.5, 12.19 0 M0 12.19 C-2.2 4.61, 4.95 0.37, 12.19 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(504.1446189880371 215.7890625) rotate(0 37.10546875 10)"><text x="37.10546875" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Price: Float</text></g> <g stroke-linecap="round"><g transform="translate(463.5196189880371 136.60546875) rotate(0 -41.212890625 4.71484375)"><path d="M0.91 -0.93 C-13.15 0.54, -69.39 7.19, -83.36 8.86" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 8"></path></g><g transform="translate(463.5196189880371 136.60546875) rotate(0 -41.212890625 4.71484375)"><path d="M-56.58 -4.65 C-68.45 -0.79, -78.19 5.12, -83.36 8.86" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g><g transform="translate(463.5196189880371 136.60546875) rotate(0 -41.212890625 4.71484375)"><path d="M-54.16 15.73 C-66.98 11.74, -77.65 9.79, -83.36 8.86" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(468.6641502380371 158.08203125) rotate(0 -79.85546875 51.587890625)"><path d="M-0.94 -0.57 C-27.8 16.72, -133.84 85.6, -160.23 102.83" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 8"></path></g><g transform="translate(468.6641502380371 158.08203125) rotate(0 -79.85546875 51.587890625)"><path d="M-142.2 78.86 C-150.11 86.87, -156.51 97.48, -160.23 102.83" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g><g transform="translate(468.6641502380371 158.08203125) rotate(0 -79.85546875 51.587890625)"><path d="M-131.01 96.06 C-142.99 97.51, -153.6 101.66, -160.23 102.83" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(463.2813377380371 227.0234375) rotate(0 -81.16015625 30.431640625)"><path d="M-0.52 -0.34 C-27.34 9.84, -134.96 50.17, -161.88 60.5" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 8"></path></g><g transform="translate(463.2813377380371 227.0234375) rotate(0 -81.16015625 30.431640625)"><path d="M-139.15 40.92 C-144.86 45.9, -149.93 49.92, -161.88 60.5" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g><g transform="translate(463.2813377380371 227.0234375) rotate(0 -81.16015625 30.431640625)"><path d="M-131.88 60.11 C-139.11 60.8, -145.79 60.57, -161.88 60.5" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(458.9649314880371 222.84765625) rotate(0 -73.615234375 -27.046875)"><path d="M0.44 -0.36 C-23.97 -9.18, -122.48 -44.19, -146.98 -53.27" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 8"></path></g><g transform="translate(458.9649314880371 222.84765625) rotate(0 -73.615234375 -27.046875)"><path d="M-116.98 -53.33 C-125.29 -52.79, -131.02 -52.12, -146.98 -53.27" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g><g transform="translate(458.9649314880371 222.84765625) rotate(0 -73.615234375 -27.046875)"><path d="M-123.97 -34.03 C-130.42 -38.47, -134.36 -42.76, -146.98 -53.27" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(89.9666480346632 469.97265625) rotate(0 93.32921985168696 -73.046875)"><path d="M0.25 0.82 C31.39 -23.59, 156.14 -122.39, 187.3 -146.84 M-1.08 0.21 C29.92 -24.03, 155.39 -121.58, 186.69 -145.7" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(89.9666480346632 469.97265625) rotate(0 93.32921985168696 -73.046875)"><path d="M170.69 -120.33 C177.52 -127.83, 180.28 -136.53, 186.69 -145.7 M170.69 -120.33 C176.53 -129.18, 181.71 -136.21, 186.69 -145.7" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(89.9666480346632 469.97265625) rotate(0 93.32921985168696 -73.046875)"><path d="M158.12 -136.55 C169.13 -138.62, 176.13 -141.86, 186.69 -145.7 M158.12 -136.55 C167.84 -140.2, 176.99 -142.12, 186.69 -145.7" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g transform="translate(10 478.1328125) rotate(0 63.862342834472656 17.296875)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="27.675px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Document</text></g> <g transform="translate(470.6446189880371 472.7890625) rotate(0 50.483970642089844 17.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="28px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Mapping</text></g> <g stroke-linecap="round"><g transform="translate(535.1602439880371 466.92578125) rotate(0 0.37890625 -53.533203125)"><path d="M-0.54 -0.89 C-0.37 -18.96, 1.2 -90.54, 1.58 -108.24 M1.38 1.26 C1.42 -16.72, 1.05 -89.48, 1.07 -107.32" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(535.1602439880371 466.92578125) rotate(0 0.37890625 -53.533203125)"><path d="M11.39 -79.16 C6.31 -87.56, 2.26 -97, 1.07 -107.32 M11.39 -79.16 C7.76 -87.58, 4.85 -96.84, 1.07 -107.32" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(535.1602439880371 466.92578125) rotate(0 0.37890625 -53.533203125)"><path d="M-9.13 -79.11 C-7.12 -87.44, -4.08 -96.89, 1.07 -107.32 M-9.13 -79.11 C-6.65 -87.37, -3.45 -96.64, 1.07 -107.32" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g transform="translate(270.3477439880371 490.47265625) rotate(0 37.65998077392578 17.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="28px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Index</text></g> <g stroke-linecap="round"><g transform="translate(321.9493064880371 484.578125) rotate(0 6.001953125 -45.61328125)"><path d="M1 -0.03 C2.84 -15.21, 10.14 -77.09, 11.85 -92.28 M0.07 -1.09 C1.66 -16.06, 8.53 -76.51, 10.82 -91.3" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(321.9493064880371 484.578125) rotate(0 6.001953125 -45.61328125)"><path d="M17.34 -62.02 C15.18 -73.02, 11.06 -84.76, 10.82 -91.3 M17.34 -62.02 C15.34 -71.09, 13.42 -79.11, 10.82 -91.3" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(321.9493064880371 484.578125) rotate(0 6.001953125 -45.61328125)"><path d="M-3.01 -64.68 C2.31 -74.87, 5.69 -85.62, 10.82 -91.3 M-3.01 -64.68 C1.19 -72.77, 5.48 -79.98, 10.82 -91.3" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(662.5723094940186 464.408203125) rotate(0 -48.10546875 -104.2890625)"><path d="M-0.15 -1.06 C-16.48 -35.8, -80.83 -173.77, -96.93 -208.52 M-1.69 1 C-17.71 -33.53, -78.58 -171.99, -94.59 -206.95" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(662.5723094940186 464.408203125) rotate(0 -48.10546875 -104.2890625)"><path d="M-73.71 -185.41 C-83.47 -194.9, -89.62 -202.82, -94.59 -206.95 M-73.71 -185.41 C-78.3 -189.3, -82.37 -194.92, -94.59 -206.95" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(662.5723094940186 464.408203125) rotate(0 -48.10546875 -104.2890625)"><path d="M-92.43 -177.03 C-95.01 -189.7, -93.98 -200.85, -94.59 -206.95 M-92.43 -177.03 C-92.93 -182.72, -92.92 -190.17, -94.59 -206.95" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g transform="translate(631.5098094940186 473.056640625) rotate(0 30.407981872558594 17.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="28px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Field</text></g></svg>
+
+Key Concepts
+
+### Documents
+
+**Documents** are the individual units of data that you're searching over. A "document" doesn't have to be a website or a blog post, so don't get too hung up on the terminology. Just think of it like any JSON object. Like books in our bookstore:
+
+```
+{
+  "id": "XYZ123",
+  "title": "The Great Gatsby",
+  "author": "F. Scott Fitzgerald",
+  "price": 10.99,
+  "createdAt": "2024-01-01T00:00:00.000Z"
+}
+```
+
+### Indices
+
+An **index** is a collection of documents. Each document is associated with a unique ID and a set of fields, which are key-value pairs that contain the data you're searching over. Think of an index as a database table. Searches happen against these indices and return document results which match the search criteria.
+
+Note this terminology overloads the more general term "index" which is often used to describe auxilary data structures which make searches faster. We'll try to clarify which "index" we're talking about to avoid confusion.
+
+We'll create an index for our books, but we might have indexes for any number of different entities relevant to our business. Reviews, users, orders, etc.
+
+### Mappings and Fields
+
+Finally, a **mapping** is the schema of the index. It defines the **fields** that the index will have, the data type of each field, and any other properties like how the field is processed and indexed. You can put whatever data you want in the document, but the mapping determines which fields are searchable and what type of data they contain.
+
+These types can be arbitrarily complex. For example, you can nest objects and arrays within your documents, use special geospatial types like geo\_point and geo\_shape, define custom analyzers, or even use embeddings for semantic search. We won't go into all of these but if you suspect you'll need something else for search, there's a solid chance Elasticsearch already has you covered.
+
+Here's an example of a mapping:
+
+```
+{
+  "properties": {
+    "id": { "type": "keyword" },
+    "title": { "type": "text" },
+    "author": { "type": "text" },
+    "price": { "type": "float" },
+    "createdAt": { "type": "date" }
+  }
+}
+```
+
+The mapping is crucial because it tells Elasticsearch how to interpret the data you're storing. For example, in the mapping above we define id as a keyword type. This means that the id field is treated as a whole value rather than as a string that can be tokenized. This is important because it allows for more efficient searching and sorting. While I'm usually looking up a single value of id (think: hash table!), searches against title might include queries that try to see whether a given title *contains* a certain value (think: reverse index!).
+
+Mappings also have some important implications on the performance of your cluster: if you include a lot of fields in your mapping that aren't actually used in search, this increases the memory overhead of each index. This can lead to performance issues and increased costs. Say you have a User object with 10 fields, but you only allow searching by 2 of them. If you map the entire object, you're wasting memory on the 8 fields that you're not using. This is notable because a lot of the control that you will exert over query performance depends on adjustments to the mapping and various cluster parameters. We'll touch on that later.
+
+## Basic Use
+
+Next, let's walk through a series of operations to create an index, store some data, and perform a search to get an idea of the essential functionality. Elasticsearch has a nice, clean REST API that makes it easy to perform these operations although there are plenty of GUIs and clients available.
+
+### Create an Index
+
+A simple PUT request will create an index with a dynamic mapping, 1 shard, and 1 replica. These are parameters you can update after the index is created.
+
+```
+// PUT /books
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 1
+  }
+}
+```
+
+### Set a Mapping
+
+If dynamic mapping isn't appropriate (maybe most of the fields in my data aren't searchable), I can set a mapping for the index up front. This lets Elasticsearch know that certain fields should be treated as searchable and what types to expect in those fields.
+
+```
+// PUT /books/_mapping
+{
+  "properties": {
+    "title": { "type": "text" },
+    "author": { "type": "keyword" },
+    "description": { "type": "text" },
+    "price": { "type": "float" },
+    "publish_date": { "type": "date" },
+    "categories": { "type": "keyword" },
+    "reviews": {
+      "type": "nested",
+      "properties": {
+        "user": { "type": "keyword" },
+        "rating": { "type": "integer" },
+        "comment": { "type": "text" }
+      }
+    }
+  }
+}
+```
+
+Here I've pre-registered the fields I want to be searchable for my bookstore. When I add documents, Elasticsearch will extract values for these fields and index them so that they're ready to be searched.
+
+Mappings can be very complex and can change over time as you add more data and new use cases emerge. As one example, note the nested review field. In this case, each review is a nested document with its own fields. This is different from a flat structure where each review is a separate document.
+
+Your decision of whether to nest reviews within the individual books largely depends on the data update and query patterns and is fair game for a picky interviewer. If reviews are infrequently updated and frequently queried, it may be more efficient to nest them within the book documents. Otherwise you'll probably want to create a separate index for reviews. Think of this like the normalization/denormalization tradeoff that might be familiar if you've worked with SQL databases.
+
+### Add Documents
+
+So I got an index and a mapping, great. Next, I need to add documents to the index! This is a simple HTTP POST to the /\_doc endpoint.
+
+```
+// POST /books/_doc
+{
+  "title": "The Great Gatsby",
+  "author": "F. Scott Fitzgerald",
+  "description": "A novel about the American Dream in the Jazz Age",
+  "price": 9.99,
+  "publish_date": "1925-04-10",
+  "categories": ["Classic", "Fiction"],
+  "reviews": [
+    {
+      "user": "reader1",
+      "rating": 5,
+      "comment": "A masterpiece!"
+    },
+    {
+      "user": "reader2",
+      "rating": 4,
+      "comment": "Beautifully written, but a bit sad."
+    }
+  ]
+}
+```
+
+If I want to add another, I can make another request.
+
+```
+// POST /books/_doc
+{
+  "title": "To Kill a Mockingbird",
+  "author": "Harper Lee",
+  "description": "A novel about racial injustice in the American South",
+  "price": 12.99,
+  "publish_date": "1960-07-11",
+  "categories": ["Classic", "Fiction"],
+  "reviews": [
+    {
+      "user": "reader3",
+      "rating": 5,
+      "comment": "Powerful and moving."
+    }
+  ]
+}
+```
+
+Each of these requests will return a document ID along with data about how the document was persisted across the cluster.
+
+```
+{
+  "_index": "books",
+  "_id": "kLEHMYkBq7V9x4qGJOnh",
+  "_version": 1, // NOTE!
+  "result": "created",
+  "_shards": {
+    "total": 2,
+    "successful": 1,
+    "failed": 0
+  },
+  "_seq_no": 0,
+  "_primary_term": 1
+}
+```
+
+Take special note of that \_version field. This is a special field that Elasticsearch uses to ensure the document can be updated atomically.
+
+### Updating Documents
+
+Updating a document is similar to creating a document, but you need to specify the document ID in the URL. We *can* raise our price by specifying the entire document:
+
+```
+// PUT /books/_doc/kLEHMYkBq7V9x4qGJOnh
+{
+  "title": "To Kill a Mockingbird",
+  "author": "Harper Lee",
+  "description": "A novel about racial injustice in the American South",
+  "price": 13.99,
+  "publish_date": "1960-07-11",
+  "categories": ["Classic", "Fiction"],
+  "reviews": [
+    {
+      "user": "reader3",
+      "rating": 5,
+      "comment": "Powerful and moving."
+    }
+  ]
+}
+```
+
+And this might be appropriate in some instances, but it can be risky! If another process is updating the same document concurrently, you could overwrite their changes.
+
+If we want to guard against this we can use the \_version field from above to specify that we only want to update the document if the version matches. The following request will only update the document if the version is 1. Otherwise it will throw an error.
+
+```
+// PUT /books/_doc/kLEHMYkBq7V9x4qGJOnh?version=1
+...
+```
+
+These errors give clients an opportunity to handle the conflict and retry the request, a simple example of optimistic concurrency control.
+
+Finally, the \_update endpoint (note POST) allows you to update some fields of a document without having to fetch the entire document.
+
+```
+// POST /books/_update/kLEHMYkBq7V9x4qGJOnh
+{
+  "doc": {
+    "price": 14.99
+  }
+}
+```
+
+It may be obvious why this would be useful for clients, but remember that Elasticsearch is distributed, asynchronous, and concurrent. Your request is potentially sent to many different nodes and the requests can arrive out of order. Being explicit about the update semantics makes sure that the updates happen as you expect.
+
+Take note of some of these mechanics for the API design questions of your interview. Some companies and interview types go dramatically deeper on API design and learning from popular open source projects is a great way to develop your skills.
+
+### Search
+
+Ok, so we've got an index with documents, how do we actually search for them? Elasticsearch makes this straightforward! The Elasticsearch query syntax is very similar to that of SQL, and it's also JSON based which makes it very easy to work with.
+
+A simple query might be to search for books with "Great" in the title:
+
+```
+// GET /books/_search
+{
+  "query": {
+    "match": {
+      "title": "Great"
+    }
+  }
+}
+```
+
+Is this a body in a GET request? Yes and no. Elasticsearch will respond to GET requests with bodies, or if you're dealing with a pedantic proxy you'll need to pack this object into the query string or use the POST endpoint. I've written it this way to make it more readable.
+
+We can also search for books with "Great" in the title that are priced less than 15 dollars:
+
+```
+// GET /books/_search
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "match": { "title": "Great" } },
+        { "range": { "price": { "lte": 15 } } }
+      ]
+    }
+  }
+}
+```
+
+Finally, we can search within our nested "reviews" field for books with an "excellent" review:
+
+```
+// GET /books/_search
+{
+  "query": {
+    "nested": {
+      "path": "reviews",
+      "query": {
+        "bool": {
+          "must": [
+            { "match": { "reviews.comment": "excellent" } },
+            { "range": { "reviews.rating": { "gte": 4 } } }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+The response might look like this:
+
+```
+{
+  "took": 7,
+  "timed_out": false,
+  "_shards": {
+    "total": 5,
+    "successful": 5,
+    "skipped": 0,
+    "failed": 0
+  },
+  "hits": {
+    "total": {
+      "value": 2,
+      "relation": "eq"
+    },
+    "max_score": 2.1806526,
+    "hits": [
+      {
+        "_index": "books",
+        "_type": "_doc",
+        "_id": "1",
+        "_score": 2.1806526,
+        "_source": {
+          "title": "The Great Gatsby",
+          "author": "F. Scott Fitzgerald",
+          "price": 12.99
+        }
+      },
+      {
+        "_index": "books",
+        "_type": "_doc",
+        "_id": "2",
+        "_score": 1.9876543,
+        "_source": {
+          "title": "Great Expectations",
+          "author": "Charles Dickens",
+          "price": 10.50
+        }
+      }
+    ]
+  }
+}
+```
+
+We're utilizing the mapping and applying a series of constraints/filters to the data to get our results. The results contain both the document ids of the matching books, scores based on relevance (more on this in a second), and the source documents (in this case, my books JSON) if I didn't explicitly specify otherwise.
+
+### Geospatial Search
+
+One of Elasticsearch's most powerful (and interview-relevant) capabilities is its native support for geospatial data. If you're designing something like Yelp, Uber, or any location-based service, this is where Elasticsearch really shines compared to a traditional relational database.
+
+Elasticsearch supports two primary geospatial field types:
+
+- **geo\_point**: Stores a single latitude/longitude pair. Use this for things like restaurant locations, user check-ins, or delivery addresses.
+- **geo\_shape**: Stores arbitrary geometries — polygons, lines, circles, bounding boxes. Use this for delivery zones, city boundaries, or service coverage areas.
+
+To use geospatial search, you first need to define the field type in your mapping:
+
+```
+{
+  "properties": {
+    "name": { "type": "text" },
+    "location": { "type": "geo_point" },
+    "delivery_zone": { "type": "geo_shape" }
+  }
+}
+```
+
+Then when you add a document, include the coordinates:
+
+```
+// POST /restaurants/_doc
+{
+  "name": "Joe's Pizza",
+  "location": { "lat": 40.7128, "lon": -74.0060 },
+  "delivery_zone": {
+    "type": "polygon",
+    "coordinates": [[[-74.01, 40.71], [-74.00, 40.71], [-74.00, 40.72], [-74.01, 40.72], [-74.01, 40.71]]]
+  }
+}
+```
+
+Now you can run geospatial queries. The most common is geo\_distance, which finds documents within a radius of a point:
+
+```
+// GET /restaurants/_search
+{
+  "query": {
+    "geo_distance": {
+      "distance": "5km",
+      "location": { "lat": 40.7128, "lon": -74.0060 }
+    }
+  }
+}
+```
+
+You can combine this with other filters in a bool query — find Italian restaurants within 2 miles, sorted by rating. That's exactly the kind of multi-faceted search that makes Elasticsearch a natural fit for location-based applications.
+
+Under the hood, Elasticsearch uses a combination of geospatial indexing strategies — including geohashes, BKD trees (a variant of k-d trees optimized for block storage), and R-tree-like structures — to make these queries fast even across millions of documents. The geo\_point type specifically uses a BKD tree to index coordinates, which allows Elasticsearch to efficiently narrow the search space in two dimensions without the limitations of a standard B-tree index on latitude and longitude separately.
+
+### Sort
+
+Once we've narrowed down the results to a set of books that we think are interesting, how do we sort them so that our users get the best results at the top of the page?
+
+Sorting is a crucial feature in Elasticsearch that allows you to order your search results based on specific fields.
+
+#### Basic Sorting
+
+To sort results, you can use the sort parameter in your search query. Here's a basic example that sorts books by price in ascending order:
+
+```
+// GET /books/_search
+{
+  "sort": [
+    { "price": "asc" }
+  ],
+  "query": {
+    "match_all": {}
+  }
+}
+```
+
+You can also sort by multiple fields. For instance, to sort by price ascending and then by publish date descending:
+
+```
+// GET /books/_search
+{
+  "sort": [
+    { "price": "asc" },
+    { "publish_date": "desc" }
+  ],
+  "query": {
+    "match_all": {}
+  }
+}
+```
+
+#### Sorting by Script
+
+Elasticsearch also allows sorting based on custom scripts (using the "Painless" scripting language). This is useful when you need to sort by a computed value. Here's an example that sorts books by a discounted price (10% off) - which you would never do because the sort order is identical:
+
+```
+// GET /books/_search
+{
+  "sort": [
+    {
+      "_script": {
+        "type": "number",
+        "script": {
+          "source": "doc['price'].value * 0.9"
+        },
+        "order": "asc"
+      }
+    }
+  ],
+  "query": {
+    "match_all": {}
+  }
+}
+```
+
+#### Sorting on Nested Fields
+
+When dealing with nested fields, you need to use a nested sort. This ensures that the sort values come from the same nested object. Here's how you might sort books by their highest review rating:
+
+```
+// GET /books/_search
+{
+  "sort": [
+    {
+      "reviews.rating": {
+        "order": "desc",
+        "mode": "max",
+        "nested": {
+          "path": "reviews"
+        }
+      }
+    }
+  ],
+  "query": {
+    "match_all": {}
+  }
+}
+```
+
+#### Relevance-Based Sorting
+
+If we don't specify a sort order, Elasticsearch sorts results by relevance score (\_score). This is configurable, but the default scoring algorithm is related closely to TF-IDF (Term Frequency-Inverse Document Frequency).
+
+If you haven't already heard about TF-IDF, it's worth 10 minutes of your time to learn about it as it's useful in a wide variety of contexts!
+
+### Pagination and Cursors
+
+Our last concern after specifying how we filter and sort our results is how to get them back to the user, basically how we can paginate them. Pagination in Elasticsearch allows you to retrieve a subset of search results, typically used to display results across multiple pages. While we need to determine how we're going to specify the results on each page (either by number or by filtering criteria), we also need to consider whether we want to maintain state or re-run our search query on every page/request.
+
+#### From/Size Pagination
+
+This is the simplest form of pagination, where you specify:
+
+- from: The starting index of the results
+- size: The number of results to return
+
+Example query:
+
+```
+// GET /my_index/_search
+{
+  "from": 0,
+  "size": 10,
+  "query": {
+    "match": {
+      "title": "elasticsearch"
+    }
+  }
+}
+```
+
+However, this method becomes inefficient for deep pagination (e.g., beyond 10,000 results) due to the overhead of sorting and fetching all preceding documents. The cluster needs to retrieve and sort all these documents on each request, which can be prohibitively expensive.
+
+#### Search After
+
+This method is more efficient for deep pagination. It uses the last result's sort values as a boundary for the next search. Elasticsearch returns matching hits that sort after that boundary, instead of collecting and skipping every earlier page.
+
+Example:
+
+```
+// GET /my_index/_search
+{
+  "size": 10,
+  "query": {
+    "match": {
+      "title": "elasticsearch"
+    }
+  },
+  "sort": [
+    {"date": "desc"},
+    {"_id": "desc"}
+  ],
+  "search_after": [1463538857, "654323"]
+}
+```
+
+The search\_after parameter uses the sort values from the last result of the previous page. Here's how it works:
+
+1. In your initial query, you don't include the search\_after parameter.
+2. From the results of your initial query, you take the sort values of the last document.
+3. These sort values become the search\_after parameter for your next query.
+
+In the example above:
+
+- 1463538857 is a timestamp (the date field's value for the last document in the previous page).
+- "654323" is the \_id of the last document in the previous page.
+
+Those values are a bookmark in the sorted results, not an address on disk. Elasticsearch still runs the query for the next page.
+
+If documents are added or changed between requests, results can move around that bookmark. You might miss one or see it twice. Use a point in time (PIT) when you need a consistent view. The client also has to save the last hit's sort values, and you can only page forward.
+
+#### Cursors
+
+Cursors in Elasticsearch provide a stateful way to paginate through search results, solving the problem of the documents shifting underneath you. Cursors maintain consistency across paginated requests, and thus require a lot more overhead than the pagination methods we've already discussed.
+
+Elasticsearch uses the point in time (PIT) API in conjunction with search\_after for cursor-based pagination:
+
+1. **Create a PIT**:
+
+```
+// POST /my_index/_pit?keep_alive=1m
+```
+
+This returns a PIT ID.
+
+2. **Use the PIT in searches**:
+
+```
+// GET /_search
+{
+  "size": 10,
+  "query": {
+    "match": {
+      "title": "elasticsearch"
+    }
+  },
+  "pit": {
+    "id": "46To...",
+    "keep_alive": "1m"
+  },
+  "sort": [
+    {"_score": "desc"},
+    {"_id": "asc"}
+  ]
+}
+```
+
+3. **For subsequent pages, add search\_after**:
+
+```
+// GET /_search
+{
+  "size": 10,
+  "query": {
+    "match": {
+      "title": "elasticsearch"
+    }
+  },
+  "pit": {
+    "id": "46To...",
+    "keep_alive": "1m"
+  },
+  "sort": [
+    {"_score": "desc"},
+    {"_id": "asc"}
+  ],
+  "search_after": [1.0, "1234"]
+}
+```
+
+4. **Close the PIT when done**:
+
+```
+// DELETE /_pit
+{
+  "id" : "46To..."
+}
+```
+
+Using PITs with search\_after provides a consistent view of the data throughout the pagination process, even if the underlying index is being updated.
+
+## How it works
+
+Woo! So now that you have a basic understanding of how you might use Elasticsearch as a client, the natural next step for us is to dive into how it works under the covers. How are each of these operations implemented?
+
+Elasticsearch can be thought of as a high-level orchestration framework for Apache Lucene, the highly optimized low-level search library. Elasticsearch handles the distributed systems aspects: cluster coordination, APIs, aggregations, and real-time capabilities while the "heart" of the search functionality is handled by Lucene.
+
+There's enough here to talk for hours so let's start with the high-level architecture of an Elasticsearch cluster and then we'll dive into some of the most interesting bits of indexing and searching.
+
+## Cluster Architecture
+
+### Node Types
+
+Elasticsearch is a *distributed* search engine. When you spin up an Elasticsearch cluster, you're actually spinning up multiple nodes. Nodes can be of 5 types which are specified when the instance is started.
+
+- **Master Node** is responsible for coordinating the cluster. It's the only node that can perform cluster-level operations like adding or removing nodes, and creating or deleting indices. Think of it like the "admin".
+- **Data Node** is responsible for storing the data. It's where your data is actually stored. You'll have lots of these in a big cluster.
+- **Coordinating Node** is responsible for coordinating the search requests across the cluster. It's the node that receives the search request from the client and sends it to the appropriate nodes. This is the frontend for your cluster.
+- **Ingest Node** is responsible for data ingestion. It's where your data is transformed and prepared for indexing.
+- **Machine Learning Node** is responsible for machine learning tasks.
+
+These nodes work together in pretty straightforward ways. Here's a sequence diagram of Ingest nodes loading data into Data nodes which are then queried via Coordinating Nodes:
+
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 1042 958"><defs></defs><rect x="0" y="0" width="1042" height="958" fill="#ffffff"></rect><g stroke-linecap="round" transform="translate(10 10) rotate(0 75 32.5)"><path d="M0 0 C31.03 -0.66, 65.78 -0.89, 150 0 M0 0 C59.11 -0.26, 118.48 -0.56, 150 0 M150 0 C149.08 22.96, 150.84 47.76, 150 65 M150 0 C149.42 20.12, 149.64 39.79, 150 65 M150 65 C110 62.89, 64.82 63.15, 0 65 M150 65 C101.66 64.66, 54.3 66.13, 0 65 M0 65 C-0.06 43.68, -1.44 18.89, 0 0 M0 65 C-0.05 42.44, 0.46 22.4, 0 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g stroke-linecap="round" transform="translate(10 883) rotate(0 75 32.5)"><path d="M0 0 C36.88 -0.62, 73.79 3.1, 150 0 M0 0 C56.94 -0.73, 113.34 -1.31, 150 0 M150 0 C150.55 21.67, 149.81 45.07, 150 65 M150 0 C149.14 23.27, 149.36 45.45, 150 65 M150 65 C106.85 62.16, 67.27 64.61, 0 65 M150 65 C104.41 65.22, 57.39 63.72, 0 65 M0 65 C-1.66 40.35, 0.8 14.71, 0 0 M0 65 C0.35 41.79, 0.96 17.51, 0 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g stroke-linecap="round" transform="translate(267 10) rotate(0 75 32.5)"><path d="M0 0 C35.14 3.27, 68.08 1.7, 150 0 M0 0 C58.78 -0.87, 116.55 -1.32, 150 0 M150 0 C150.38 15.5, 151.41 29.25, 150 65 M150 0 C149.51 20.29, 149.49 43.3, 150 65 M150 65 C118.73 64.81, 86.77 63.87, 0 65 M150 65 C113.02 65.92, 75.75 66.25, 0 65 M0 65 C1.25 38.81, 1.94 14.28, 0 0 M0 65 C0.62 51.75, -0.69 38.78, 0 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g stroke-linecap="round" transform="translate(267 883) rotate(0 75 32.5)"><path d="M0 0 C33.06 -1.09, 64.84 -0.18, 150 0 M0 0 C54.06 -0.44, 106.57 0.44, 150 0 M150 0 C151.17 15.74, 150.56 33.24, 150 65 M150 0 C149.63 20.95, 148.98 39.3, 150 65 M150 65 C116.53 65.71, 81.64 67.67, 0 65 M150 65 C91.22 63.99, 31.73 63.3, 0 65 M0 65 C1.15 45.06, -2.03 27.1, 0 0 M0 65 C-1.08 41.85, -1.08 15.89, 0 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g stroke-linecap="round" transform="translate(467 10) rotate(0 75 32.5)"><path d="M0 0 C61.19 1, 120.04 1.19, 150 0 M0 0 C44.21 1.11, 89.35 0.74, 150 0 M150 0 C150.89 19.36, 150.54 40.01, 150 65 M150 0 C148.97 12.78, 149.1 27.35, 150 65 M150 65 C96.95 66.97, 47.83 66.07, 0 65 M150 65 C113.87 63.8, 76 65.03, 0 65 M0 65 C-2.25 49.82, 0.99 35.79, 0 0 M0 65 C-0.23 42.33, -0.4 20.86, 0 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g stroke-linecap="round" transform="translate(467 883) rotate(0 75 32.5)"><path d="M0 0 C48.84 0.52, 95.37 -0.05, 150 0 M0 0 C37.78 -0.58, 76.43 -0.07, 150 0 M150 0 C150.34 14.81, 148.34 30.01, 150 65 M150 0 C148.67 25.6, 149.89 50.86, 150 65 M150 65 C106.93 67.55, 58.91 68.01, 0 65 M150 65 C107.99 63.99, 65.48 64.34, 0 65 M0 65 C2.02 49.88, 1.31 30.83, 0 0 M0 65 C-0.41 38.6, 0.07 13.42, 0 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g stroke-linecap="round" transform="translate(682 10) rotate(0 75 32.5)"><path d="M0 0 C54.47 -0.2, 108.06 -2.4, 150 0 M0 0 C51.46 0.48, 102.05 0.18, 150 0 M150 0 C148.23 16.25, 151.86 31.64, 150 65 M150 0 C149.98 14.51, 149.51 28.32, 150 65 M150 65 C89.17 67.34, 30.08 67.46, 0 65 M150 65 C117.77 66.18, 86.37 64.59, 0 65 M0 65 C0.26 43.92, 1.53 24.17, 0 0 M0 65 C0.18 51.17, 0.46 36.37, 0 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g stroke-linecap="round" transform="translate(682 883) rotate(0 75 32.5)"><path d="M0 0 C55.07 -1.97, 112.81 -1.43, 150 0 M0 0 C45.16 -0.59, 91.21 -0.77, 150 0 M150 0 C151.21 16.35, 147.84 34.72, 150 65 M150 0 C150.31 20.45, 151.29 42.87, 150 65 M150 65 C96.57 67.81, 42.17 66, 0 65 M150 65 C99.55 65.12, 50.09 66.74, 0 65 M0 65 C1.76 39.96, -1.87 15.89, 0 0 M0 65 C0.16 48.02, 0.79 30.98, 0 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g stroke-linecap="round" transform="translate(882 10) rotate(0 75 32.5)"><path d="M0 0 C52.6 0.22, 103.61 1.19, 150 0 M0 0 C53.07 -0.31, 106.78 -1.31, 150 0 M150 0 C149.02 16.51, 151.03 36.98, 150 65 M150 0 C150.98 21.15, 150.54 39.83, 150 65 M150 65 C91.69 66.09, 37.62 64.94, 0 65 M150 65 C94.82 64.36, 40.22 64, 0 65 M0 65 C-2.28 48.13, -1.49 33.86, 0 0 M0 65 C0.61 42.58, -0.46 20.34, 0 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g stroke-linecap="round" transform="translate(882 883) rotate(0 75 32.5)"><path d="M0 0 C35.37 0.79, 71.66 -0.75, 150 0 M0 0 C48.71 -1.04, 97.62 0.78, 150 0 M150 0 C149.94 14.69, 149.7 27.49, 150 65 M150 0 C151.17 15.72, 151.41 32.3, 150 65 M150 65 C93.24 63.58, 36.51 63.94, 0 65 M150 65 C119.24 66.44, 86.52 67.07, 0 65 M0 65 C-0.31 49.06, 1.28 34.41, 0 0 M0 65 C-0.87 46.1, -1.26 28.75, 0 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g stroke-linecap="round"><g transform="translate(85 75) rotate(0 0 404)"><path d="M0 0 C0.63 211.42, 0.39 423.55, 0 808 M0 0 C-0.78 249.51, -1.04 497.98, 0 808" stroke="#999" stroke-width="1" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(342 75) rotate(0 0 404)"><path d="M0 0 C2.04 250.99, 1.9 502.5, 0 808 M0 0 C-1.09 168.28, -1.04 337.27, 0 808" stroke="#999" stroke-width="1" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(542 75) rotate(0 0 404)"><path d="M0 0 C0.91 189.19, 0.11 378.53, 0 808 M0 0 C-3.16 315.52, -2.67 630.91, 0 808" stroke="#999" stroke-width="1" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(757 75) rotate(0 0 404)"><path d="M0 0 C-0.46 207.48, 0.99 414.61, 0 808 M0 0 C-2.25 179.15, -2.44 358.02, 0 808" stroke="#999" stroke-width="1" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(957 75) rotate(0 0 404)"><path d="M0 0 C-2.23 224.5, -3.58 449.81, 0 808 M0 0 C1.52 260.2, 1.91 521.18, 0 808" stroke="#999" stroke-width="1" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(86.5 117) rotate(0 125.5 0)"><path d="M-1.06 -0.94 C40.67 -1.08, 207.99 0.09, 250.09 0.27 M0.58 1.18 C42.71 1.18, 210.58 -1.77, 252.33 -1.72" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(86.5 117) rotate(0 125.5 0)"><path d="M224.24 8.81 C230.36 4.63, 240.16 4.16, 252.33 -1.72 M224.24 8.81 C233.94 6.65, 242.22 1.88, 252.33 -1.72" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(86.5 117) rotate(0 125.5 0)"><path d="M224.05 -11.71 C230.41 -10.2, 240.27 -4.98, 252.33 -1.72 M224.05 -11.71 C233.81 -7.5, 242.15 -5.9, 252.33 -1.72" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(342.5 168.5) rotate(0 30.25 10.5)"><path d="M-0.91 0.27 C9.45 -1.14, 50.83 -14.31, 61.06 -9.37 C71.3 -4.44, 70.31 24.64, 60.5 29.9 C50.69 35.16, 11.99 23.75, 2.18 22.16 M0.82 -0.64 C11.16 -1.75, 50.59 -13.03, 60.41 -7.77 C70.23 -2.51, 69.91 26.24, 59.74 30.9 C49.56 35.57, 9.26 21.97, -0.61 20.22" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(342.5 168.5) rotate(0 30.25 10.5)"><path d="M29.24 17.27 C23.35 18.61, 16.8 18.29, -0.61 20.22 M29.24 17.27 C22.34 17.76, 15.11 18.83, -0.61 20.22" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(342.5 168.5) rotate(0 30.25 10.5)"><path d="M24.15 37.15 C19.49 34.33, 14.02 29.81, -0.61 20.22 M24.15 37.15 C18.33 32.62, 12.37 28.72, -0.61 20.22" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(343.5 251) rotate(0 204.5 0)"><path d="M0.56 0.13 C68.88 -0.02, 340.73 -0.77, 409 -0.6 M-0.6 -0.85 C67.64 -0.87, 339.61 0.58, 408.05 0.62" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(343.5 251) rotate(0 204.5 0)"><path d="M379.83 10.79 C386.35 8.38, 391.48 8.06, 408.05 0.62 M379.83 10.79 C391.75 6.7, 403.01 1.98, 408.05 0.62" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(343.5 251) rotate(0 204.5 0)"><path d="M379.9 -9.73 C386.45 -7.54, 391.56 -3.24, 408.05 0.62 M379.9 -9.73 C391.9 -5.67, 403.14 -2.25, 408.05 0.62" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(343.5 303) rotate(0 304.5 0)"><path d="M0 -0.6 C101.6 -0.43, 508.57 1.17, 610.18 1.16 M-1.46 1.7 C100.04 1.56, 508.07 -0.12, 609.85 -0.35" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(343.5 303) rotate(0 304.5 0)"><path d="M581.7 10.01 C590.46 8.38, 603.17 3.89, 609.85 -0.35 M581.7 10.01 C589.38 6.62, 595.41 5.29, 609.85 -0.35" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(343.5 303) rotate(0 304.5 0)"><path d="M581.63 -10.52 C590.43 -5.02, 603.17 -2.39, 609.85 -0.35 M581.63 -10.52 C589.49 -8.85, 595.54 -5.12, 609.85 -0.35" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(755.5 355) rotate(0 -204.5 0)"><path d="M1.18 1.16 C-66.88 1.16, -340.15 -0.41, -408.36 -0.64" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 8"></path></g><g transform="translate(755.5 355) rotate(0 -204.5 0)"><path d="M-380.12 -10.77 C-386.7 -6.39, -398.19 -2.88, -408.36 -0.64" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g><g transform="translate(755.5 355) rotate(0 -204.5 0)"><path d="M-380.22 9.75 C-386.67 7.98, -398.12 5.33, -408.36 -0.64" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(955.5 407) rotate(0 -304.5 0)"><path d="M0.64 -0.64 C-100.9 -0.88, -506.64 -0.17, -608.08 -0.25" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 8"></path></g><g transform="translate(955.5 407) rotate(0 -304.5 0)"><path d="M-579.89 -10.52 C-592.09 -4.74, -602.66 -0.53, -608.08 -0.25" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g><g transform="translate(955.5 407) rotate(0 -304.5 0)"><path d="M-579.88 10 C-592.28 7.6, -602.86 3.64, -608.08 -0.25" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(340.5 459) rotate(0 -125.5 0)"><path d="M0.92 -0.25 C-40.85 -0.32, -208 -1.18, -250.01 -1.07" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 8"></path></g><g transform="translate(340.5 459) rotate(0 -125.5 0)"><path d="M-221.8 -11.28 C-232.23 -5.8, -243.58 -4.01, -250.01 -1.07" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g><g transform="translate(340.5 459) rotate(0 -125.5 0)"><path d="M-221.83 9.24 C-232.15 7.47, -243.48 2.01, -250.01 -1.07" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(86.5 511) rotate(0 225.5 0)"><path d="M0.99 -1.07 C75.99 -0.97, 376.04 0.08, 450.91 0.4 M0.06 0.98 C74.81 0.73, 374.47 -1.17, 449.91 -1.52" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(86.5 511) rotate(0 225.5 0)"><path d="M421.78 8.9 C430.61 4.59, 443.66 -0.49, 449.91 -1.52 M421.78 8.9 C432.22 6.04, 443.19 1.85, 449.91 -1.52" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(86.5 511) rotate(0 225.5 0)"><path d="M421.66 -11.62 C430.5 -8.2, 443.59 -5.55, 449.91 -1.52 M421.66 -11.62 C432.05 -6.93, 443.06 -3.56, 449.91 -1.52" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(543.5 563) rotate(0 104.5 0)"><path d="M-0.09 0.4 C34.44 0.71, 173.46 1.06, 208.22 0.82 M-1.6 -0.44 C33.23 -0.36, 175.69 -0.89, 210.52 -0.88" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(543.5 563) rotate(0 104.5 0)"><path d="M182.34 9.44 C193.89 4.2, 205.37 0.62, 210.52 -0.88 M182.34 9.44 C188.89 7.44, 193.48 5.91, 210.52 -0.88" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(543.5 563) rotate(0 104.5 0)"><path d="M182.31 -11.08 C193.68 -8.46, 205.18 -4.19, 210.52 -0.88 M182.31 -11.08 C188.87 -8.79, 193.46 -6.01, 210.52 -0.88" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(543.5 615) rotate(0 204.5 0)"><path d="M-0.78 0.82 C67.3 0.57, 340.13 -1.09, 408.43 -1.09 M1.01 0.2 C68.89 0.03, 339.3 0.08, 407.19 -0.12" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(543.5 615) rotate(0 204.5 0)"><path d="M379.01 10.17 C388.57 6.4, 393.63 4.42, 407.19 -0.12 M379.01 10.17 C388.75 7.24, 399.22 1.61, 407.19 -0.12" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(543.5 615) rotate(0 204.5 0)"><path d="M378.98 -10.35 C388.62 -8.12, 393.68 -4.11, 407.19 -0.12 M378.98 -10.35 C388.87 -5.65, 399.35 -3.67, 407.19 -0.12" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(755.5 667) rotate(0 -104.5 0)"><path d="M-0.57 -1.09 C-35.26 -1.08, -174.34 0.6, -208.95 0.86" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 8"></path></g><g transform="translate(755.5 667) rotate(0 -104.5 0)"><path d="M-180.87 -9.68 C-189.2 -7.26, -192.55 -3.57, -208.95 0.86" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g><g transform="translate(755.5 667) rotate(0 -104.5 0)"><path d="M-180.66 10.84 C-189.18 8.44, -192.58 7.32, -208.95 0.86" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(955.5 719) rotate(0 -204.5 0)"><path d="M0.05 0.86 C-67.9 1.11, -339.91 0.38, -408.22 0.44" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 8"></path></g><g transform="translate(955.5 719) rotate(0 -204.5 0)"><path d="M-380.02 -9.79 C-385.81 -5.9, -393.64 -5.94, -408.22 0.44" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g><g transform="translate(955.5 719) rotate(0 -204.5 0)"><path d="M-380.04 10.73 C-385.64 9.44, -393.46 4.22, -408.22 0.44" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(542.5 770.5) rotate(0 30.25 10.5)"><path d="M0.78 0.44 C10.72 -1.09, 49.89 -13.15, 59.71 -8.3 C69.53 -3.46, 69.66 24.72, 59.71 29.52 C49.76 34.32, 9.86 21.84, 0 20.49 M-0.27 -0.38 C10.05 -2.28, 51.59 -14.92, 62 -9.8 C72.41 -4.68, 72.57 25.14, 62.19 30.33 C51.81 35.52, 9.66 22.71, -0.28 21.33" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(542.5 770.5) rotate(0 30.25 10.5)"><path d="M29.46 17.42 C21.18 17.48, 13.41 18.67, -0.28 21.33 M29.46 17.42 C22.57 18.52, 16.35 18.79, -0.28 21.33" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(542.5 770.5) rotate(0 30.25 10.5)"><path d="M25.02 37.45 C17.94 31.4, 11.52 26.5, -0.28 21.33 M25.02 37.45 C19.26 34.2, 14.02 30.08, -0.28 21.33" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(540.5 853) rotate(0 -225.5 0)"><path d="M-0.79 1.2 C-76.22 0.96, -376.59 -0.69, -451.79 -0.98" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 8"></path></g><g transform="translate(540.5 853) rotate(0 -225.5 0)"><path d="M-423.55 -11.1 C-431.83 -8.91, -445.75 -5.57, -451.79 -0.98" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g><g transform="translate(540.5 853) rotate(0 -225.5 0)"><path d="M-423.65 9.42 C-431.96 4.12, -445.86 -0.02, -451.79 -0.98" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g></g><mask></mask><g transform="translate(65.4453125 32.5) rotate(0 19.5546875 10)"><text x="19.5546875" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#000" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Client</text></g> <g transform="translate(65.4453125 905.5) rotate(0 19.5546875 10)"><text x="19.5546875" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#000" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Client</text></g> <g transform="translate(303.12109375 32.5) rotate(0 38.87890625 10)"><text x="38.87890625" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#000" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Ingest Node</text></g> <g transform="translate(303.12109375 905.5) rotate(0 38.87890625 10)"><text x="38.87890625" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#000" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Ingest Node</text></g> <g transform="translate(480.453125 32.5) rotate(0 61.546875 10)"><text x="61.546875" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#000" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Coordinating Node</text></g> <g transform="translate(480.453125 905.5) rotate(0 61.546875 10)"><text x="61.546875" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#000" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Coordinating Node</text></g> <g transform="translate(716.5703125 32.5) rotate(0 40.4296875 10)"><text x="40.4296875" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#000" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Data Node 1</text></g> <g transform="translate(716.5703125 905.5) rotate(0 40.4296875 10)"><text x="40.4296875" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#000" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Data Node 1</text></g> <g transform="translate(916.5703125 32.5) rotate(0 40.4296875 10)"><text x="40.4296875" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#000" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Data Node 2</text></g> <g transform="translate(916.5703125 905.5) rotate(0 40.4296875 10)"><text x="40.4296875" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#000" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Data Node 2</text></g> <g transform="translate(104.88671875 133.734375) rotate(0 104.93594360351562 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Send document for indexing</text></g> <g transform="translate(420.19921875 215.39453125) rotate(0 111.72792053222656 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Forward processed document</text></g> <g transform="translate(505.9609375 276.74609375) rotate(0 146.7198944091797 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Forward processed document (replica)</text></g> <g transform="translate(487.8828125 332.8125) rotate(0 78.0239486694336 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Acknowledge indexing</text></g> <g transform="translate(635.6640625 380.734375) rotate(0 78.0239486694336 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Acknowledge indexing</text></g> <g transform="translate(133.51953125 427.9609375) rotate(0 98.54393768310547 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Confirm document indexed</text></g> <g transform="translate(207.77734375 528.56640625) rotate(0 80.95995330810547 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Send search request</text></g> <g transform="translate(557.875 531.203125) rotate(0 87.79194641113281 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Query relevant shards</text></g> <g transform="translate(659.2109375 587.02734375) rotate(0 87.79194641113281 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Query relevant shards</text></g> <g transform="translate(575.01953125 641.47265625) rotate(0 88.14393615722656 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Return partial results</text></g> <g transform="translate(662.2578125 695.06640625) rotate(0 88.14393615722656 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Return partial results</text></g> <g transform="translate(620.328125 773.515625) rotate(0 53.999961853027344 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Merge results</text></g> <g transform="translate(229.60546875 822.0859375) rotate(0 78.52794647216797 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Return final results</text></g> <g transform="translate(429.15625 169.578125) rotate(0 132.22390747070312 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Process document (ingest pipeline)</text></g></svg>
+
+Sequence Diagram
+
+Every instance of Elasticsearch can be of multiple types, and the type is determined by the node's configuration. For example, an instance can be configured to be a master-eligible node AND coordinating node. In more sophisticated deployments, you might have dedicated hosts for each of these types (e.g. your ingest node host might be CPU bound and have many processors while your data node host might have high disk I/O or more memory).
+
+Each of these node types also has specializations. As an example, data nodes can be hot, warm, cold, or frozen depending on how likely the data is to be queried (e.g. recent or not) and whether it can change.
+
+When the cluster starts, you'll specify a list of seed nodes (these are master-eligible) which will perform a leader election algorithm to choose a master for the cluster. Only one node should be the active master at a time, while the other master-eligible nodes are on standby.
+
+While ingest and coordinating nodes are interesting, data nodes are where the magic of search happens, so let's start there.
+
+### Data Nodes
+
+The primary function of data nodes is to store documents and make them rapidly searchable. Elasticsearch does this by separating the raw \_source data (remember seeing this in our search results above?) from Lucene indexes that are used in search. You can think of it like having a separate document database.
+
+Requests proceed in two phases: first the "query" phase is when the relevant documents are identified using the optimized index data structures and the "fetch" phase is when those document IDs are (optionally) pulled from the nodes.
+
+The ideal queries are ones that can be answered without ever touching the source documents, sometimes by pulling the relevant data into the index via included fields.
+
+Data nodes house our indices (from earlier) which are comprised of shards and their replicas. Inside those shards are Lucene indexes which are made up of Lucene segments.
+
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 1018.21484375 710.95703125"><defs></defs><rect x="0" y="0" width="1018.21484375" height="710.95703125" fill="#ffffff"></rect><g stroke-linecap="round" transform="translate(198.0546875 10) rotate(0 405.080078125 300.322265625)"><path d="M32 0 C190.02 1.67, 345.86 3.01, 778.16 0 M32 0 C325.31 -0.78, 619.32 -0.91, 778.16 0 M778.16 0 C799.33 1.54, 810.48 9.6, 810.16 32 M778.16 0 C798.04 1.7, 808.79 11.95, 810.16 32 M810.16 32 C812.55 215.72, 812.51 400.03, 810.16 568.64 M810.16 32 C811.03 183.27, 811.28 335.08, 810.16 568.64 M810.16 568.64 C810.65 591.77, 799.1 600.45, 778.16 600.64 M810.16 568.64 C808.58 590.19, 797.45 598.45, 778.16 600.64 M778.16 600.64 C487 601.35, 196.54 601.24, 32 600.64 M778.16 600.64 C519.88 602.24, 261.21 601.8, 32 600.64 M32 600.64 C8.98 600.17, 1.97 588.84, 0 568.64 M32 600.64 C10.74 600.58, 0.29 590.05, 0 568.64 M0 568.64 C-0.55 376.86, 0.59 186.2, 0 32 M0 568.64 C-0.81 441.43, -1.24 313.97, 0 32 M0 32 C1.37 12.53, 11.73 -1.47, 32 0 M0 32 C-1.18 11.55, 12.77 1.15, 32 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(441.375 29.24609375) rotate(0 137.283935546875 17.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="28px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Elasticsearch Index</text></g> <g stroke-linecap="round" transform="translate(214.33984375 100.80078125) rotate(0 176.076171875 111.966796875)"><path d="M32 0 C97.02 -2.82, 159.77 -2.68, 320.15 0 M32 0 C140.41 -0.37, 249.06 -1.35, 320.15 0 M320.15 0 C340.22 1.48, 350.96 11.78, 352.15 32 M320.15 0 C342.46 1.95, 352.42 12.31, 352.15 32 M352.15 32 C352.86 81.2, 353.51 128.11, 352.15 191.93 M352.15 32 C353 75.42, 352.56 116.94, 352.15 191.93 M352.15 191.93 C350.78 213.45, 339.71 222.02, 320.15 223.93 M352.15 191.93 C354.22 214.88, 341.55 223, 320.15 223.93 M320.15 223.93 C211.92 224.75, 102.91 225.97, 32 223.93 M320.15 223.93 C205.53 223.45, 92.92 223.2, 32 223.93 M32 223.93 C10.73 223.87, 0.25 213.33, 0 191.93 M32 223.93 C11.97 224.05, -1.4 212, 0 191.93 M0 191.93 C-2.64 150.5, -0.03 108.74, 0 32 M0 191.93 C0.92 138.84, 0.77 83.16, 0 32 M0 32 C-1.02 11.44, 12.5 1, 32 0 M0 32 C1.68 10.65, 9.94 -0.79, 32 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(287.41796875 121.58203125) rotate(0 56.059967041015625 12.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Shard 1 - A</text></g> <g transform="translate(10 295.87109375) rotate(0 54.767974853515625 17.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="28px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Replicas</text></g> <g stroke-linecap="round"><g transform="translate(127.29296875 296.609375) rotate(0 40.796875 -38.96875)"><path d="M0.9 0.52 C2.99 -8.99, -1.53 -42.97, 11.95 -56.15 C25.43 -69.33, 70.31 -75.1, 81.79 -78.58 M-0.08 -0.25 C1.9 -10.16, -2.58 -44.89, 10.95 -57.79 C24.48 -70.68, 69.5 -74.04, 81.12 -77.6" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(127.29296875 296.609375) rotate(0 40.796875 -38.96875)"><path d="M55.38 -62.19 C62.56 -66.4, 69.65 -69.75, 81.12 -77.6 M55.38 -62.19 C61.23 -65.62, 68.59 -69.13, 81.12 -77.6" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(127.29296875 296.609375) rotate(0 40.796875 -38.96875)"><path d="M51.5 -82.35 C59.8 -81.55, 67.86 -79.88, 81.12 -77.6 M51.5 -82.35 C58.18 -80.84, 66.5 -79.38, 81.12 -77.6" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(129.17578125 320.6875) rotate(0 40.513671875 61.03411613242514)"><path d="M-0.1 0.92 C1.09 14.88, -5.33 63.9, 8.07 84.24 C21.46 104.58, 68.23 116.54, 80.27 122.96 M-1.61 0.36 C-0.64 14.42, -6.84 65.32, 7.22 85.44 C21.28 105.56, 70.6 115.23, 82.76 121.08" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(129.17578125 320.6875) rotate(0 40.513671875 61.03411613242514)"><path d="M52.77 121.71 C65.56 121.82, 74.2 120, 82.76 121.08 M52.77 121.71 C64.41 122.15, 75.32 121.78, 82.76 121.08" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(129.17578125 320.6875) rotate(0 40.513671875 61.03411613242514)"><path d="M59.38 102.28 C69.78 109.68, 75.94 115.14, 82.76 121.08 M59.38 102.28 C68.44 110.03, 76.87 116.92, 82.76 121.08" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round" transform="translate(235.421875 172.49609375) rotate(0 150.84765625 69.716796875)"><path d="M32 0 C100.43 -1.38, 171.9 -1.32, 269.7 0 M32 0 C116.67 -1.09, 201.17 -1.13, 269.7 0 M269.7 0 C292.59 -0.36, 302.6 10.96, 301.7 32 M269.7 0 C290.47 -0.79, 302.56 12.15, 301.7 32 M301.7 32 C302.17 55.09, 302.56 79.15, 301.7 107.43 M301.7 32 C302.4 47.01, 303.15 62.9, 301.7 107.43 M301.7 107.43 C302.99 129.69, 290.25 140.25, 269.7 139.43 M301.7 107.43 C302.66 130.97, 290.77 139.11, 269.7 139.43 M269.7 139.43 C217.45 141.45, 167.05 141.61, 32 139.43 M269.7 139.43 C197.13 139.07, 125.29 140.26, 32 139.43 M32 139.43 C12.13 138.18, 1.11 130.13, 0 107.43 M32 139.43 C12.83 140.3, -0.33 129.08, 0 107.43 M0 107.43 C-2.17 78.61, 0.07 53.66, 0 32 M0 107.43 C-0.87 80.69, 0.1 54.53, 0 32 M0 32 C1.78 12.56, 9.36 0.23, 32 0 M0 32 C2.14 10.59, 10.17 -0.98, 32 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(332.21875 184.9765625) rotate(0 51.35997772216797 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Lucene Index</text></g> <g stroke-linecap="round" transform="translate(254.296875 223.9296875) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C29.09 1.14, 41.3 0.52, 65.5 0 M16.33 0 C35.38 -0.51, 53.31 -0.18, 65.5 0 M65.5 0 C75.9 -0.68, 82.58 6.74, 81.83 16.33 M65.5 0 C76.94 2.06, 81.38 5.22, 81.83 16.33 M81.83 16.33 C79.95 25.68, 83.26 31.5, 81.83 48.99 M81.83 16.33 C82.73 25.27, 81.69 33.68, 81.83 48.99 M81.83 48.99 C82.67 61.79, 76.16 65.04, 65.5 65.32 M81.83 48.99 C79.89 59.33, 78.65 64.02, 65.5 65.32 M65.5 65.32 C50.66 66.52, 35.79 64.17, 16.33 65.32 M65.5 65.32 C54.18 65.12, 41.96 66.43, 16.33 65.32 M16.33 65.32 C7.32 66.08, -0.29 60.15, 0 48.99 M16.33 65.32 C7.02 67.46, 1.23 58.19, 0 48.99 M0 48.99 C0.87 42.32, -0.14 32.11, 0 16.33 M0 48.99 C0.68 41.26, -0.86 31.74, 0 16.33 M0 16.33 C1.86 5.38, 5.01 -0.85, 16.33 0 M0 16.33 C-0.98 7.07, 7.23 -2.11, 16.33 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(261.21484375 246.58984375) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 1</text></g> <g stroke-linecap="round" transform="translate(349.72265625 224.08203125) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C34.59 -0.02, 51.32 1.51, 65.5 0 M16.33 0 C29.96 -0.41, 44.45 0.57, 65.5 0 M65.5 0 C76.87 1.79, 81.44 5.25, 81.83 16.33 M65.5 0 C74.81 0.21, 79.78 3.24, 81.83 16.33 M81.83 16.33 C81.24 30.62, 82.18 43.08, 81.83 48.99 M81.83 16.33 C82.12 28.6, 81.59 38.81, 81.83 48.99 M81.83 48.99 C80.14 59.4, 78.36 64.19, 65.5 65.32 M81.83 48.99 C81.9 59.81, 76.68 65.39, 65.5 65.32 M65.5 65.32 C46.85 64.34, 32.14 66.48, 16.33 65.32 M65.5 65.32 C54.77 66.03, 42.01 65.79, 16.33 65.32 M16.33 65.32 C6.81 67.18, 1.07 58.41, 0 48.99 M16.33 65.32 C4.27 66.21, 2.1 61.03, 0 48.99 M0 48.99 C-0.68 38.11, -0.21 26.41, 0 16.33 M0 48.99 C1.14 36.07, 0 22.78, 0 16.33 M0 16.33 C-0.85 6.86, 7 -1.84, 16.33 0 M0 16.33 C2.17 6.71, 5.45 0.79, 16.33 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(356.640625 246.7421875) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 2</text></g> <g stroke-linecap="round" transform="translate(440.81640625 225.140625) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C30.82 0.52, 46.32 -0.87, 65.5 0 M16.33 0 C29.65 0.58, 42.28 -0.42, 65.5 0 M65.5 0 C75.01 0.19, 80.05 3.53, 81.83 16.33 M65.5 0 C78.45 1.61, 81.89 4.51, 81.83 16.33 M81.83 16.33 C82.78 27.89, 82.66 41.86, 81.83 48.99 M81.83 16.33 C80.95 29.01, 82.78 41.6, 81.83 48.99 M81.83 48.99 C81.89 59.82, 76.64 65.38, 65.5 65.32 M81.83 48.99 C83.14 59.99, 74.99 64.06, 65.5 65.32 M65.5 65.32 C51.17 66.78, 40.71 67.56, 16.33 65.32 M65.5 65.32 C49.58 66.32, 32.82 64.65, 16.33 65.32 M16.33 65.32 C4.42 66.09, 1.83 60.88, 0 48.99 M16.33 65.32 C7.12 65.31, -0.73 59.09, 0 48.99 M0 48.99 C1.93 35.77, 0.26 27.02, 0 16.33 M0 48.99 C-0.35 40.01, 0.85 28.69, 0 16.33 M0 16.33 C1.89 6.55, 5.45 0.68, 16.33 0 M0 16.33 C1.2 3.76, 3.15 2.17, 16.33 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(447.734375 247.80078125) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 3</text></g> <g stroke-linecap="round" transform="translate(221.240234375 343.419921875) rotate(0 176.076171875 111.966796875)"><path d="M32 0 C130.98 1.1, 231.96 0.9, 320.15 0 M32 0 C143.74 0.28, 255.84 -0.51, 320.15 0 M320.15 0 C343.28 1.4, 352.21 9.85, 352.15 32 M320.15 0 C343.28 0.14, 353.64 11.73, 352.15 32 M352.15 32 C354.71 73.5, 352.52 113.76, 352.15 191.93 M352.15 32 C353.76 76.16, 353.86 120.42, 352.15 191.93 M352.15 191.93 C353.29 213.37, 340.27 222.83, 320.15 223.93 M352.15 191.93 C351.37 215.26, 343.17 222.49, 320.15 223.93 M320.15 223.93 C218.35 225.75, 115.62 227.01, 32 223.93 M320.15 223.93 C206.54 222.63, 94.39 222.71, 32 223.93 M32 223.93 C12.13 223.92, -0.63 212.58, 0 191.93 M32 223.93 C12.16 223.69, 2.04 215.44, 0 191.93 M0 191.93 C-0.25 153.96, -1.04 115.99, 0 32 M0 191.93 C-0.3 133.17, -1.24 73.65, 0 32 M0 32 C1.05 9.2, 8.67 1.89, 32 0 M0 32 C0.35 10.71, 11.06 -1.45, 32 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(294.318359375 364.201171875) rotate(0 56.76996612548828 12.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Shard 1 - B</text></g> <g stroke-linecap="round" transform="translate(242.322265625 415.115234375) rotate(0 150.84765625 69.716796875)"><path d="M32 0 C113.76 -0.81, 192.35 -1.63, 269.7 0 M32 0 C106.26 2.49, 179.04 1.56, 269.7 0 M269.7 0 C292.59 0.12, 302.99 11.59, 301.7 32 M269.7 0 C290.13 0.93, 302.66 12.87, 301.7 32 M301.7 32 C301.12 55.77, 300.45 75.65, 301.7 107.43 M301.7 32 C302.36 54.45, 301.18 76.26, 301.7 107.43 M301.7 107.43 C301.01 130.5, 292.49 138.18, 269.7 139.43 M301.7 107.43 C302.97 130.33, 293.19 140.3, 269.7 139.43 M269.7 139.43 C203.4 141.69, 132.76 139.94, 32 139.43 M269.7 139.43 C189.83 140.42, 108.48 140.14, 32 139.43 M32 139.43 C11.96 139.22, 1.78 130.66, 0 107.43 M32 139.43 C9.17 139.7, 2.14 128.69, 0 107.43 M0 107.43 C1.74 87.99, -1.51 67.32, 0 32 M0 107.43 C0.52 79.91, -1 54.8, 0 32 M0 32 C0.3 10.7, 11.01 -1.26, 32 0 M0 32 C-2.23 11.48, 10.12 -0.01, 32 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(339.119140625 427.595703125) rotate(0 51.35997772216797 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Lucene Index</text></g> <g stroke-linecap="round" transform="translate(261.197265625 466.548828125) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C30.31 -1.44, 42 2.13, 65.5 0 M16.33 0 C35.31 0.26, 53.37 0.66, 65.5 0 M65.5 0 C75.6 0.81, 82.67 7.35, 81.83 16.33 M65.5 0 C76.13 -0.32, 79.89 4.9, 81.83 16.33 M81.83 16.33 C81.58 29.6, 81.71 43.51, 81.83 48.99 M81.83 16.33 C81.29 27.16, 82.36 35.63, 81.83 48.99 M81.83 48.99 C82.93 61.24, 78.27 66.08, 65.5 65.32 M81.83 48.99 C81.49 60.19, 77.96 67.46, 65.5 65.32 M65.5 65.32 C48.9 66.9, 31.75 66.53, 16.33 65.32 M65.5 65.32 C51.42 65.05, 36.94 66.1, 16.33 65.32 M16.33 65.32 C4.14 65.55, 1.86 59.81, 0 48.99 M16.33 65.32 C4.95 64.34, -0.98 61.51, 0 48.99 M0 48.99 C1.4 36.66, 0.98 25.37, 0 16.33 M0 48.99 C0.48 41.6, 0.5 33.55, 0 16.33 M0 16.33 C-1.94 6.15, 4.97 -0.01, 16.33 0 M0 16.33 C1.67 3.65, 7.5 0.18, 16.33 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(268.115234375 489.208984375) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 1</text></g> <g stroke-linecap="round" transform="translate(356.623046875 466.701171875) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C28.11 -0.39, 36.27 1.12, 65.5 0 M16.33 0 C30.99 0.18, 46.85 0.73, 65.5 0 M65.5 0 C76.16 -0.28, 80.14 4.97, 81.83 16.33 M65.5 0 C78.65 -1.3, 81.9 5.37, 81.83 16.33 M81.83 16.33 C81.94 25.33, 80.74 36.07, 81.83 48.99 M81.83 16.33 C82.62 29.65, 83.01 41.98, 81.83 48.99 M81.83 48.99 C81.54 60.15, 77.76 67.18, 65.5 65.32 M81.83 48.99 C83.05 58.19, 75.21 66.21, 65.5 65.32 M65.5 65.32 C46.24 65.05, 26.32 66.98, 16.33 65.32 M65.5 65.32 C50.62 65.9, 37.97 65.75, 16.33 65.32 M16.33 65.32 C5.01 64.47, -0.85 61.29, 0 48.99 M16.33 65.32 C7.23 63.21, 2.17 61.15, 0 48.99 M0 48.99 C-1.58 37.19, 1.78 29.67, 0 16.33 M0 48.99 C-1.02 39.49, -0.29 29.28, 0 16.33 M0 16.33 C1.45 3.89, 7.23 0.16, 16.33 0 M0 16.33 C0.34 5.34, 6.69 1.79, 16.33 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(363.541015625 489.361328125) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 2</text></g> <g stroke-linecap="round" transform="translate(447.716796875 467.759765625) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C31.34 0.91, 47.03 -1.17, 65.5 0 M16.33 0 C32.97 -0.61, 48.99 -0.71, 65.5 0 M65.5 0 C78.36 -1.13, 81.89 5.38, 81.83 16.33 M65.5 0 C76.68 0.07, 83.14 5.56, 81.83 16.33 M81.83 16.33 C83.39 25.61, 80.4 33.07, 81.83 48.99 M81.83 16.33 C81.99 28.49, 82.82 41.31, 81.83 48.99 M81.83 48.99 C82.89 58.41, 75.36 66.09, 65.5 65.32 M81.83 48.99 C83.93 61.03, 78.06 65.31, 65.5 65.32 M65.5 65.32 C52.09 67.42, 40.99 64.33, 16.33 65.32 M65.5 65.32 C49.97 64.88, 34.45 66.01, 16.33 65.32 M16.33 65.32 C7 63.48, 1.89 60.98, 0 48.99 M16.33 65.32 C5.45 66.11, 1.2 58.19, 0 48.99 M0 48.99 C-0.27 42.79, -1.57 33.97, 0 16.33 M0 48.99 C0.8 37.26, 0.97 27.16, 0 16.33 M0 16.33 C0.3 5.35, 6.53 1.56, 16.33 0 M0 16.33 C1.35 3.77, 6.68 0.32, 16.33 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(454.634765625 490.419921875) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 3</text></g> <g stroke-linecap="round" transform="translate(603.8606784417711 100.8720703125) rotate(0 176.076171875 111.966796875)"><path d="M32 0 C137.69 1.48, 243.6 0.68, 320.15 0 M32 0 C115.13 0.09, 196.8 0.49, 320.15 0 M320.15 0 C341.74 0.06, 353.29 10.77, 352.15 32 M320.15 0 C340.09 -1.26, 351.37 12.66, 352.15 32 M352.15 32 C352.51 93.54, 351.91 151.03, 352.15 191.93 M352.15 32 C353.78 81.39, 352.74 132.65, 352.15 191.93 M352.15 191.93 C353.98 214.27, 342.94 223.92, 320.15 223.93 M352.15 191.93 C351.43 212.48, 342.98 223.69, 320.15 223.93 M320.15 223.93 C208.27 223.92, 96 222.19, 32 223.93 M320.15 223.93 C246.59 224.78, 172.58 225.89, 32 223.93 M32 223.93 C10.67 224.62, 1.05 211.8, 0 191.93 M32 223.93 C8.37 226.11, 0.35 213.31, 0 191.93 M0 191.93 C1.71 140.75, 1 91.96, 0 32 M0 191.93 C-1.28 156.35, -0.89 121.64, 0 32 M0 32 C1.17 9.21, 11.75 0.28, 32 0 M0 32 C1.55 11.35, 12 0.22, 32 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(676.9388034417711 121.6533203125) rotate(0 60.46996307373047 12.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Shard 2 - A</text></g> <g stroke-linecap="round" transform="translate(624.9427096917711 172.5673828125) rotate(0 150.84765625 69.716796875)"><path d="M32 0 C113.06 -1.19, 194.19 1.87, 269.7 0 M32 0 C89.94 0.09, 148.13 0.1, 269.7 0 M269.7 0 C289.82 -1.1, 301.01 12.4, 301.7 32 M269.7 0 C292.71 -1.44, 302.97 12.23, 301.7 32 M301.7 32 C302.25 63.09, 303.84 92.51, 301.7 107.43 M301.7 32 C302.22 49.58, 302.04 66.16, 301.7 107.43 M301.7 107.43 C301.06 128.08, 292.33 139.22, 269.7 139.43 M301.7 107.43 C303.74 130.94, 289.53 139.7, 269.7 139.43 M269.7 139.43 C175.55 138.29, 84.02 140.3, 32 139.43 M269.7 139.43 C220.21 140.82, 171.15 139.92, 32 139.43 M32 139.43 C8.67 141.32, 0.3 128.8, 0 107.43 M32 139.43 C11.06 137.99, -2.23 129.58, 0 107.43 M0 107.43 C-1.55 88.38, 0.16 66.05, 0 32 M0 107.43 C0.18 84.43, 0.13 63.01, 0 32 M0 32 C1.35 11.26, 11.82 0.19, 32 0 M0 32 C-1.35 9.58, 8.86 -1.22, 32 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(721.7395846917711 185.0478515625) rotate(0 51.35997772216797 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Lucene Index</text></g> <g stroke-linecap="round" transform="translate(643.8177096917711 224.0009765625) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C25.81 -0.42, 37.49 -0.23, 65.5 0 M16.33 0 C30.63 -0.57, 45.8 0.84, 65.5 0 M65.5 0 C77.85 -1.25, 82.93 6.81, 81.83 16.33 M65.5 0 C78.55 0.87, 81.49 5.75, 81.83 16.33 M81.83 16.33 C80.66 27.34, 82.9 42.23, 81.83 48.99 M81.83 16.33 C81.75 27.42, 82.72 39.08, 81.83 48.99 M81.83 48.99 C83.61 61.77, 75.08 65.55, 65.5 65.32 M81.83 48.99 C83.97 59.8, 75.89 64.34, 65.5 65.32 M65.5 65.32 C51 67.59, 41.28 65.71, 16.33 65.32 M65.5 65.32 C48.07 65.9, 32.79 64.98, 16.33 65.32 M16.33 65.32 C5.78 64.06, -1.94 60.59, 0 48.99 M16.33 65.32 C4.9 65.31, 1.67 58.09, 0 48.99 M0 48.99 C-0.12 37.35, 1.53 24.72, 0 16.33 M0 48.99 C0.5 41.86, 0.4 34.23, 0 16.33 M0 16.33 C-1.17 4.5, 3.87 -1.06, 16.33 0 M0 16.33 C-1.93 5.14, 7.41 2.26, 16.33 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(650.7356784417711 246.6611328125) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 1</text></g> <g stroke-linecap="round" transform="translate(739.2434909417711 224.1533203125) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C31.3 1.08, 46.24 -1.28, 65.5 0 M16.33 0 C29.11 -1.05, 40.98 0.25, 65.5 0 M65.5 0 C78.27 0.76, 81.54 5.71, 81.83 16.33 M65.5 0 C77.96 2.14, 83.05 3.75, 81.83 16.33 M81.83 16.33 C82.95 25.92, 81.94 31.95, 81.83 48.99 M81.83 16.33 C82.93 25.96, 81.39 33.8, 81.83 48.99 M81.83 48.99 C83.69 59.81, 75.95 64.47, 65.5 65.32 M81.83 48.99 C80.85 61.51, 78.17 63.21, 65.5 65.32 M65.5 65.32 C46.78 66.37, 25.24 63.33, 16.33 65.32 M65.5 65.32 C46.28 64.7, 25.74 65.68, 16.33 65.32 M16.33 65.32 C4.97 65.31, 1.45 58.32, 0 48.99 M16.33 65.32 C7.5 65.51, 0.34 59.77, 0 48.99 M0 48.99 C-1.71 38.5, 0.02 27.2, 0 16.33 M0 48.99 C-0.78 37.75, -0.98 26.92, 0 16.33 M0 16.33 C-1.68 5.18, 7.16 1.96, 16.33 0 M0 16.33 C1.44 4.51, 7.24 0.55, 16.33 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(746.1614596917711 246.8134765625) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 2</text></g> <g stroke-linecap="round" transform="translate(830.3372409417711 225.2119140625) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C32.78 -0.38, 53.16 1.76, 65.5 0 M16.33 0 C28.94 0.04, 39.52 -0.2, 65.5 0 M65.5 0 C77.76 1.86, 82.89 3.97, 81.83 16.33 M65.5 0 C75.21 0.89, 83.93 6.59, 81.83 16.33 M81.83 16.33 C81.14 29.81, 81.61 42.47, 81.83 48.99 M81.83 16.33 C82.55 29.19, 81.4 41.68, 81.83 48.99 M81.83 48.99 C80.98 61.29, 77.94 63.48, 65.5 65.32 M81.83 48.99 C84 61.15, 76.39 66.11, 65.5 65.32 M65.5 65.32 C50.06 65.13, 30.88 65.17, 16.33 65.32 M65.5 65.32 C53.6 65.49, 42.91 64.72, 16.33 65.32 M16.33 65.32 C7.23 65.48, 0.3 59.78, 0 48.99 M16.33 65.32 C6.69 67.11, 1.35 58.21, 0 48.99 M0 48.99 C0.55 38.59, 0.14 24.7, 0 16.33 M0 48.99 C-0.58 40.6, 1.11 33.45, 0 16.33 M0 16.33 C1.26 4.64, 7 0.48, 16.33 0 M0 16.33 C-0.24 4.05, 5.71 1.69, 16.33 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(837.2552096917711 247.8720703125) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 3</text></g> <g stroke-linecap="round" transform="translate(610.7610690667711 343.4912109375) rotate(0 176.076171875 111.966796875)"><path d="M32 0 C107.7 -0.75, 186.31 -0.17, 320.15 0 M32 0 C129.84 0.41, 227.06 -0.85, 320.15 0 M320.15 0 C340.46 0.77, 353.98 11.67, 352.15 32 M320.15 0 C343.16 -0.01, 351.43 9.88, 352.15 32 M352.15 32 C353.88 89.06, 352.21 150.59, 352.15 191.93 M352.15 32 C351.38 80.17, 352.58 126, 352.15 191.93 M352.15 191.93 C354.04 214.37, 341.49 224.62, 320.15 223.93 M352.15 191.93 C353.36 211.58, 339.19 226.11, 320.15 223.93 M320.15 223.93 C228.38 222.85, 139.04 223.95, 32 223.93 M320.15 223.93 C234.51 222.31, 147.64 222.21, 32 223.93 M32 223.93 C11.75 225.49, 1.17 211.81, 0 191.93 M32 223.93 C11.91 224.25, 1.55 213.95, 0 191.93 M0 191.93 C-1.09 133.13, -1.21 75.78, 0 32 M0 191.93 C-0.74 145.69, -0.59 100.48, 0 32 M0 32 C-0.21 9.46, 10.9 1.47, 32 0 M0 32 C-1.37 9.13, 12.62 1.99, 32 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(683.8391940667711 364.2724609375) rotate(0 61.179962158203125 12.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Shard 2 - B</text></g> <g stroke-linecap="round" transform="translate(631.8431003167711 415.1865234375) rotate(0 150.84765625 69.716796875)"><path d="M32 0 C117.07 -2.11, 201.11 -0.72, 269.7 0 M32 0 C124.97 1.79, 219.57 1.88, 269.7 0 M269.7 0 C292.49 -0.01, 301.06 9.98, 301.7 32 M269.7 0 C292.52 -0.24, 303.74 12.84, 301.7 32 M301.7 32 C301.72 49.28, 300.93 66.57, 301.7 107.43 M301.7 32 C303.23 60.53, 302.29 88.29, 301.7 107.43 M301.7 107.43 C302.74 127.3, 289.03 141.32, 269.7 139.43 M301.7 107.43 C302.04 128.81, 291.42 137.99, 269.7 139.43 M269.7 139.43 C221.39 140.18, 171.79 140.46, 32 139.43 M269.7 139.43 C196.93 139.99, 123.75 138.73, 32 139.43 M32 139.43 C11.75 139.71, 1.35 129.36, 0 107.43 M32 139.43 C12 139.65, -1.35 127.68, 0 107.43 M0 107.43 C0.13 92.45, 2.36 75.29, 0 32 M0 107.43 C-0.69 87.25, -0.47 69.01, 0 32 M0 32 C-1.19 9.33, 12.37 1.73, 32 0 M0 32 C2.16 10.36, 12.59 2.08, 32 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(728.6399753167711 427.6669921875) rotate(0 51.35997772216797 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Lucene Index</text></g> <g stroke-linecap="round" transform="translate(650.7181003167711 466.6201171875) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C32.22 0.73, 42.93 -1.36, 65.5 0 M16.33 0 C33.71 -0.25, 49.31 -0.59, 65.5 0 M65.5 0 C77.68 -0.21, 83.61 7.34, 81.83 16.33 M65.5 0 C74.88 0.26, 83.97 5.37, 81.83 16.33 M81.83 16.33 C83.11 26.98, 79.85 36.4, 81.83 48.99 M81.83 16.33 C82.35 27.2, 80.83 40.47, 81.83 48.99 M81.83 48.99 C82.13 59.91, 76.73 64.06, 65.5 65.32 M81.83 48.99 C79.6 60.69, 75.84 65.31, 65.5 65.32 M65.5 65.32 C47.35 66.06, 28.78 66.85, 16.33 65.32 M65.5 65.32 C47.45 65.1, 29 65.26, 16.33 65.32 M16.33 65.32 C6.6 65.51, -1.17 58.93, 0 48.99 M16.33 65.32 C3.64 64.1, -1.93 59.57, 0 48.99 M0 48.99 C-1.13 37.95, 0.16 23.59, 0 16.33 M0 48.99 C-0.63 40.5, 0.81 34.21, 0 16.33 M0 16.33 C1.88 5.17, 7.12 1.81, 16.33 0 M0 16.33 C1.53 7.38, 7.25 0.06, 16.33 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(657.6360690667711 489.2802734375) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 1</text></g> <g stroke-linecap="round" transform="translate(746.1438815667711 466.7724609375) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C34.47 2.08, 52.07 1.71, 65.5 0 M16.33 0 C31.7 0.06, 46.67 1.12, 65.5 0 M65.5 0 C75.08 0.23, 83.69 5.38, 81.83 16.33 M65.5 0 C75.89 -0.98, 80.85 7.07, 81.83 16.33 M81.83 16.33 C82.63 28.67, 82.21 42.05, 81.83 48.99 M81.83 16.33 C81.65 23.75, 81.67 30.51, 81.83 48.99 M81.83 48.99 C79.89 60.59, 75.91 65.31, 65.5 65.32 M81.83 48.99 C83.49 58.09, 78.44 65.51, 65.5 65.32 M65.5 65.32 C51.57 66.76, 33.07 66.67, 16.33 65.32 M65.5 65.32 C50.64 65.56, 34.04 65, 16.33 65.32 M16.33 65.32 C3.87 64.26, -1.68 59.61, 0 48.99 M16.33 65.32 C7.41 67.58, 1.44 58.95, 0 48.99 M0 48.99 C-1.29 36.87, 1.4 23.1, 0 16.33 M0 48.99 C0.66 41.24, 0.56 34.67, 0 16.33 M0 16.33 C1.33 7.13, 7.01 0.05, 16.33 0 M0 16.33 C0.2 6.61, 3.74 -1.65, 16.33 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(753.0618503167711 489.4326171875) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 2</text></g> <g stroke-linecap="round" transform="translate(837.2376315667711 467.8310546875) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C35.57 -0.99, 54.14 0.94, 65.5 0 M16.33 0 C29.91 -0.35, 45.72 -0.5, 65.5 0 M65.5 0 C75.95 -0.85, 80.98 6.86, 81.83 16.33 M65.5 0 C78.17 -2.11, 84 6.71, 81.83 16.33 M81.83 16.33 C80.47 24.15, 83.83 36.26, 81.83 48.99 M81.83 16.33 C80.92 26.54, 81.65 36.03, 81.83 48.99 M81.83 48.99 C83.28 58.32, 78.18 65.48, 65.5 65.32 M81.83 48.99 C82.17 59.77, 77.63 67.11, 65.5 65.32 M65.5 65.32 C48.14 66.94, 30.81 66.74, 16.33 65.32 M65.5 65.32 C49.5 64.56, 34.23 64.96, 16.33 65.32 M16.33 65.32 C7.16 67.28, 1.26 59.07, 0 48.99 M16.33 65.32 C7.24 65.87, -0.24 58.49, 0 48.99 M0 48.99 C-1.58 40.52, 1.49 30.53, 0 16.33 M0 48.99 C0.39 40.48, 0.51 30.3, 0 16.33 M0 16.33 C0.17 6.46, 3.97 -1.43, 16.33 0 M0 16.33 C-2.11 6.57, 4.74 1.46, 16.33 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(844.1556003167711 490.4912109375) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 3</text></g> <g transform="translate(462.8984375 665.95703125) rotate(0 142.60394287109375 17.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="28px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Different Documents</text></g><g stroke-linecap="round"><g transform="translate(572.79296875 654.578125) rotate(0 -34.2734375 -40.14453125)"><path d="M1.07 1.14 C-10.62 -12.2, -57.91 -66.58, -69.33 -80.15 M0.17 0.69 C-11.2 -12.42, -55.73 -65.26, -67.03 -78.54" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(572.79296875 654.578125) rotate(0 -34.2734375 -40.14453125)"><path d="M-40.98 -63.65 C-48.58 -70.16, -59.75 -72.43, -67.03 -78.54 M-40.98 -63.65 C-49.11 -67.47, -55.63 -73.52, -67.03 -78.54" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(572.79296875 654.578125) rotate(0 -34.2734375 -40.14453125)"><path d="M-56.65 -50.4 C-58.51 -61.88, -63.97 -68.99, -67.03 -78.54 M-56.65 -50.4 C-60.09 -58.08, -61.97 -68.06, -67.03 -78.54" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(631.2890625 657.60546875) rotate(0 53.095703125 -41.443359375)"><path d="M-0.78 0.14 C16.92 -13.87, 89.52 -69, 107.31 -82.93 M1.01 -0.84 C18.56 -14.14, 89.61 -67.82, 106.95 -81.41" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(631.2890625 657.60546875) rotate(0 53.095703125 -41.443359375)"><path d="M90.83 -56.11 C97.08 -63.98, 103.06 -76.11, 106.95 -81.41 M90.83 -56.11 C95.86 -63.65, 100.18 -68.69, 106.95 -81.41" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(631.2890625 657.60546875) rotate(0 53.095703125 -41.443359375)"><path d="M78.34 -72.39 C89.6 -73.85, 100.44 -79.65, 106.95 -81.41 M78.34 -72.39 C86.51 -75.83, 94.04 -76.68, 106.95 -81.41" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask></svg>
+
+Elasticsearch Russian Dolls
+
+Shards allows Elasticsearch to split data (and the accompanying indexes) across hosts. This allows Elasticsearch to distribute both your documents and the corresponding index structures across multiple nodes in your cluster, which significantly improve performance and scalability.
+
+Searches will be executed across all relevant shards in parallel, and the results will be merged and sorted by the coordinating node. Queries are generally executed on the coordinating node, which then distributes the query to the appropriate shards.
+
+A replica is an exact copy of a shard. Elasticsearch allows you to create one or more copies of your index's shards, which are called replica shards, or just replicas.
+
+Replicas serve two primary purposes: high availability and increased throughput. If our shard can handle X TPS, then by having Y replicas we can handle X \* Y TPS (all other things equal).
+
+The coordinating node can leverage replicas to improve search performance by distributing search requests across all available shard copies (primary and replica), effectively load balancing the search workload across the cluster.
+
+Lastly, Elasticsearch shards are 1:1 with Lucene indexes. Remember earlier that Lucene is the low-level, highly optimized search library at the heart of Elasticsearch. Many of the operations that Elasticsearch needs to perform with shards (merging, splitting, refreshing, searching) are actually proxy operations on the Lucene indexes underneath.
+
+At this point we can start to oversimplify Elasticsearch like a bunch of availability and scalability on top of a big bag of Lucene indexes.
+
+#### Lucene Segment CRUD
+
+Lucene indexes are made up of segments, the base unit of our search engine. Segments are **immutable** containers of indexed data. Let that word sink in for one second before we continue. Don't we need to be able to update, add, and delete documents from our Elasticsearch index?
+
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 830.16015625 620.64453125"><defs></defs><rect x="0" y="0" width="830.16015625" height="620.64453125" fill="#ffffff"></rect><g stroke-linecap="round" transform="translate(10 10) rotate(0 405.080078125 300.322265625)"><path d="M32 0 C306.46 -2.5, 581.67 -2.18, 778.16 0 M32 0 C280.02 -2.87, 528.07 -2.69, 778.16 0 M778.16 0 C800.02 -0.02, 809.11 9.53, 810.16 32 M778.16 0 C798.2 -1.73, 810.4 8.45, 810.16 32 M810.16 32 C808.92 235.39, 809.06 436.55, 810.16 568.64 M810.16 32 C811.18 226.13, 811.2 420.22, 810.16 568.64 M810.16 568.64 C810.1 591.65, 798.9 601.04, 778.16 600.64 M810.16 568.64 C810.09 587.97, 800.09 601.73, 778.16 600.64 M778.16 600.64 C528.11 597.39, 279.59 598.33, 32 600.64 M778.16 600.64 C568.38 598.75, 358.72 598.87, 32 600.64 M32 600.64 C10.46 602.47, 1.58 590.49, 0 568.64 M32 600.64 C11.65 599.56, 0.34 588.84, 0 568.64 M0 568.64 C0.2 380.96, -0.67 193.03, 0 32 M0 568.64 C0.22 450.19, 0.55 330.86, 0 32 M0 32 C0.31 11.58, 12.15 0.97, 32 0 M0 32 C0.35 9.58, 10.38 2.26, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(253.3203125 29.24609375) rotate(0 137.283935546875 17.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="28px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Elasticsearch Index</text></g> <g stroke-linecap="round" transform="translate(26.28515625 100.80078125) rotate(0 176.076171875 111.966796875)"><path d="M32 0 C94.64 2.09, 157.7 1.15, 320.15 0 M32 0 C109.72 -0.3, 186.65 -0.72, 320.15 0 M320.15 0 C340.36 -1.51, 352.36 8.74, 352.15 32 M320.15 0 C343.27 -1.4, 354.27 10.87, 352.15 32 M352.15 32 C353.81 96.32, 351.78 160.69, 352.15 191.93 M352.15 32 C353.33 74.19, 353.07 114.92, 352.15 191.93 M352.15 191.93 C352.09 211.52, 342 224.88, 320.15 223.93 M352.15 191.93 C352.94 213.57, 339.41 222.21, 320.15 223.93 M320.15 223.93 C253.51 224.46, 186.6 225.36, 32 223.93 M320.15 223.93 C252.74 223.84, 186.08 223.34, 32 223.93 M32 223.93 C11.53 222.99, 0.3 212.28, 0 191.93 M32 223.93 C11.82 224.14, 0.2 214.39, 0 191.93 M0 191.93 C-0.62 137.98, 1.31 83.72, 0 32 M0 191.93 C-0.24 134.9, 0.34 77.45, 0 32 M0 32 C0.3 9.72, 10.42 1.97, 32 0 M0 32 C-1 9.38, 10.32 1.96, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(99.36328125 121.58203125) rotate(0 56.059967041015625 12.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Shard 1 - A</text></g> <g stroke-linecap="round" transform="translate(47.3671875 172.49609375) rotate(0 150.84765625 69.716796875)"><path d="M32 0 C121.02 0.35, 211.3 0.15, 269.7 0 M32 0 C102.6 0.5, 174.22 0.33, 269.7 0 M269.7 0 C292.58 -1.22, 303.54 10.84, 301.7 32 M269.7 0 C293.28 0.6, 299.8 12.09, 301.7 32 M301.7 32 C300.57 58.73, 299.52 82.37, 301.7 107.43 M301.7 32 C301.44 60.06, 301.73 90.34, 301.7 107.43 M301.7 107.43 C302.38 129.03, 289.22 137.94, 269.7 139.43 M301.7 107.43 C300.09 129.72, 292.12 139, 269.7 139.43 M269.7 139.43 C205.31 141.33, 142.55 139.77, 32 139.43 M269.7 139.43 C177.1 139.55, 83.91 139.53, 32 139.43 M32 139.43 C11.67 139.61, 0.17 129.74, 0 107.43 M32 139.43 C11.46 138.05, 0.89 126.95, 0 107.43 M0 107.43 C1.06 86.89, -2.08 65.67, 0 32 M0 107.43 C-0.41 80.88, -0.68 56.26, 0 32 M0 32 C-0.87 9.55, 10.37 1.71, 32 0 M0 32 C-1.97 12.36, 11.73 0.79, 32 0" stroke="#1e1e1e" stroke-width="4" fill="none"></path></g><g transform="translate(144.1640625 184.9765625) rotate(0 51.35997772216797 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Lucene Index</text></g> <g stroke-linecap="round" transform="translate(66.2421875 223.9296875) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C32.95 -1.18, 48.47 -1.25, 65.5 0 M16.33 0 C28.15 -0.13, 39.34 0.56, 65.5 0 M65.5 0 C78.34 0.53, 80.18 6.68, 81.83 16.33 M65.5 0 C77.17 -0.91, 83.47 4.49, 81.83 16.33 M81.83 16.33 C83.19 28, 81.92 40.81, 81.83 48.99 M81.83 16.33 C82.26 23.41, 81.01 29.49, 81.83 48.99 M81.83 48.99 C80.43 60.7, 77.34 64.95, 65.5 65.32 M81.83 48.99 C81.05 58.62, 76.98 63.79, 65.5 65.32 M65.5 65.32 C48.52 66.85, 28.41 66.13, 16.33 65.32 M65.5 65.32 C53.57 65.17, 40.72 65.56, 16.33 65.32 M16.33 65.32 C6.14 64.12, 0.77 58.3, 0 48.99 M16.33 65.32 C4.96 65.72, -1.33 61.24, 0 48.99 M0 48.99 C1.23 39.86, 1.29 28.07, 0 16.33 M0 48.99 C-0.39 40.18, -0.11 33.33, 0 16.33 M0 16.33 C-1.71 6.92, 6.37 0.69, 16.33 0 M0 16.33 C0.53 7.42, 3.38 -0.92, 16.33 0" stroke="#1e1e1e" stroke-width="4" fill="none"></path></g><g transform="translate(73.16015625 246.58984375) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 1</text></g> <g stroke-linecap="round" transform="translate(161.66796875 224.08203125) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C27 0.48, 38.75 1.83, 65.5 0 M16.33 0 C29.07 0.22, 39.03 0.58, 65.5 0 M65.5 0 C77.07 -0.79, 83.26 4.62, 81.83 16.33 M65.5 0 C78.12 -2.15, 81.76 7.37, 81.83 16.33 M81.83 16.33 C80.15 25.68, 82.84 34.67, 81.83 48.99 M81.83 16.33 C80.84 26.97, 82.01 36.59, 81.83 48.99 M81.83 48.99 C81.15 58.79, 76.9 63.99, 65.5 65.32 M81.83 48.99 C83.72 59.05, 76.14 67.41, 65.5 65.32 M65.5 65.32 C45.93 65.83, 27.25 66.54, 16.33 65.32 M65.5 65.32 C50.65 64.96, 35.5 64.77, 16.33 65.32 M16.33 65.32 C5.02 65.67, -1.16 61.07, 0 48.99 M16.33 65.32 C6.02 63.08, 0.36 60.93, 0 48.99 M0 48.99 C-1.1 36.52, 1.81 23.68, 0 16.33 M0 48.99 C-0.81 41.76, 0.51 33.39, 0 16.33 M0 16.33 C0.46 7.17, 3.65 -0.8, 16.33 0 M0 16.33 C1.75 5.83, 7.17 1.56, 16.33 0" stroke="#1e1e1e" stroke-width="4" fill="none"></path></g><g transform="translate(168.5859375 246.7421875) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 2</text></g> <g stroke-linecap="round" transform="translate(252.76171875 225.140625) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C30.37 1.46, 47.02 1.58, 65.5 0 M16.33 0 C32.72 -0.7, 49.13 -0.72, 65.5 0 M65.5 0 C77.9 -1.87, 81.77 7.11, 81.83 16.33 M65.5 0 C75.7 0.46, 81.76 3.44, 81.83 16.33 M81.83 16.33 C82.24 25.17, 80.49 36.23, 81.83 48.99 M81.83 16.33 C81.65 26.93, 82.24 37.96, 81.83 48.99 M81.83 48.99 C83.48 59.16, 76.17 67.14, 65.5 65.32 M81.83 48.99 C83.64 60.47, 77.37 64.24, 65.5 65.32 M65.5 65.32 C50.2 65.74, 35.52 66.26, 16.33 65.32 M65.5 65.32 C53.48 65.11, 41.31 65.53, 16.33 65.32 M16.33 65.32 C5.94 63.38, 0.31 60.79, 0 48.99 M16.33 65.32 C7.15 66.44, 0.35 58.79, 0 48.99 M0 48.99 C-1.44 39.3, 1.39 28.5, 0 16.33 M0 48.99 C0.08 37.65, -1.05 24.19, 0 16.33 M0 16.33 C1.52 5.78, 6.94 1.36, 16.33 0 M0 16.33 C-1.69 5.26, 5.41 -1.04, 16.33 0" stroke="#1e1e1e" stroke-width="4" fill="none"></path></g><g transform="translate(259.6796875 247.80078125) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 3</text></g> <g stroke-linecap="round" transform="translate(33.185546875 343.419921875) rotate(0 176.076171875 111.966796875)"><path d="M32 0 C145.37 -3.36, 258.88 -1.61, 320.15 0 M32 0 C107.58 0.19, 182.01 1.53, 320.15 0 M320.15 0 C340.89 0.4, 352.09 8.92, 352.15 32 M320.15 0 C342.08 1.08, 352.94 10.97, 352.15 32 M352.15 32 C351.78 66.47, 350.58 98.36, 352.15 191.93 M352.15 32 C353.39 70.9, 352.46 111.43, 352.15 191.93 M352.15 191.93 C353.73 213.78, 342.34 222.99, 320.15 223.93 M352.15 191.93 C352.49 212.13, 342.64 224.14, 320.15 223.93 M320.15 223.93 C230.28 225.27, 141.03 224.37, 32 223.93 M320.15 223.93 C228.89 224.49, 137.38 225.57, 32 223.93 M32 223.93 C12.15 224.91, 0.3 212.32, 0 191.93 M32 223.93 C10.38 226.2, -1 211.98, 0 191.93 M0 191.93 C0.11 147.27, -0.68 101.22, 0 32 M0 191.93 C2.2 130.35, 2.19 69.11, 0 32 M0 32 C-1.47 10.5, 10.64 -0.91, 32 0 M0 32 C1.99 11.3, 12.91 0.16, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(106.263671875 364.201171875) rotate(0 56.76996612548828 12.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Shard 1 - B</text></g> <g stroke-linecap="round" transform="translate(54.267578125 415.115234375) rotate(0 150.84765625 69.716796875)"><path d="M32 0 C83.08 0.51, 134.8 0.58, 269.7 0 M32 0 C80.79 -1.5, 130.05 -2.39, 269.7 0 M269.7 0 C291.55 0.94, 302.38 10.93, 301.7 32 M269.7 0 C288.95 -1.72, 300.09 11.62, 301.7 32 M301.7 32 C300.46 58.74, 300.23 86.09, 301.7 107.43 M301.7 32 C302.4 52.17, 302.04 71.34, 301.7 107.43 M301.7 107.43 C301.99 127.78, 292.03 139.61, 269.7 139.43 M301.7 107.43 C301.9 129.89, 291.83 138.05, 269.7 139.43 M269.7 139.43 C189.47 138.04, 109.67 139.43, 32 139.43 M269.7 139.43 C222.13 140.75, 173.44 139.95, 32 139.43 M32 139.43 C10.42 141.4, -0.87 127.65, 0 107.43 M32 139.43 C10.32 141.4, -1.97 130.46, 0 107.43 M0 107.43 C1.46 79.52, -1.06 56.71, 0 32 M0 107.43 C-1.3 83.45, -0.58 59.17, 0 32 M0 32 C1.73 11.22, 12.62 0.13, 32 0 M0 32 C-1.65 11.38, 9.49 0.04, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(151.064453125 427.595703125) rotate(0 51.35997772216797 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Lucene Index</text></g> <g stroke-linecap="round" transform="translate(73.142578125 466.548828125) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C32.72 -0.43, 54.53 -0.97, 65.5 0 M16.33 0 C32.32 0.9, 48.13 0.56, 65.5 0 M65.5 0 C74.58 -1.5, 80.43 6.27, 81.83 16.33 M65.5 0 C77.48 -0.43, 81.05 4.19, 81.83 16.33 M81.83 16.33 C80.89 26.76, 83.43 39.19, 81.83 48.99 M81.83 16.33 C82.12 26.47, 82.47 37.7, 81.83 48.99 M81.83 48.99 C82 60.85, 77.08 64.12, 65.5 65.32 M81.83 48.99 C82.72 58.06, 75.9 65.72, 65.5 65.32 M65.5 65.32 C51.65 65.75, 42.61 66.93, 16.33 65.32 M65.5 65.32 C48.23 66.07, 30.77 64.53, 16.33 65.32 M16.33 65.32 C5.14 67.03, -1.71 61.35, 0 48.99 M16.33 65.32 C6.51 66.11, 0.53 61.86, 0 48.99 M0 48.99 C0.47 43.63, 1.49 33.79, 0 16.33 M0 48.99 C0.87 39.73, 0.98 29.99, 0 16.33 M0 16.33 C-1.44 6.07, 4.42 0.04, 16.33 0 M0 16.33 C1.89 5.46, 7.46 -2.11, 16.33 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(80.060546875 489.208984375) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 1</text></g> <g stroke-linecap="round" transform="translate(168.568359375 466.701171875) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C31.33 0.09, 43.79 0.66, 65.5 0 M16.33 0 C32.5 -0.81, 49.77 0.35, 65.5 0 M65.5 0 C77.34 -0.37, 81.15 4.35, 81.83 16.33 M65.5 0 C76.98 -1.53, 83.72 4.61, 81.83 16.33 M81.83 16.33 C82.64 26.64, 81.18 35.53, 81.83 48.99 M81.83 16.33 C82.08 25, 82.34 32.1, 81.83 48.99 M81.83 48.99 C82.6 58.3, 75.96 65.67, 65.5 65.32 M81.83 48.99 C80.5 61.24, 76.96 63.08, 65.5 65.32 M65.5 65.32 C50.96 65.99, 33.52 65.44, 16.33 65.32 M65.5 65.32 C45.76 65.9, 25.47 65.78, 16.33 65.32 M16.33 65.32 C6.37 66.01, 0.46 61.6, 0 48.99 M16.33 65.32 C3.38 64.4, 1.75 60.27, 0 48.99 M0 48.99 C-0.38 36.71, -1.13 26.23, 0 16.33 M0 48.99 C-1.04 38.6, -0.83 27.61, 0 16.33 M0 16.33 C1.65 5.45, 7.2 -1.84, 16.33 0 M0 16.33 C0.91 6, 5.67 1.94, 16.33 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(175.486328125 489.361328125) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 2</text></g> <g stroke-linecap="round" transform="translate(259.662109375 467.759765625) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C31.88 0.56, 45.81 -1.94, 65.5 0 M16.33 0 C27.88 -0.39, 38.13 -0.75, 65.5 0 M65.5 0 C76.9 -1.33, 83.48 4.72, 81.83 16.33 M65.5 0 C76.14 2.09, 83.64 6.03, 81.83 16.33 M81.83 16.33 C80.69 28.54, 81.85 38.91, 81.83 48.99 M81.83 16.33 C82.33 26.93, 81.73 39.28, 81.83 48.99 M81.83 48.99 C80.67 61.07, 76.88 63.38, 65.5 65.32 M81.83 48.99 C82.19 60.93, 78.09 66.44, 65.5 65.32 M65.5 65.32 C51.97 64.39, 33.38 64.96, 16.33 65.32 M65.5 65.32 C47.01 66.02, 27.83 66.54, 16.33 65.32 M16.33 65.32 C3.65 64.52, 1.52 60.21, 0 48.99 M16.33 65.32 C7.17 66.88, -1.69 59.69, 0 48.99 M0 48.99 C0.7 41.19, 0.28 28.06, 0 16.33 M0 48.99 C0.99 38.18, 1.04 26.44, 0 16.33 M0 16.33 C0.79 5.92, 5.64 1.69, 16.33 0 M0 16.33 C-1.16 7.3, 4.74 1.83, 16.33 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(266.580078125 490.419921875) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 3</text></g> <g stroke-linecap="round" transform="translate(415.80599094177114 100.8720703125) rotate(0 176.076171875 111.966796875)"><path d="M32 0 C127.21 0.91, 225.29 2.68, 320.15 0 M32 0 C113.25 0.68, 194.73 0.91, 320.15 0 M320.15 0 C341.27 1.82, 353.73 11.18, 352.15 32 M320.15 0 C342.47 -1.08, 352.49 9.53, 352.15 32 M352.15 32 C353.27 88.71, 351.1 144.81, 352.15 191.93 M352.15 32 C351.24 67.97, 352.06 101.78, 352.15 191.93 M352.15 191.93 C352.46 214.18, 342.97 224.91, 320.15 223.93 M352.15 191.93 C352.5 212.18, 341.2 226.2, 320.15 223.93 M320.15 223.93 C247.51 222.32, 173.4 224.31, 32 223.93 M320.15 223.93 C223.16 225.5, 128.09 225.93, 32 223.93 M32 223.93 C12.17 225.29, -1.47 213.1, 0 191.93 M32 223.93 C10.63 222.89, 1.99 213.9, 0 191.93 M0 191.93 C0.52 127.33, -0.07 66.43, 0 32 M0 191.93 C-1.01 144.11, -1.31 96.65, 0 32 M0 32 C-1.01 12.28, 10.05 1.59, 32 0 M0 32 C0.49 11.59, 10.22 0.78, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(488.88411594177114 121.6533203125) rotate(0 60.46996307373047 12.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Shard 2 - A</text></g> <g stroke-linecap="round" transform="translate(436.88802219177114 172.5673828125) rotate(0 150.84765625 69.716796875)"><path d="M32 0 C86.43 -1.51, 140.57 -0.51, 269.7 0 M32 0 C87.46 1.48, 143.75 0.93, 269.7 0 M269.7 0 C291.89 -0.94, 301.99 9.68, 301.7 32 M269.7 0 C292.18 0.21, 301.9 11.79, 301.7 32 M301.7 32 C299.67 56.83, 301.59 81.34, 301.7 107.43 M301.7 32 C302.04 59.57, 302.63 86.72, 301.7 107.43 M301.7 107.43 C302 127.82, 290.78 141.4, 269.7 139.43 M301.7 107.43 C300.7 127.48, 290.68 141.4, 269.7 139.43 M269.7 139.43 C219.29 140.74, 169.18 138.85, 32 139.43 M269.7 139.43 C208.55 140.34, 145.53 139.7, 32 139.43 M32 139.43 C10.64 138.53, 1.73 129.32, 0 107.43 M32 139.43 C12.91 139.59, -1.65 129.48, 0 107.43 M0 107.43 C0 90.43, -1.85 70.7, 0 32 M0 107.43 C-0.58 83.8, -0.38 59.35, 0 32 M0 32 C0.43 11.47, 10.27 0.68, 32 0 M0 32 C-1.74 12.12, 11.04 1.8, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(533.6848971917711 185.0478515625) rotate(0 51.35997772216797 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Lucene Index</text></g> <g stroke-linecap="round" transform="translate(455.76302219177114 224.0009765625) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C28.09 1.52, 41.78 -0.34, 65.5 0 M16.33 0 C35.99 -0.6, 54.93 -0.62, 65.5 0 M65.5 0 C77.39 0.18, 82 6.42, 81.83 16.33 M65.5 0 C77.18 -1.38, 82.72 3.63, 81.83 16.33 M81.83 16.33 C83.07 25.94, 79.94 34.86, 81.83 48.99 M81.83 16.33 C82.22 27.15, 81.95 39.89, 81.83 48.99 M81.83 48.99 C80.96 58.76, 76.09 67.03, 65.5 65.32 M81.83 48.99 C79.86 61.57, 77.45 66.11, 65.5 65.32 M65.5 65.32 C48.81 66.4, 34.06 66.38, 16.33 65.32 M65.5 65.32 C47.39 64.83, 30.19 65.56, 16.33 65.32 M16.33 65.32 C7.39 65.46, -1.44 60.5, 0 48.99 M16.33 65.32 C4.26 65.36, 1.89 59.89, 0 48.99 M0 48.99 C0.78 36.52, 1.99 22.65, 0 16.33 M0 48.99 C0.31 36.96, -0.1 24.46, 0 16.33 M0 16.33 C-1.52 6.7, 5.77 1.57, 16.33 0 M0 16.33 C-0.33 5.44, 5.66 -1.52, 16.33 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(462.68099094177114 246.6611328125) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 1</text></g> <g stroke-linecap="round" transform="translate(551.1888034417711 224.1533203125) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C36.96 1.63, 54.45 0.91, 65.5 0 M16.33 0 C29.26 0.33, 41.28 0.73, 65.5 0 M65.5 0 C77.08 -1.2, 82.6 3.87, 81.83 16.33 M65.5 0 C75.9 0.4, 80.5 6.81, 81.83 16.33 M81.83 16.33 C82.42 28.43, 82.48 37.86, 81.83 48.99 M81.83 16.33 C81.35 24.03, 81.64 33.69, 81.83 48.99 M81.83 48.99 C80.12 61.35, 77.31 66.01, 65.5 65.32 M81.83 48.99 C82.36 61.86, 74.32 64.4, 65.5 65.32 M65.5 65.32 C48.36 64.22, 28.34 65.66, 16.33 65.32 M65.5 65.32 C53.96 65.52, 39.75 65.77, 16.33 65.32 M16.33 65.32 C4.42 65.36, 1.65 59.89, 0 48.99 M16.33 65.32 C7.46 63.21, 0.91 60.43, 0 48.99 M0 48.99 C1.34 38.26, 1.32 29.19, 0 16.33 M0 48.99 C-0.69 38.51, 0.23 27.55, 0 16.33 M0 16.33 C-0.29 5.44, 5.63 -1.32, 16.33 0 M0 16.33 C-0.16 5.27, 6.65 -2.02, 16.33 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(558.1067721917711 246.8134765625) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 2</text></g> <g stroke-linecap="round" transform="translate(642.2825534417711 225.2119140625) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C34.02 0.08, 52.6 0.79, 65.5 0 M16.33 0 C31.87 -0.84, 47.1 -1.03, 65.5 0 M65.5 0 C75.96 0.35, 80.67 6.63, 81.83 16.33 M65.5 0 C76.96 -2.24, 82.19 6.49, 81.83 16.33 M81.83 16.33 C81.04 28.3, 83.95 39.91, 81.83 48.99 M81.83 16.33 C80.92 25.04, 82.24 32.61, 81.83 48.99 M81.83 48.99 C82.29 61.6, 74.59 64.52, 65.5 65.32 M81.83 48.99 C83.58 60.27, 78.11 66.88, 65.5 65.32 M65.5 65.32 C53.45 67.05, 43.77 67.26, 16.33 65.32 M65.5 65.32 C49.9 65.49, 36.16 65.48, 16.33 65.32 M16.33 65.32 C7.2 63.48, 0.79 60.36, 0 48.99 M16.33 65.32 C5.67 67.26, -1.16 61.73, 0 48.99 M0 48.99 C0.55 39.8, 0.42 29.88, 0 16.33 M0 48.99 C-0.2 37.13, 0.04 24.62, 0 16.33 M0 16.33 C-0.14 5.29, 6.49 -1.76, 16.33 0 M0 16.33 C-0.15 7.12, 5.35 -1.93, 16.33 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(649.2005221917711 247.8720703125) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 3</text></g> <g stroke-linecap="round" transform="translate(422.70638156677114 343.4912109375) rotate(0 176.076171875 111.966796875)"><path d="M32 0 C122.84 -0.96, 214.15 -0.57, 320.15 0 M32 0 C101.01 1.84, 169.9 2.16, 320.15 0 M320.15 0 C341.98 -1.95, 352.46 11.58, 352.15 32 M320.15 0 C343.19 1.12, 352.5 9.58, 352.15 32 M352.15 32 C352.61 77.69, 355.43 122.26, 352.15 191.93 M352.15 32 C353.12 92.61, 351.99 151.1, 352.15 191.93 M352.15 191.93 C353.68 213.6, 342.99 225.29, 320.15 223.93 M352.15 191.93 C350.46 213.08, 341.45 222.89, 320.15 223.93 M320.15 223.93 C208.82 224.97, 97.76 225.28, 32 223.93 M320.15 223.93 C233.82 223.25, 146.46 224.13, 32 223.93 M32 223.93 C10.86 225.62, -1.01 214.88, 0 191.93 M32 223.93 C9.96 225.76, 0.49 214.19, 0 191.93 M0 191.93 C0.72 147.41, 1.02 101.96, 0 32 M0 191.93 C-0.22 143.89, 0.37 95.13, 0 32 M0 32 C-0.13 12.12, 10.59 -1.68, 32 0 M0 32 C2.13 9.83, 11.85 0.88, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(495.78450656677114 364.2724609375) rotate(0 61.179962158203125 12.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Shard 2 - B</text></g> <g stroke-linecap="round" transform="translate(443.78841281677114 415.1865234375) rotate(0 150.84765625 69.716796875)"><path d="M32 0 C104.38 -0.04, 177.46 -1.04, 269.7 0 M32 0 C107.64 -2, 183 -0.8, 269.7 0 M269.7 0 C292.51 0.97, 302 9.72, 301.7 32 M269.7 0 C290.74 2.26, 300.7 9.38, 301.7 32 M301.7 32 C303.81 54.43, 303.02 75.47, 301.7 107.43 M301.7 32 C301.78 61.3, 301.77 90.93, 301.7 107.43 M301.7 107.43 C300.23 128.6, 291 138.53, 269.7 139.43 M301.7 107.43 C303.69 129.4, 293.27 139.59, 269.7 139.43 M269.7 139.43 C215.47 139.79, 161.2 139.88, 32 139.43 M269.7 139.43 C220.3 140.62, 170.31 140.59, 32 139.43 M32 139.43 C10.05 141.03, 0.43 129.57, 0 107.43 M32 139.43 C10.22 140.22, -1.74 130.22, 0 107.43 M0 107.43 C-0.59 83.77, -1.91 59.59, 0 32 M0 107.43 C-0.46 86.1, -0.44 62.48, 0 32 M0 32 C1.85 9.94, 11.69 0.76, 32 0 M0 32 C1.29 12.48, 10.4 -0.86, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(540.5852878167711 427.6669921875) rotate(0 51.35997772216797 10)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Lucene Index</text></g> <g stroke-linecap="round" transform="translate(462.66341281677114 466.6201171875) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C33.33 -1.05, 50.83 0.6, 65.5 0 M16.33 0 C27.04 0.26, 36.42 -0.7, 65.5 0 M65.5 0 C76.14 1.97, 80.96 4.32, 81.83 16.33 M65.5 0 C76.04 1.96, 79.86 7.14, 81.83 16.33 M81.83 16.33 C83.66 25.84, 81.14 40.47, 81.83 48.99 M81.83 16.33 C81.34 26.6, 82.06 36.58, 81.83 48.99 M81.83 48.99 C83.56 60.43, 78.34 65.46, 65.5 65.32 M81.83 48.99 C80.18 60.59, 75.2 65.36, 65.5 65.32 M65.5 65.32 C44.86 66.54, 28.38 65.95, 16.33 65.32 M65.5 65.32 C46.3 66.51, 27.93 66.12, 16.33 65.32 M16.33 65.32 C5.05 66, -1.52 61.14, 0 48.99 M16.33 65.32 C5.82 67.12, -0.33 59.87, 0 48.99 M0 48.99 C0.06 39.93, -1.54 28.64, 0 16.33 M0 48.99 C0.94 36.45, 0.53 25.02, 0 16.33 M0 16.33 C1.12 7.02, 5.21 -0.75, 16.33 0 M0 16.33 C-2.1 3.65, 3.99 -0.83, 16.33 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(469.58138156677114 489.2802734375) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 1</text></g> <g stroke-linecap="round" transform="translate(558.0891940667711 466.7724609375) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C26.29 0.19, 41.05 1.36, 65.5 0 M16.33 0 C33.35 1.22, 50.19 -0.33, 65.5 0 M65.5 0 C76.09 1.71, 80.12 6.92, 81.83 16.33 M65.5 0 C77.45 0.79, 82.36 7.42, 81.83 16.33 M81.83 16.33 C82.04 24.69, 83.06 28.59, 81.83 48.99 M81.83 16.33 C82.69 26.14, 82.8 35.46, 81.83 48.99 M81.83 48.99 C80.39 60.5, 75.36 65.36, 65.5 65.32 M81.83 48.99 C83.72 59.89, 78.4 63.21, 65.5 65.32 M65.5 65.32 C50.49 64.36, 33.73 64.75, 16.33 65.32 M65.5 65.32 C46.64 65.86, 27.41 66.15, 16.33 65.32 M16.33 65.32 C5.77 66.89, -0.29 59.87, 0 48.99 M16.33 65.32 C5.66 63.8, -0.16 59.7, 0 48.99 M0 48.99 C1.74 37.4, -1.4 27.83, 0 16.33 M0 48.99 C0.39 41.16, -0.28 31.39, 0 16.33 M0 16.33 C-1.83 3.88, 4.18 -0.72, 16.33 0 M0 16.33 C-1.5 7.47, 5.12 -2.15, 16.33 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(565.0071628167711 489.4326171875) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 2</text></g> <g stroke-linecap="round" transform="translate(649.1829440667711 467.8310546875) rotate(0 40.9140625 32.66015625)"><path d="M16.33 0 C32.82 -0.06, 46.41 -0.61, 65.5 0 M16.33 0 C35.77 1.13, 54.65 1.01, 65.5 0 M65.5 0 C77.31 0.69, 82.29 7.17, 81.83 16.33 M65.5 0 C74.32 -0.92, 83.58 5.83, 81.83 16.33 M81.83 16.33 C81.89 28.55, 81.14 42.56, 81.83 48.99 M81.83 16.33 C81.43 27.34, 81.63 37.75, 81.83 48.99 M81.83 48.99 C83.47 59.89, 78.14 63.48, 65.5 65.32 M81.83 48.99 C82.74 60.43, 76.61 67.26, 65.5 65.32 M65.5 65.32 C54.83 65.6, 41.78 64.78, 16.33 65.32 M65.5 65.32 C49.23 66.41, 32.5 65.63, 16.33 65.32 M16.33 65.32 C5.63 64, -0.14 59.73, 0 48.99 M16.33 65.32 C6.65 63.3, -0.15 61.55, 0 48.99 M0 48.99 C-0.45 40.35, 1.04 30.78, 0 16.33 M0 48.99 C-0.88 35.84, -0.59 23.88, 0 16.33 M0 16.33 C-1.3 7.2, 5.16 -1.87, 16.33 0 M0 16.33 C1.79 6.87, 5.06 1.07, 16.33 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(656.1009128167711 490.4912109375) rotate(0 33.99609375 10)"><text x="33.99609375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="16px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Segment 3</text></g></svg>
+
+Lucene Segments
+
+The way that Lucene indexes work is by batching writes and constructing segments. When we insert a document, we don't immediately store it in the index. Instead, we add it to a segment. When we have a batch of documents, we construct a segment and flush it out to disk.
+
+When segments get too numerous, we can merge them: we create a new segment from the segments we want to merge and remove the previous segments.
+
+Deletions are tricky: each segment actually has a set of deleted identifiers. When a segment is queried for data against a deleted document, it pretends it doesn't exist - but the data is still there! During merge operations, the merged segments clean up deleted documents.
+
+Finally for update events we don't actually update the segment. Instead, we *soft* delete the old document and insert a new document with the updated data. That old document gets cleaned up on segment merge events later. This makes deletions super fast but have some lasting performance penalties until we merge and clean up those segments. Ideally we're not doing it a lot!
+
+This immutable architecture carries a number of benefits for Lucene:
+
+1. Improved write performance: New documents can be quickly added to new segments without modifying existing ones.
+2. Efficient caching: Since segments are immutable, they can be safely cached in memory or on SSD without worrying about consistency issues.
+3. Simplified concurrency: Read operations don't need to worry about the data changing mid-query, simplifying concurrent access.
+4. Easier recovery: In case of a crash, it's easier to recover from immutable segments as their state is known and consistent.
+5. Optimized compression: Immutable data can be more effectively compressed, saving disk space.
+6. Faster searches: The immutable nature allows for optimized data structures and algorithms for searching.
+
+However, this design also introduces some challenges, such as the need for periodic segment merges and the temporary increased storage requirements before cleanup operations. Elasticsearch and Lucene have sophisticated mechanisms to manage these trade-offs effectively.
+
+These kind of design decisions (how to use immutability to your advantage) are a big consideration in data-heavy infrastructure system design interviews! Hopefully they're inspiring some ideas for how you think about other systems you might build.
+
+#### Lucene Segment Features
+
+Segments aren't just dumb containers of document data, they also house highly-optimized data structures relevant for search operations. Two of the most important ones are the inverted index and doc values.
+
+##### Inverted Index
+
+If Lucene is the heart of Elasticsearch, the inverted index is the heart of Lucene. Fundamentally, if you want to make finding things fast you have two options:
+
+1. You can organize your data according to how you want to retrieve it. If you wanted to look up specific instances, a poor choice would be a table which you need to scan through every item (O(n)), a better one would be a sorted list (O(log(n))), and the best strategy would be a hash table (O(1)).
+2. You can copy your data and organize the copy like (1).
+
+Let's pretend we have 1 billion books, a small number of which the title contains the word "lazy". We want to create some code that can find all the books that contain the word "lazy" as fast as possible. How might we do this?
+
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 848.10546875 424.62890625"><defs></defs><rect x="0" y="0" width="848.10546875" height="424.62890625" fill="#ffffff"></rect><g stroke-linecap="round" transform="translate(10 97.35546875) rotate(0 241.626953125 60.69140625)"><path d="M30.35 0 C167.49 -0.13, 305.8 -0.89, 452.91 0 M30.35 0 C118.95 0.63, 208.5 0.7, 452.91 0 M452.91 0 C471.87 1.76, 484.99 10.93, 483.25 30.35 M452.91 0 C474.35 2.22, 481.63 8.82, 483.25 30.35 M483.25 30.35 C483.09 48.15, 482.17 63.31, 483.25 91.04 M483.25 30.35 C481.83 51.67, 482.7 72.53, 483.25 91.04 M483.25 91.04 C481.83 110.84, 475.07 121.39, 452.91 121.38 M483.25 91.04 C481.62 111.99, 472.12 122.51, 452.91 121.38 M452.91 121.38 C327.65 123.4, 201.33 123.35, 30.35 121.38 M452.91 121.38 C341.03 119.71, 228.71 119.97, 30.35 121.38 M30.35 121.38 C10.98 119.71, -0.88 111.86, 0 91.04 M30.35 121.38 C12.37 122.53, -1.33 113.25, 0 91.04 M0 91.04 C-0.69 68.19, -1.11 43.73, 0 30.35 M0 91.04 C-0.53 70.84, 0 49.68, 0 30.35 M0 30.35 C1.51 10.77, 11.02 -1.79, 30.35 0 M0 30.35 C0.64 8.58, 11.23 1.86, 30.35 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(29.128143310546875 121.22265625) rotate(0 37.3515625 16.100000000000023)"><text x="37.3515625" y="0" font-family="Helvetica, Segoe UI Emoji" font-size="28px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">ID: 12</text></g> <g transform="translate(24.875335693359375 171.72265625) rotate(0 37.24609375 11.5)"><text x="0" y="0" font-family="Helvetica, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">lazy dog</text></g> <g stroke-linecap="round" transform="translate(11.013671875 237.796875) rotate(0 241.626953125 60.69140625)"><path d="M30.35 0 C127.15 -0.6, 225 0.26, 452.91 0 M30.35 0 C195.85 -1.75, 360.71 -1.45, 452.91 0 M452.91 0 C471.73 -1.13, 482.81 11.67, 483.25 30.35 M452.91 0 C473.23 -0.73, 484.35 8.33, 483.25 30.35 M483.25 30.35 C482.33 44.61, 483.53 62.3, 483.25 91.04 M483.25 30.35 C483.79 45.52, 482.11 60.99, 483.25 91.04 M483.25 91.04 C482.37 112.25, 473.1 120.62, 452.91 121.38 M483.25 91.04 C484.48 112.94, 474.93 122.39, 452.91 121.38 M452.91 121.38 C294.54 122.91, 138.32 122.05, 30.35 121.38 M452.91 121.38 C289.21 119.67, 126.5 119.78, 30.35 121.38 M30.35 121.38 C8.96 123.11, 1.63 111.25, 0 91.04 M30.35 121.38 C10.37 120.59, 0.34 109.98, 0 91.04 M0 91.04 C-0.62 73.97, 0.98 59.9, 0 30.35 M0 91.04 C0 70.28, -0.18 50.65, 0 30.35 M0 30.35 C0.97 11.73, 9.7 0.15, 30.35 0 M0 30.35 C0.58 7.91, 7.97 1.54, 30.35 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(25.717811584472656 261.6640625) rotate(0 37.3515625 16.100000000000023)"><text x="37.3515625" y="0" font-family="Helvetica, Segoe UI Emoji" font-size="28px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">ID: 53</text></g> <g transform="translate(27.018798828125 312.1640625) rotate(0 104.4970703125 11.5)"><text x="0" y="0" font-family="Helvetica, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">lazy days are best days</text></g><g transform="translate(233.33203125 391.62890625) rotate(0 8.3349609375 11.5)"><text x="0" y="0" font-family="Helvetica, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">...</text></g><g transform="translate(23.5 14.2109375) rotate(0 91.037109375 20.69999999999999)"><text x="0" y="0" font-family="Helvetica, Segoe UI Emoji" font-size="36px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Documents</text></g> <g transform="translate(558.6341247558594 10) rotate(0 44.033203125 20.69999999999999)"><text x="0" y="0" font-family="Helvetica, Segoe UI Emoji" font-size="36px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Index</text></g> <g stroke-linecap="round" transform="translate(560.66015625 92.01171875) rotate(0 138.72265625 133.94140625)"><path d="M32 0 C106.24 0.93, 183.82 1.39, 245.45 0 M32 0 C88.93 1.91, 145.68 0.91, 245.45 0 M245.45 0 C265.08 -0.04, 277.49 9.66, 277.45 32 M245.45 0 C265.14 -0.5, 279.67 10.68, 277.45 32 M277.45 32 C278.89 78.62, 277.34 126.25, 277.45 235.88 M277.45 32 C279.52 107.66, 279.47 183.2, 277.45 235.88 M277.45 235.88 C277.51 257.95, 265.21 269.62, 245.45 267.88 M277.45 235.88 C278.44 255.3, 265.76 268.56, 245.45 267.88 M245.45 267.88 C162.02 268.23, 75.55 266.99, 32 267.88 M245.45 267.88 C188.36 267.21, 131.53 266.68, 32 267.88 M32 267.88 C8.73 269.12, -0.88 257.76, 0 235.88 M32 267.88 C12.4 268.64, 1.04 255.16, 0 235.88 M0 235.88 C2.66 168.65, 1.35 102.61, 0 32 M0 235.88 C1.2 193.96, 2.1 152.63, 0 32 M0 32 C-0.36 9.81, 10.37 0.55, 32 0 M0 32 C0.49 10.77, 10.19 2.02, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(582.0546875 140.11328125) rotate(0 56.69921875 69)"><text x="0" y="23" font-family="Helvetica, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">lazy: [12, 53]</text> <text x="0" y="46" font-family="Helvetica, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">dog: [12]</text> <text x="0" y="69" font-family="Helvetica, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">days: [53]</text> <text x="0" y="92" font-family="Helvetica, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">are: [53]</text> <text x="0" y="115" font-family="Helvetica, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">best: [53]</text></g></svg>
+
+Inverted Index
+
+An inverted index is a data structure used to store mapping from content, such as words or numbers, to its locations in a database, or in this case, documents. This is what makes keyword search with Elasticsearch fast. It lists every unique word that appears in any document and identifies all the documents each word occurs in. In this case, a map from strings like "lazy" to the documents that contain that token (above, documents #12 and #53).
+
+Now instead of having to scan every document to find the documents that contain the word "lazy", we can just look up the inverted index and find the documents that contain the word "lazy" in constant time.
+
+We've exploited (1) and (2) above - by creating copies of our data and cleverly arranging it, we turn an O(n) scan into an O(1) lookup. Clever!
+
+##### Doc Values
+
+Now, what if we want to sort all *those* results by price? This is where doc values come in. While the documents contain a bunch of other fields like author, title, etc. we really want to get only the price for all the matched results. This is a very common problem for row-oriented databases like relational databases! Even though I only need to access a single column, I need to read the entire row and index into it.
+
+The secret to the performance of analytics workhorses like Spark or AWS's Redshift is they use a columnar format to store data in contiguous chunks of memory. When you query a column, you're really just reading a contiguous chunk of memory. The doc values structure does just this with a columnar, contiguous representation of a single field for all documents across the segment. Our inverted index gives us the mapping of tokens to documents, and doc values give us the data we need to perform that final sort.
+
+### Coordinating Nodes
+
+Remember that we talked about how Elasticsearch is a distributed system? Coordinating nodes are responsible for taking requests from end clients and coordinating their execution across the cluster. They are the entry point for a user request and are responsible for parsing the query, determining which nodes are responsible for the query, and returning the results to the user.
+
+One of the most important steps in execution on a coordinating node is query planning. **Query planners** are algorithms that determine the most efficient way to execute a search query. After a query is parsed by the coordinating node, the query planner evaluates how to best retrieve the relevant documents. This involves deciding whether to use an inverted index, determining the best order to execute parts of the query, and orchestrating how results from multiple nodes should be combined.
+
+#### Order Optimization
+
+Let's talk about this in simple terms. You are searching through millions of documents for the string "bill nye". In your inverted index, "bill" has millions of entries and "nye" has a few hundred. How might you go about this?
+
+1. You could generate a hash set of all the documents that contain "nye" and then scan over the documents that contain "bill" looking for an intersection, then do a string search for "bill nye"
+2. You could generate a hash set of all the documents that contain "bill" and then scan over the documents that contain "nye" looking for an intersection, then do a string search for "bill nye".
+3. You could load all the documents that contain "nye" and do a string search for "bill nye".
+4. You could load all the documents that contain "bill" and do a string search for "bill nye".
+5. ...
+
+There are lots of options! And the difference in performance between these options can vary by orders of magnitude.
+
+By keeping statistics on the types of fields that are present, the keywords that are popular, and the length of documents, Elasticsearch's query planner will choose between options so as to minimize the time it takes to return results to the user. This optimization is crucial for maintaining performance as the size and complexity of datasets grow.
+
+If you're dealing with an infrastructure-style system design interview, these questions should be familiar to you. Query planners, by adding a layer of statistics and an indirection allow the system to dynamically respond to the data in the index. Being able to handle *data dependence* is why database systems in general tend to be so powerful!
+
+## In Your Interview
+
+Elasticsearch should fit obviously into many system design interview questions. Anything that involves complex searches is probably a good candidate. The majority of the time Elasticsearch is invoked in interviews it will be attached via Change Data Capture (CDC) to an authoritative data store like Postgres or DynamoDB.
+
+### Using Elasticsearch
+
+Some things to keep in mind when using Elasticsearch in your interview:
+
+1. It's usually not a good idea to use Elasticsearch as your database. It's a search engine first and foremost, and while it's incredibly powerful it's not meant to replace a traditional database. Earlier versions of Elasticsearch had a lot of issues with consistency and durability, and many of the issues that plagued CouchDB are issues that have plagued Elasticsearch. All to say: if you need the data to persist, put it somewhere else.
+2. Elasticsearch is designed for read-heavy workloads. If you're dealing with a write-heavy system, you might want to consider other options or implement a write buffer. While it might be convenient that you can add field for e.g. the number of likes on a post or impression counts, there's a lot of reasons this will cause ElasticSearch to struggle.
+3. Ensure you account for the eventual consistency model of Elasticsearch. Your results *will* be stale, sometimes significantly. If your use-case can't tolerate this, you may need to consider alternatives.
+4. Elasticsearch is *not* a relational database. You'll want to denormalize your data as much as possible to make search queries efficient. This may require some additional transformation logic on the write side to make it happen. You should aim for your results to be provided by 1 or 2 queries.
+5. Not all search problems require it! If your data is small (< 100k documents) or doesn't change often, there are many other and faster solutions. See if a simple query against your primary data store is sufficient and only consider Elasticsearch if you find that to be insufficient.
+6. You need to be careful you're keeping Elasticsearch in sync with the underlying data. Failures in synchronization can lead to drift and are a common source of bugs with Elasticsearch.
+
+Remember, while Elasticsearch is a powerful tool, it's not a silver bullet. Be prepared to justify why you're choosing Elasticsearch over other options, and be ready to discuss its limitations as well as its strengths.
+
+### Lessons from Elasticsearch
+
+Even if we're not using Elasticsearch, we can borrow a number of lessons from its construction in designing performant infrastructure:
+
+1. Immutability can be a powerful tool when used at the right layer of the stack. By keeping data static, we enhance our ability to cache, compress, and otherwise optimize our data. We also don't need to worry about synchronization and integrity issues which are much harder to solve with mutable data.
+2. By separating the query execution from the storage of our data, we can optimize each independently. Elasticsearch's data nodes and coordination nodes complement each other beautifully by focusing on the respective responsibilities of each node type.
+3. Indexing strategies can significantly impact search performance. Elasticsearch's inverted index structure allows for fast full-text searches, while doc values enable efficient sorting and aggregations. When designing systems that require fast data retrieval, consider how you can structure your data to support the most common query patterns.
+4. Distributed systems can provide scalability and fault tolerance, but they also introduce complexity. Elasticsearch's cluster architecture allows it to handle large amounts of data and high query loads, but it also requires careful consideration of data consistency and network partitions. When designing distributed systems, always consider the trade-offs between consistency, availability, and partition tolerance (CAP theorem).
+5. The importance of efficient data structures cannot be overstated. Elasticsearch's use of specialized data structures like skip lists and finite state transducers for its inverted index shows how tailored data structures can dramatically improve performance for specific use cases. Always consider the access patterns of your data when choosing or designing data structures.
+
+## References
+
+- Full Text Search over Postgres: Elasticsearch vs. Alternatives
+- Exploring Apache Lucene - Part 1: The Index
+- BKD Trees, Used in Elasticsearch
+
+###### Test Your Knowledge
+
+Answer the question below to find your gaps.
+
+Question 1 of 15
+
+What is the fundamental relationship between Elasticsearch and Apache Lucene?
+
+1
+
+Lucene is a distributed wrapper around Elasticsearch
+
+2
+
+Elasticsearch and Lucene are competing search engines
+
+3
+
+Elasticsearch is a distributed layer built on top of Lucene
+
+4
+
+Elasticsearch replaced Lucene and shares no code with it

@@ -1,0 +1,346 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "tax-calculation",
+  "category": "Common Problems",
+  "title": "Tax Calculation",
+  "seoTitle": "Design a Tax Calculation Service like Avalara",
+  "description": "Design a tax calculation service — resolving jurisdictions from addresses, versioned rate and rule tables, low-latency calculation at checkout, and an auditable record of every calculation.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🧾",
+      "title": "What is a Tax Calculation Service?",
+      "text": "A tax calculation service tells a checkout exactly how much sales tax or VAT to charge for each line item, given where the buyer is, what's being sold and who's selling it. In the US alone there are over 10,000 taxing jurisdictions with rates and product rules that change constantly. Services like Avalara or Stripe Tax answer this in milliseconds."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Given a cart (items, product categories, amounts), seller, and ship-to address, return tax per line item and in total, broken down by jurisdiction.",
+        "Rates and rules should be updatable as laws change, with effective dates.",
+        "Every calculation should be recorded so it can be reproduced for audits and filings.",
+        "Commit and void transactions (when an order is placed or refunded) for reporting."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Filing returns with tax authorities.",
+        "Customs duties for international shipping.",
+        "Exemption certificate management (mentioned briefly)."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Low latency: < 50 ms p99, since it sits on the checkout path.",
+        "Highly available: if it's down, checkouts fail.",
+        "Correct and reproducible: the same inputs with the same effective date always give the same result.",
+        "Scale to ~20k calculations per second at peak (holiday shopping)."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Real-time rate updates — daily publication is fine."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- tax per line + jurisdiction breakdown",
+        "- versioned rates + rules",
+        "- record every calculation",
+        "- commit / void for reporting",
+        "",
+        "Non-functional",
+        "- < 50ms on checkout path",
+        "- highly available",
+        "- reproducible",
+        "- 20k calc/s peak"
+      ],
+      "caption": "Tax Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Jurisdiction**: a taxing authority (state, county, city, special district) with a boundary.",
+        "**Rate**: jurisdiction, tax type, percentage, effective from/to.",
+        "**Product tax code**: category of goods (clothing, groceries, software) and per-jurisdiction rules (exempt, reduced rate, thresholds).",
+        "**Calculation record**: inputs, rule set version, outputs."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /tax/calculate { sellerId, shipFrom, shipTo, lines: [{ amount, taxCode, qty }], date }\n  -> { lines: [{ tax, breakdown: [{ jurisdiction, rate, amount }] }], totalTax, calculationId }\nPOST /tax/transactions/:calculationId/commit\nPOST /tax/transactions/:calculationId/void"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-resolve-the-address-to-jurisdictions",
+      "text": "1) Resolve the address to jurisdictions"
+    },
+    {
+      "type": "paragraph",
+      "text": "The address is geocoded to a point, and the point is matched against **jurisdiction boundaries** (polygons) to find every authority that applies — state, county, city and districts. ZIP codes alone are not enough because they cross jurisdiction boundaries. Results are cached per normalised address."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-apply-rates-and-product-rules",
+      "text": "2) Apply rates and product rules"
+    },
+    {
+      "type": "paragraph",
+      "text": "For each line, the **Calculation Engine** looks up the rate for each jurisdiction effective on the transaction date, applies product rules for the tax code (e.g. clothing under $110 exempt in New York), and sums the result. All rate and rule data is loaded **in memory** in each engine instance."
+    },
+    {
+      "type": "diagram",
+      "file": "01-calculation.svg",
+      "caption": "Calculation"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-record-every-calculation",
+      "text": "3) Record every calculation"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each calculation is written to an append-only **calculation log** with its inputs, outputs and the **rule-set version** used. Commits and voids update its status, and reporting aggregates committed transactions per jurisdiction for filing."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-keep-rules-up-to-date-and-reproducible",
+      "text": "1) How do we keep rules up to date and reproducible?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Edit rates in place",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Update the rates table directly when a law changes."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Past calculations can no longer be reproduced, and a bad edit instantly affects every checkout."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Effective-dated rates",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Every rate and rule has `effectiveFrom` and `effectiveTo`; calculations use the rows valid on the transaction date."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Still risky to publish changes straight to production engines."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Versioned, immutable rule sets",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Tax content teams build changes into a new **immutable rule-set version** (e.g. `2026-11-11.1`), which is validated by running a large suite of **golden test cases** against it, then published to engines, which hot-swap it atomically. Each calculation records the version used, so it can be reproduced exactly later. Rolling back is just switching to the previous version."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Engines must hold the current version plus recent ones for retroactive recalculations."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-hit-50-ms-at-20k-requests-per-second",
+      "text": "2) How do we hit < 50 ms at 20k requests per second?"
+    },
+    {
+      "type": "paragraph",
+      "text": "The work is CPU-bound lookups, so make it local: each engine holds the whole rule set and jurisdiction data **in memory** (a few GB at most), and address resolution results are cached aggressively (most customers ship to addresses seen before). Engines are stateless and scale horizontally behind a load balancer. Writing the calculation log is **asynchronous** through a queue so the response doesn't wait on storage."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention a fallback: if the service is unreachable, the checkout can use a cached rate for the ship-to ZIP and flag the order for recalculation, rather than blocking the sale."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-exemptions-and-thresholds-work",
+      "text": "3) How do exemptions and thresholds work?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Some buyers (charities, resellers) are exempt with a certificate; the API accepts a customer ID, and the engine checks a certificate store. Some rules depend on totals, not single items, such as **economic nexus** thresholds that decide whether a seller must collect in a state at all. These are precomputed per seller daily from the committed transaction totals."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why isn't a ZIP code enough to determine tax jurisdictions?",
+      "options": [
+        "ZIPs are secret",
+        "ZIP codes cross jurisdiction boundaries",
+        "ZIPs change daily",
+        "Taxes ignore location"
+      ],
+      "answer": 1,
+      "explanation": "A precise location matched against boundaries is required."
+    },
+    {
+      "question": "Why record the rule-set version with each calculation?",
+      "options": [
+        "For marketing",
+        "So the calculation can be reproduced exactly for audits",
+        "To speed up checkout",
+        "It's free"
+      ],
+      "answer": 1,
+      "explanation": "Rules change; the version pins which rules applied."
+    },
+    {
+      "question": "How do engines reach low latency?",
+      "options": [
+        "Query a database per line item",
+        "Keep the full rule set in memory and cache address resolutions",
+        "Use bigger disks",
+        "Batch requests overnight"
+      ],
+      "answer": 1,
+      "explanation": "Calculation becomes local, CPU-bound lookups."
+    },
+    {
+      "question": "How should new tax rules be released?",
+      "options": [
+        "Edit production rows directly",
+        "Publish an immutable, tested rule-set version that engines hot-swap",
+        "Restart all servers",
+        "Email customers"
+      ],
+      "answer": 1,
+      "explanation": "Versioning gives safe rollout and instant rollback."
+    }
+  ]
+}

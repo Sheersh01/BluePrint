@@ -1,0 +1,407 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "online-chess",
+  "category": "Common Problems",
+  "title": "Online Chess",
+  "seoTitle": "Design an Online Chess Platform Like Chess.com",
+  "description": "Design online chess — skill-based matchmaking, real-time moves over WebSockets, server-authoritative game state, clocks, and handling disconnects.",
+  "tags": [
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    },
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Chess.com",
+      "Meta"
+    ],
+    "more": 4
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "♟️",
+      "title": "What is Online Chess?",
+      "text": "Online chess platforms like Chess.com and Lichess pair players of similar skill and let them play live games with chess clocks, with every move appearing instantly on both boards."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to request a game and be matched with an opponent of similar rating for a given time control.",
+        "Players should be able to make moves, which appear on the opponent's board in real time.",
+        "The game should enforce chess clocks and end on checkmate, resignation, draw, or timeout.",
+        "Players' ratings should update after each game."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Spectating and chat.",
+        "Puzzles, analysis engines and tournaments."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Moves should reach the opponent with low latency (< 200ms).",
+        "Game state must be consistent and authoritative — no illegal moves, no forked games.",
+        "Matchmaking should find an opponent within a few seconds for popular time controls.",
+        "Scale to 10M concurrent games."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Cheat (engine) detection."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- match by rating + time control",
+        "- real-time moves",
+        "- clocks; game end conditions",
+        "- rating updates",
+        "",
+        "Non-functional",
+        "- move latency < 200ms",
+        "- authoritative, consistent game state",
+        "- match within seconds",
+        "- 10M concurrent games"
+      ],
+      "caption": "Online Chess Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "The design has three parts: **matchmaking**, **live gameplay** (a stateful, real-time session between exactly two players), and **post-game processing** (ratings, storage). Gameplay must be server-authoritative so clients can't cheat by sending illegal moves or tampering with clocks."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Player**: a user with a rating per time control.",
+        "**Game**: two players, time control, current position (FEN), move list, clocks, status.",
+        "**Move**: a move in a game, with the clock times when it was made.",
+        "**Match Request**: a player waiting for an opponent."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Core Entities",
+        "- Player (rating)",
+        "- Game",
+        "- Move",
+        "- Match Request"
+      ],
+      "caption": "Chess Entities"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /match { \"timeControl\": \"5+0\" } -> { \"requestId\" }   // result pushed over WebSocket\n\nWS /games/:gameId\n-> { \"type\": \"move\", \"uci\": \"e2e4\", \"ply\": 1 }\n-> { \"type\": \"resign\" }\n<- { \"type\": \"move\", \"uci\": \"e7e5\", \"ply\": 2, \"clocks\": { \"white\": 291.2, \"black\": 298.7 } }\n<- { \"type\": \"gameOver\", \"result\": \"1-0\", \"reason\": \"checkmate\" }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-should-be-able-to-get-matched-with-an-opponent",
+      "text": "1) Users should be able to get matched with an opponent"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **Matchmaking Service** keeps a pool of waiting players per time control. It pairs players whose ratings are close, creates a Game, and notifies both players (over their WebSocket connections) with the game ID."
+    },
+    {
+      "type": "diagram",
+      "file": "01-matchmaking.svg",
+      "caption": "Matchmaking"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-players-should-be-able-to-make-moves-in-real-time",
+      "text": "2) Players should be able to make moves in real time"
+    },
+    {
+      "type": "paragraph",
+      "text": "Both players connect to the **Game Service** instance that owns their game. When a move arrives, the server validates it against the current position, updates the clocks, appends it to the move list, and pushes it to the opponent."
+    },
+    {
+      "type": "diagram",
+      "file": "02-live-game.svg",
+      "caption": "Live game"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-the-game-should-enforce-clocks-and-end-conditions",
+      "text": "3) The game should enforce clocks and end conditions"
+    },
+    {
+      "type": "paragraph",
+      "text": "The server is the source of truth for time. When a move arrives, it subtracts the elapsed time (since the opponent's last move) from the mover's clock. The server also schedules a timer for the current player's remaining time so it can declare a timeout even if no message arrives. Checkmate, stalemate and draws are detected by the move validator."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-ratings-should-update-after-each-game",
+      "text": "4) Ratings should update after each game"
+    },
+    {
+      "type": "paragraph",
+      "text": "When a game ends, the Game Service emits a `game_finished` event. A **Rating Service** consumes it and updates both players' ratings (Elo or Glicko-2) and stores the finished game for history."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-match-players-quickly-and-fairly",
+      "text": "1) How do we match players quickly and fairly?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Scan all waiting players for each request",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "On each request, iterate over everyone waiting in the time control to find the closest rating."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "O(n) per request with thousands waiting, and concurrent requests can grab the same opponent."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Sorted pools with an expanding rating window",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Keep a Redis sorted set per time control with score = rating. To match, query `ZRANGEBYSCORE` within ±50 of the player's rating; if nobody is found, widen the window every couple of seconds (±100, ±200…). Remove both players **atomically** (a Lua script or `ZREM` returning 1 for both) so two matchmakers can't pair the same person twice."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Rare time controls have thin pools; the expanding window trades match quality for wait time, which is the right trade for players."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-where-does-game-state-live-and-how-do-moves-stay-consistent",
+      "text": "2) Where does game state live, and how do moves stay consistent?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Clients send the full board after each move",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Trust the client to compute and send the new position."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Trivial to cheat, and two clients can disagree about the position."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Single authoritative owner per game",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Each game is owned by exactly one Game Service instance (assigned by consistent hashing on gameId). It keeps the live state in memory, validates every move, and uses the move number (`ply`) to reject duplicates or out-of-turn moves. Every accepted move is appended to a durable store (e.g. Redis with AOF, or a database) before being acknowledged, so a crashed instance's games can be reloaded by the new owner."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Ownership changes must be fenced so two instances never accept moves for the same game."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-handle-disconnects",
+      "text": "3) How do we handle disconnects?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Mobile connections drop constantly. The player's clock keeps running while disconnected (that's the rule in real chess), and the client reconnects automatically with backoff, re-subscribes to the game, and receives the full move list to resync. If a player stays disconnected beyond a grace period while their clock runs out, they lose on time — the server's timer handles this without any client involvement."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Latency compensation matters at fast time controls. Many platforms measure each client's round-trip time and refund a small amount of \"lag\" to the mover's clock so bullet games feel fair."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "03-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why must the server, not the client, validate moves and keep the clock?",
+      "options": [
+        "Clients are too slow",
+        "Otherwise players could send illegal moves or tamper with time",
+        "Browsers can't run chess rules",
+        "It reduces bandwidth"
+      ],
+      "answer": 1,
+      "explanation": "A server-authoritative game prevents cheating and keeps both boards consistent.",
+      "section": "2-where-does-game-state-live-and-how-do-moves-stay-consistent"
+    },
+    {
+      "question": "How does matchmaking balance match quality and wait time?",
+      "options": [
+        "Random pairing",
+        "An expanding rating window over a sorted pool",
+        "Only exact rating matches",
+        "First-come-first-served regardless of rating"
+      ],
+      "answer": 1,
+      "explanation": "Start with a narrow window and widen it over time until an opponent is found.",
+      "section": "1-how-do-we-match-players-quickly-and-fairly"
+    },
+    {
+      "question": "How is a timeout detected if the player simply stops sending messages?",
+      "options": [
+        "The opponent reports it",
+        "A server-side timer for the remaining clock time",
+        "The client sends a timeout message",
+        "It isn't detected"
+      ],
+      "answer": 1,
+      "explanation": "The server schedules a timer for the current player's remaining time."
+    },
+    {
+      "question": "What does the move number (ply) in each move message protect against?",
+      "options": [
+        "Duplicate or out-of-turn moves",
+        "Slow networks",
+        "Rating inflation",
+        "Spectators"
+      ],
+      "answer": 0,
+      "explanation": "The server only accepts the expected next ply, so retries and races can't apply a move twice."
+    }
+  ]
+}

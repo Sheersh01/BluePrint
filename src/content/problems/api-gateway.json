@@ -1,0 +1,424 @@
+{
+  "section": "deep-dives",
+  "slug": "api-gateway",
+  "category": "Key Technologies",
+  "title": "API Gateway",
+  "subtitle": "Learn when and how to effectively incorporate API Gateways into your system design interviews.",
+  "seoTitle": "API Gateway Deep Dive for System Design Interviews",
+  "description": "Learn when and how to effectively incorporate API Gateways into your system design interviews.",
+  "tags": [],
+  "author": "Evan King",
+  "published": "Nov 26, 2024",
+  "updated": "Nov 26, 2024",
+  "updatedLabel": "Published",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "what-is-an-api-gateway",
+      "text": "What is an API Gateway?"
+    },
+    {
+      "type": "paragraph",
+      "text": "There's a good chance you've interacted with an API Gateway today, even if you didn't realize it. They're a core component in modern architectures, especially with the rise of microservices."
+    },
+    {
+      "type": "paragraph",
+      "text": "Think of it as the front desk at a luxury hotel. Just as hotel guests don't need to know where the housekeeping office or maintenance room is located, clients shouldn't need to know about the internal structure of your microservices."
+    },
+    {
+      "type": "paragraph",
+      "text": "An API Gateway serves as a single entry point for all client requests, managing and routing them to appropriate backend services. Just as a hotel front desk handles check-ins, room assignments, and guest requests, an API Gateway manages centralized middleware like authentication, routing, and request handling."
+    },
+    {
+      "type": "paragraph",
+      "text": "The evolution of API Gateways parallels the rise of microservices architecture. As monolithic applications were broken down into smaller, specialized services, the need for a centralized point of control became evident. Without an API Gateway, clients would need to know about and communicate with multiple services directly – imagine hotel guests having to track down individual staff members for each request."
+    },
+    {
+      "type": "paragraph",
+      "text": "API gateways are thin, relatively simple components that serve a clear purpose. In this deep dive, we'll focus on what you need to know for system design interviews without overcomplicating things."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "core-responsibilities",
+      "text": "Core Responsibilities"
+    },
+    {
+      "type": "paragraph",
+      "text": "The gateway's primary function is request routing – determining which backend service should handle each incoming request. But this isn't all they do."
+    },
+    {
+      "type": "paragraph",
+      "text": "Funny enough, I'll often have candidates introduce a gateway in a system design interview and emphasize that it will do all this middleware stuff but never mention the core reason they need it -- request routing."
+    },
+    {
+      "type": "paragraph",
+      "text": "Nowadays, API gateways are also used to handle cross-cutting concerns or middleware like authentication, rate limiting, caching, SSL termination, and more."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "tracing-a-request",
+      "text": "Tracing a Request"
+    },
+    {
+      "type": "paragraph",
+      "text": "Let's walk through a request from start to finish. Incoming requests come into the API Gateway from clients, usually via HTTP but they can be gRPC or any other protocol. From there, the gateway will apply any middleware you've configured and then route the request to the appropriate backend service."
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Request validation",
+        "API Gateway applies middleware (auth, rate limiting, etc.)",
+        "API Gateway routes the request to the appropriate backend service",
+        "Backend service processes the request and returns a response",
+        "API Gateway transforms the response and returns it to the client",
+        "Optionally cache the response for future requests"
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Let's take a closer look at each step."
+    },
+    {
+      "type": "diagram",
+      "file": "01-api-gateway-request-flow.svg",
+      "caption": "API Gateway Request Flow"
+    },
+    {
+      "type": "paragraph",
+      "text": "Before doing anything else, the API Gateway checks if incoming requests are properly formatted and contain all the required information. This validation includes checking that the request URL is valid, required headers are present, and the request body (if any) matches the expected format."
+    },
+    {
+      "type": "paragraph",
+      "text": "This early validation is important because it helps catch obvious issues before they reach your backend services. For example, if a mobile app sends a malformed JSON payload or forgets to include a required API key, there's no point in routing that request further into your system. The gateway can quickly reject it and send back a helpful error message, saving your backend services from wasting time and resources on requests that were never going to succeed."
+    },
+    {
+      "type": "paragraph",
+      "text": "API Gateways can be configured to handle various middleware tasks. For example, you might want to:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Authenticate requests using JWT tokens",
+        "Limit request rates to prevent abuse",
+        "Terminate SSL connections",
+        "Log and monitor traffic",
+        "Compress responses",
+        "Handle CORS headers",
+        "Whitelist/blacklist IPs",
+        "Validate request sizes",
+        "Handle response timeouts",
+        "Version APIs",
+        "Throttle traffic",
+        "Integrate with service discovery"
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Of these, the most popular and relevant to system design interviews are authentication, rate limiting, and ip whitelisting/blacklisting. If you do opt to mention middleware, just make sure it's with a purpose and that you don't spend too much time here."
+    },
+    {
+      "type": "paragraph",
+      "text": "My suggestion when introducing a API Gateway to your design is to simply mention, \"I'll add a API Gateway to handle routing and basic middleware\" and move on."
+    },
+    {
+      "type": "paragraph",
+      "text": "The gateway maintains a routing table that maps incoming requests to backend services. This mapping is typically based on a combination of:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "URL paths (e.g., /users/* routes to the user service)",
+        "HTTP methods (e.g., GET, POST, etc.)",
+        "Query parameters",
+        "Request headers"
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "For example, a simple routing configuration might look like:"
+    },
+    {
+      "type": "code",
+      "code": "routes:\n  - path: /users/*\n    service: user-service\n    port: 8080\n  - path: /orders/*\n    service: order-service\n    port: 8081\n  - path: /payments/*\n    service: payment-service\n    port: 8082"
+    },
+    {
+      "type": "paragraph",
+      "text": "The gateway will quickly look up which backend service to send the request to based on the path, method, query parameters, and headers and send the request onward accordingly."
+    },
+    {
+      "type": "paragraph",
+      "text": "While most services communicate via HTTP, in some cases your backend services might use a different protocol like gRPC for internal communication. When this happens, the API Gateway can handle translating between protocols, though this is relatively uncommon in practice."
+    },
+    {
+      "type": "paragraph",
+      "text": "The gateway would, thus, transform the request into the appropriate protocol before sending it to the backend service. This is nice because it allows your services to use whatever protocol or format is most efficient without clients needing to know about it."
+    },
+    {
+      "type": "paragraph",
+      "text": "The gateway will transform the response from the backend service into the format requested by the client. This transformation layer allows your internal services to use whatever protocol or format is most efficient, while presenting a clean, consistent API to clients."
+    },
+    {
+      "type": "paragraph",
+      "text": "For example:"
+    },
+    {
+      "type": "code",
+      "code": "// Client sends a HTTP GET request\nGET /users/123/profile\n\n// API Gateway transforms this into an internal gRPC call\nuserService.getProfile({ userId: \"123\" })\n\n// Gateway transforms the gRPC response into JSON and returns it to the client over HTTP\n{\n  \"userId\": \"123\",\n  \"name\": \"John Doe\",\n  \"email\": \"john@example.com\"\n}"
+    },
+    {
+      "type": "paragraph",
+      "text": "Before sending the response back to the client, the gateway can optionally cache the response. This is useful for frequently accessed data that doesn't change often and, importantly, is not user specific. If your expectation is that a given API request will return the same result for a given input, caching it makes sense."
+    },
+    {
+      "type": "paragraph",
+      "text": "The API Gateway can implement various caching strategies too. For example:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Full Response Caching**: Cache entire responses for frequently accessed endpoints",
+        "**Partial Caching**: Cache specific parts of responses that change infrequently",
+        "**Cache Invalidation**: Use TTL or event-based invalidation"
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "In each case, you can either cache the response in memory or in a distributed cache like Redis."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "scaling-an-api-gateway",
+      "text": "Scaling an API Gateway"
+    },
+    {
+      "type": "paragraph",
+      "text": "When discussing API Gateway scaling in interviews, there are two main dimensions to consider: handling increased load and managing global distribution."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "horizontal-scaling",
+      "text": "Horizontal Scaling"
+    },
+    {
+      "type": "paragraph",
+      "text": "The most straightforward approach to handling increased load is horizontal scaling. API Gateways are typically stateless, making them ideal candidates for horizontal scaling. You can add more gateway instances behind a load balancer to distribute incoming requests."
+    },
+    {
+      "type": "paragraph",
+      "text": "While API Gateways are primarily known for routing and middleware functionality, they often include load balancing capabilities. However, it's important to understand the distinction:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "**Client-to-Gateway Load Balancing**: This is typically handled by a dedicated load balancer in front of your API Gateway instances (like AWS ELB or NGINX).",
+        "**Gateway-to-Service Load Balancing**: The API Gateway itself can perform load balancing across multiple instances of backend services."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "This can typically be abstracted away during an interview. Drawing a single box to handle \"API Gateway and Load Balancer\" is usually sufficient. You don't want to get bogged down in the details of your entry points as they're more likely to be a distraction from the core functionality of your system."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "global-distribution",
+      "text": "Global Distribution"
+    },
+    {
+      "type": "paragraph",
+      "text": "Another option that works well particularly for large applications with users spread across the globe is to deploy API Gateways closer to your users, similar to how you would deploy a CDN. This typically involves:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Regional Deployments**: Deploy gateway instances in multiple geographic regions",
+        "**DNS-based Routing**: Use GeoDNS to route users to the nearest gateway",
+        "**Configuration Synchronization**: Ensure routing rules and policies are consistent across regions"
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "popular-api-gateways",
+      "text": "Popular API Gateways"
+    },
+    {
+      "type": "paragraph",
+      "text": "Let's take a look at some of the most popular API Gateways."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "managed-services",
+      "text": "Managed Services"
+    },
+    {
+      "type": "paragraph",
+      "text": "Cloud providers offer fully managed API Gateway solutions that integrate well with their ecosystems. This is by far the easiest option but also the most expensive."
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        {
+          "text": "**AWS API Gateway**",
+          "children": [
+            "Seamless integration with AWS services",
+            "Supports REST and WebSocket APIs",
+            "Built-in features like:",
+            "Request throttling",
+            "API keys and usage plans",
+            "AWS Lambda integration",
+            "CloudWatch monitoring"
+          ]
+        },
+        {
+          "text": "**Azure API Management**",
+          "children": [
+            "Strong OAuth and OpenID Connect support",
+            "Policy-based configuration",
+            "Developer portal for API documentation"
+          ]
+        },
+        {
+          "text": "**Google Cloud Endpoints**",
+          "children": [
+            "Deep integration with GCP services",
+            "Strong gRPC support",
+            "Automatic OpenAPI documentation"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "open-source-solutions",
+      "text": "Open Source Solutions"
+    },
+    {
+      "type": "paragraph",
+      "text": "For teams wanting more control or running on-premises:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        {
+          "text": "**Kong**",
+          "children": [
+            "Built on NGINX",
+            "Extensive plugin ecosystem",
+            "Supports both traditional and service mesh deployments"
+          ]
+        },
+        {
+          "text": "**Tyk**",
+          "children": [
+            "Native support for GraphQL",
+            "Built-in API analytics",
+            "Multi-data center capabilities"
+          ]
+        },
+        {
+          "text": "**Express Gateway**",
+          "children": [
+            "JavaScript/Node.js based",
+            "Lightweight and developer-friendly",
+            "Good for Node.js microservices"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "when-to-propose-an-api-gateway",
+      "text": "When to Propose an API Gateway"
+    },
+    {
+      "type": "paragraph",
+      "text": "Ok cool, but when should you use an API Gateway in your interview?"
+    },
+    {
+      "type": "paragraph",
+      "text": "The TLDR is: use it when you have a microservices architecture and don't use it when you have a simple client-server architecture."
+    },
+    {
+      "type": "paragraph",
+      "text": "With a microservices architecture, an API Gateway becomes almost essential. Without one, clients would need to know about and communicate with multiple services directly, leading to tighter coupling and more complex client code. The gateway provides a clean separation between your internal service architecture and your external API surface."
+    },
+    {
+      "type": "paragraph",
+      "text": "However, it's equally important to recognize when an API Gateway might be overkill. For simple monolithic applications or systems with a single client type, introducing an API Gateway adds unnecessary complexity."
+    },
+    {
+      "type": "paragraph",
+      "text": "I've mentioned this throughout, but I want it to be super clear. While it's important to understand every component you introduce into your design, the API Gateway is not the most interesting. There is a far greater chance that you are making a mistake by spending too much time on it than not enough."
+    },
+    {
+      "type": "paragraph",
+      "text": "Get it down, say it will handle routing and middleware, and move on."
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What is the primary function of an API Gateway?",
+      "options": [
+        "User interface rendering and client-side hydration",
+        "Routing requests to backend services",
+        "Data storage and persistence",
+        "Database query optimization"
+      ],
+      "answer": 1,
+      "explanation": "Its core job is routing each request to the right backend service; auth, rate limiting and caching are layered on top."
+    },
+    {
+      "question": "Which concern is commonly handled at the gateway instead of in every service?",
+      "options": [
+        "Business logic",
+        "Authentication and rate limiting",
+        "Database migrations",
+        "Batch analytics"
+      ],
+      "answer": 1,
+      "explanation": "Cross-cutting middleware such as auth, rate limiting and SSL termination is centralised at the gateway."
+    },
+    {
+      "question": "Why should a gateway stay thin?",
+      "options": [
+        "It must run on the client",
+        "Heavy logic there becomes a bottleneck and couples services together",
+        "Gateways can't call services",
+        "To reduce DNS lookups"
+      ],
+      "answer": 1,
+      "explanation": "Business logic belongs in services; a thin gateway scales easily and stays generic."
+    },
+    {
+      "question": "How is an API Gateway usually scaled?",
+      "options": [
+        "Vertically only",
+        "Horizontally behind a load balancer, since it's stateless",
+        "By sharding the database",
+        "It doesn't need scaling"
+      ],
+      "answer": 1,
+      "explanation": "Gateways keep no per-request state, so you add instances behind a load balancer."
+    }
+  ]
+}

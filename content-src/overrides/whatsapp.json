@@ -1,0 +1,50 @@
+{
+  "solutions": [
+    { "verdict": "bad", "title": "Keep Attachments in the DB" },
+    { "verdict": "good", "title": "Send Attachments via Chat Server" },
+    { "verdict": "great", "title": "Manage Attachments Separately with Presigned URLs" },
+    { "verdict": "bad", "title": "Naively Horizontally Scale" },
+    { "verdict": "bad", "title": "Kafka Topic per User" },
+    { "verdict": "good", "title": "Consistent Hashing of Chat Servers" },
+    { "verdict": "great", "title": "Offload to Pub/Sub" },
+    { "verdict": "bad", "title": "Rely on TCP Timeouts" },
+    { "verdict": "good", "title": "Application-Level ACKs with Retry" },
+    { "verdict": "good", "title": "Heartbeats (Ping/Pong)" },
+    { "verdict": "good", "title": "Periodic Sync Polling" },
+    { "verdict": "good", "title": "Sequence Numbers for Gap Detection" },
+    { "verdict": "great", "title": "Heartbeats with Global Sequence Numbers" },
+    { "verdict": "bad", "title": "Update Last Seen on Every Action" },
+    { "verdict": "great", "title": "Connection-Driven Presence" }
+  ],
+  "quiz": [
+    {
+      "question": "Which is NOT a benefit of using acknowledgment patterns in message systems?",
+      "options": ["Enables retry logic", "Prevents message loss during network failures", "Reduces server memory usage", "Confirms message delivery to the recipient"],
+      "answer": 2,
+      "explanation": "ACKs add reliability — retries and delivery confirmation — but the server must hold unacknowledged messages, so they don't reduce memory."
+    },
+    {
+      "question": "Why shouldn't media attachments flow through the WebSocket chat servers?",
+      "options": [
+        "WebSockets can't carry binary data",
+        "Large uploads tie up chat servers; clients should upload directly to blob storage",
+        "Attachments must be stored in the message table",
+        "It breaks end-to-end ordering"
+      ],
+      "answer": 1,
+      "explanation": "Presigned URLs let clients upload straight to blob storage and only send a small reference through chat."
+    },
+    {
+      "question": "How does a Chat Server deliver a message to a recipient connected to a different Chat Server?",
+      "options": ["It polls every other server", "Through a pub/sub layer that routes to the recipient's server", "It writes to the recipient's phone directly", "It can't — users must share a server"],
+      "answer": 1,
+      "explanation": "Servers subscribe to channels for the users connected to them; publishing to the recipient's channel reaches the right server."
+    },
+    {
+      "question": "What does tagging messages with per-user sequence numbers let a client detect?",
+      "options": ["Spam", "Missed messages (gaps in the sequence)", "Duplicate accounts", "Typing indicators"],
+      "answer": 1,
+      "explanation": "If a client sees #5 after #3, it knows #4 was missed and can re-sync from the inbox."
+    }
+  ]
+}

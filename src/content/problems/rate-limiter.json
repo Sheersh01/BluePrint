@@ -1,0 +1,782 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "rate-limiter",
+  "category": "Common Problems",
+  "title": "Rate Limiter",
+  "seoTitle": "Design a Distributed Rate Limiter",
+  "description": "Learn how to design Rate Limiter: requirements, core entities, API, high-level design and deep dives.",
+  "tags": [
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    },
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Evan King",
+  "published": "Jul 31, 2025",
+  "updated": "Jul 31, 2025",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Microsoft"
+    ],
+    "more": 12
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🚦",
+      "title": "What is a Rate Limiter?",
+      "text": "A rate limiter controls how many requests a client can make within a specific timeframe. It acts like a traffic controller for your API - allowing, for example, 100 requests per minute from a user, then rejecting excess requests with an HTTP 429 \"Too Many Requests\" response. Rate limiters prevent abuse, protect your servers from being overwhelmed by bursts of traffic, and ensure fair usage across all users."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "paragraph",
+      "text": "For this breakdown, we'll design a **request-level rate limiter** for a social media platform's API. This means we're limiting individual HTTP requests (like posting tweets, fetching timelines, or uploading photos) rather than higher-level actions or business operations. We'll focus on a server-side implementation that controls traffic and protects our systems. While client-side rate limiting has value as a complementary approach (which we'll discuss later), server-side rate limiting is essential for security and system protection since clients can't be trusted to self-regulate."
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "The system should identify clients by user ID, IP address, or API key to apply appropriate limits.",
+        "The system should limit HTTP requests based on configurable rules (e.g., 100 API requests per minute per user).",
+        "When limits are exceeded, the system should reject requests with HTTP 429 and include helpful headers (rate limit remaining, reset time)."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope)"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Complex querying or analytics on rate limit data",
+        "Long-term persistence of rate limiting data"
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "paragraph",
+      "text": "At this point, you should ask your interviewer about scale expectations. Are we building this for a startup API with thousands of requests per day, or for a major platform handling millions of requests per second? The scale will completely change our design choices."
+    },
+    {
+      "type": "paragraph",
+      "text": "We'll assume we're designing for a substantial but realistic load: 1 million requests per second across 100 million daily active users."
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "The system should introduce minimal latency overhead (< 10ms per request check).",
+        "The system should be highly available. Eventual consistency is ok as slight delays in limit enforcement across nodes are acceptable.",
+        "The system should handle 1M requests/second across 100M daily active users."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope)"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Strong consistency guarantees across all nodes"
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Here is how this might look on the whiteboard in an interview:"
+    },
+    {
+      "type": "diagram",
+      "file": "01-requirements.svg",
+      "caption": "Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "For a problem like this, you need to show flexibility when choosing the right path through the Blueprint Delivery Framework. In fact, this is a famous question that is asked very differently by different interviewers at different companies. Some are looking for more low-level design, even code in some instances. Others are more focused on how the system should be architected and scaled."
+    },
+    {
+      "type": "paragraph",
+      "text": "In this breakdown, we'll follow the most common path (and the one I take when I ask this question) where we balance algorithm selection with high-level distributed system design that can handle the expected load."
+    },
+    {
+      "type": "paragraph",
+      "text": "I'll cover the simple set of core entities and system interface, then focus most of our time on rate limiting algorithms and scaling challenges - that's where the real design decisions happen."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "paragraph",
+      "text": "While rate limiters might seem like simple infrastructure components, they actually involve several important entities that we need to model properly:"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Rules**: The rate limiting policies that define limits for different scenarios. Each rule specifies parameters like requests per time window, which clients it applies to, and what endpoints it covers. For example: \"authenticated users get 1000 requests/hour\" or \"the search API allows 10 requests/minute per IP.\""
+    },
+    {
+      "type": "paragraph",
+      "text": "**Clients**: The entities being rate limited - this could be users (identified by user ID), IP addresses, API keys, or combinations thereof. Each client has associated rate limiting state that tracks their current usage against applicable rules."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Requests**: The incoming API requests that need to be evaluated against rate limiting rules. Each request carries context like client identity, endpoint being accessed, and timestamp that determines which rules apply and how to track usage."
+    },
+    {
+      "type": "paragraph",
+      "text": "These entities work together: when a **Request** arrives, we identify the **Client**, look up applicable **Rules**, check current usage against those rules, and decide whether to allow or deny the request. The interaction between these entities powers our rate limiter."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "system-interface",
+      "text": "System Interface"
+    },
+    {
+      "type": "paragraph",
+      "text": "A rate limiter is an infrastructure component that other services call to check if a request should be allowed. The interface is straightforward:"
+    },
+    {
+      "type": "code",
+      "code": "isRequestAllowed(clientId, ruleId) -> { passes: boolean, remaining: number, resetTime: timestamp }"
+    },
+    {
+      "type": "paragraph",
+      "text": "This method takes a client identifier (user ID, IP address, or API key) and a rule identifier, then returns whether the request should be allowed based on current usage. It also provides information for response headers like X-RateLimit-Remaining and X-RateLimit-Reset."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "paragraph",
+      "text": "We start by building an MVP that works to satisfy the core functional requirements. This doesn't need to scale or be perfect. It's just a foundation for us to build upon later. We will walk through each functional requirement, making sure each is satisfied by the high-level design."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-the-system-should-identify-clients-by-user-id-ip-address-or-api-key-to-apply-appropriate-limits",
+      "text": "1) The system should identify clients by user ID, IP address, or API key to apply appropriate limits"
+    },
+    {
+      "type": "paragraph",
+      "text": "Before we can limit anyone, we need to make two key decisions. First, where should our rate limiter live in the architecture? This determines what information we have access to and how it integrates with the rest of our system. Second, how do we identify different clients so we can apply the right limits to the right users? These decisions are connected - your placement choice affects what client information you can easily access, and your identification strategy influences where the rate limiter makes sense to deploy."
+    },
+    {
+      "type": "label",
+      "text": "Where should we place the rate limiter?"
+    },
+    {
+      "type": "paragraph",
+      "text": "You have three main options here, each with different trade-offs:"
+    },
+    {
+      "type": "paragraph",
+      "text": "For our design, we'll go with the API Gateway approach. It's the most common pattern and gives us centralized control without adding extra network calls to every request. Now we can focus our attention to the next question, how do we identify clients?"
+    },
+    {
+      "type": "label",
+      "text": "How do we identify clients?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Since we chose the API Gateway approach, our rate limiter only has access to information in the HTTP request itself. This includes the request URL/path, all HTTP headers (Authorization, User-Agent, X-API-Key, etc.), query parameters, and the client's IP address. While we can technically make external calls to databases or other services, it adds latency we want to avoid so we'll stick to the request itself."
+    },
+    {
+      "type": "paragraph",
+      "text": "We first need to decide what makes a \"client\" unique. The key we use determines how limits get applied. We have three main options:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "**User ID**: Perfect for authenticated APIs. Each logged-in user gets their own rate limit allocation. This is typically present in the Authorization header as a JWT token.",
+        "**IP Address**: Good for public APIs or when you don't have user accounts. But watch out for users behind NATs or corporate firewalls. The IP address is typically present in the X-Forwarded-For header.",
+        "**API Key**: Common for developer APIs. Each key holder gets their own limits. Most typically, this is denoted in the X-API-Key header."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "This is the perfect time to ask your interviewer some questions. Are all users authenticated? Is this a developer API that requires API keys? etc."
+    },
+    {
+      "type": "paragraph",
+      "text": "In practice, you'll probably want a combination. Maybe authenticated users get higher limits than anonymous IPs, and premium users may get even more. This is reflective of real systems that don't just enforce a global limit, but layer multiple rules. For example:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "**Per-user limits**: \"Alice can make 1000 requests/hour\"",
+        "**Per-IP limits**: \"This IP can make 100 requests/minute\"",
+        "**Global limits**: \"Our API can handle 50,000 requests/second total\"",
+        "**Endpoint-specific limits**: \"The search API is limited to 10 requests/minute, but profile updates are 100/minute\""
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Your rate limiter needs to check all applicable rules and enforce the most restrictive one. If Alice has used 50 of her 1000 requests but her IP has hit the 100 request limit, she gets blocked."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-the-system-should-limit-requests-based-on-configurable-rules",
+      "text": "2) The system should limit requests based on configurable rules"
+    },
+    {
+      "type": "paragraph",
+      "text": "Now we get to the heart of rate limiting: the algorithm that decides whether to allow or reject requests. This is where the real engineering decisions happen but it's not commonly the central focus of a system design interview (unlike a low-level design interview). You'll want to acknowledge that you understand the different options and make a choice, but it's unlikely you'll need to implement it, even with pseudocode."
+    },
+    {
+      "type": "paragraph",
+      "text": "There are four main algorithms used in production systems, each with different trade-offs around accuracy, memory usage, and complexity. We'll examine each one to understand when you'd choose it."
+    },
+    {
+      "type": "paragraph",
+      "text": "The simplest approach divides time into fixed windows (like 1-minute buckets) and counts requests in each window. For each user, we'd maintain a counter that resets to zero at the start of each new window. If the counter exceeds the limit during a window, reject new requests until the window resets."
+    },
+    {
+      "type": "paragraph",
+      "text": "For example, with a 100 requests/minute limit, you might have windows from 12:00:00-12:00:59, 12:01:00-12:01:59, etc. A user can make 100 requests during each window, then must wait for the next window to start."
+    },
+    {
+      "type": "diagram",
+      "file": "02-fixed-window-counter.svg",
+      "caption": "Fixed Window Counter"
+    },
+    {
+      "type": "paragraph",
+      "text": "This is really simple to implement. It's just a hash table mapping client IDs to (counter, window_start_time) pairs. The main challenges are boundary effects: a user could make 100 requests at 12:00:59, then immediately make another 100 requests at 12:01:00, effectively getting 200 requests in 2 seconds. There's also potential for \"starvation\" if a user hits their limit early in a window."
+    },
+    {
+      "type": "code",
+      "code": "{\n  \"alice:12:00:00\": 100,\n  \"alice:12:01:00\": 5,\n  \"bob:12:00:00\": 20,\n  \"charlie:12:00:00\": 0,\n  \"dave:12:00:00\": 54,\n  \"eve:12:00:00\": 0,\n  \"frank:12:00:00\": 12,\n}"
+    },
+    {
+      "type": "diagram",
+      "file": "03-sliding-window-log.svg",
+      "caption": "Sliding Window Log"
+    },
+    {
+      "type": "paragraph",
+      "text": "This algorithm keeps a log of individual request timestamps for each user. When a new request arrives, you remove all timestamps older than your window (e.g., older than 1 minute ago), then check if the remaining count exceeds your limit."
+    },
+    {
+      "type": "paragraph",
+      "text": "This gives you perfect accuracy. You're always looking at exactly the last N minutes of requests, regardless of when the current request arrives. No boundary effects, no unfair bursts allowed."
+    },
+    {
+      "type": "paragraph",
+      "text": "The downside is memory usage. For a user making 1000 requests per minute, you need to store 1000 timestamps. Scale this to millions of users and you quickly run into memory problems. There's also computational overhead scanning through timestamp logs for each request."
+    },
+    {
+      "type": "paragraph",
+      "text": "This is a clever hybrid that approximates sliding windows using fixed windows with some math. You maintain counters for the current window and the previous window. When a request arrives, you estimate how many requests the user \"should have\" made in a true sliding window by weighing the previous and current windows based on how far you are into the current window."
+    },
+    {
+      "type": "paragraph",
+      "text": "For example, if you're 30% through the current minute, you count 70% of the previous minute's requests plus 100% of the current minute's requests."
+    },
+    {
+      "type": "paragraph",
+      "text": "This gives you much better accuracy than fixed windows while using minimal memory. It's just two counters per client. The trade-off is that it's an approximation that assumes traffic is evenly distributed within windows, and the math can be tricky to implement correctly."
+    },
+    {
+      "type": "paragraph",
+      "text": "Think of each client having a bucket that can hold a certain number of tokens (the burst capacity). Tokens are added to the bucket at a steady rate (the refill rate). Each request consumes one token. If there are no tokens available, the request is rejected."
+    },
+    {
+      "type": "paragraph",
+      "text": "For example, a bucket might hold 100 tokens (allowing bursts up to 100 requests) and refill at 10 tokens per minute (steady rate of 10 requests/minute). A client can make 100 requests immediately, then must wait for tokens to refill."
+    },
+    {
+      "type": "paragraph",
+      "text": "This handles both sustained load (the refill rate) and temporary bursts (the bucket capacity). It's also simple to implement, you just track (tokens, last_refill_time) per client. The challenge is choosing the right bucket size and refill rate, and handling \"cold start\" scenarios where idle clients start with full buckets."
+    },
+    {
+      "type": "paragraph",
+      "text": "If no tokens in bucket, reject!"
+    },
+    {
+      "type": "paragraph",
+      "text": "Token Bucket"
+    },
+    {
+      "type": "paragraph",
+      "text": "For our system, we'll go with the Token Bucket algorithm. It strikes the best balance between simplicity, memory efficiency, and handling real-world traffic patterns. Companies like Stripe use this approach because it naturally accommodates the bursty nature of API traffic while still enforcing overall rate limits."
+    },
+    {
+      "type": "paragraph",
+      "text": "Now we have a new problem. We know how the Token Bucket algorithm works conceptually, but where and how do we actually store each user's bucket? Each bucket needs to track two pieces of data: the current token count and the last refill timestamp. This state needs to be shared across all our API gateway instances."
+    },
+    {
+      "type": "paragraph",
+      "text": "If we store the buckets in memory within each gateway instance, we're back to the same coordination problem we discussed with in-process rate limiting. User requests get distributed across multiple gateways by the load balancer. Each gateway would maintain its own version of a user's token bucket, seeing only a fraction of their total traffic."
+    },
+    {
+      "type": "paragraph",
+      "text": "For example, if Alice makes 50 requests that go to Gateway A and 50 requests that go to Gateway B, each gateway thinks Alice has only made 50 requests and allows them all. But globally, Alice has made 100 requests and should be rate limited. Our algorithm becomes useless without centralized state."
+    },
+    {
+      "type": "paragraph",
+      "text": "We can use something like Redis. Redis is a fast, in-memory data store that all our gateway instances can access. Redis can become our central source of truth for all token bucket state. When any gateway needs to check or update a user's rate limit, it talks to Redis."
+    },
+    {
+      "type": "paragraph",
+      "text": "Here's exactly how the Token Bucket algorithm works with Redis:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "A request arrives at Gateway A for user Alice with a user ID of alice.",
+        "The gateway calls Redis to fetch Alice's current bucket state using HMGET alice:bucket tokens last_refill. The HMGET command retrieves the values of multiple keys from a Redis hash. In this case, we're getting the current tokens count and the last_refill timestamp for Alice's bucket.",
+        "The gateway calculates how many tokens to add to Alice's bucket based on the time elapsed since her last refill. If Alice's bucket was last updated 30 seconds ago and her refill rate is 1 token per second, the gateway adds 30 tokens to her current count, up to the bucket's maximum capacity.",
+        "The gateway then updates Alice's bucket state atomically using a Redis transaction to prevent race conditions:"
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "MULTI"
+    },
+    {
+      "type": "paragraph",
+      "text": "HSET alice:bucket tokens <new_token_count>"
+    },
+    {
+      "type": "paragraph",
+      "text": "HSET alice:bucket last_refill <current_timestamp>"
+    },
+    {
+      "type": "paragraph",
+      "text": "EXPIRE alice:bucket 3600"
+    },
+    {
+      "type": "paragraph",
+      "text": "EXEC"
+    },
+    {
+      "type": "paragraph",
+      "text": "The MULTI/EXEC block ensures all commands execute as a single atomic operation. The HSET commands update the hash fields with the new token count and timestamp, while EXPIRE automatically deletes the bucket after 1 hour of inactivity to prevent memory leaks."
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Finally, the gateway makes the final decision based on Alice's updated token count. If she has at least 1 token available, the gateway allows the request and decrements her token count by 1. If she has no tokens remaining, the gateway rejects the request."
+      ],
+      "start": 5
+    },
+    {
+      "type": "paragraph",
+      "text": "But wait - there's a race condition!"
+    },
+    {
+      "type": "paragraph",
+      "text": "Despite the MULTI/EXEC transaction, our implementation still has a subtle race condition. The problem is that the read operation (HMGET) happens outside the transaction. If two requests for the same user arrive simultaneously, both gateways read the same initial token count, both calculate that they can allow the request, and both update the bucket. This means we could allow 2 requests when only 1 token was available."
+    },
+    {
+      "type": "paragraph",
+      "text": "The solution is to move the entire read-calculate-update logic into a single atomic operation. With Redis, this can be achieved using something called Lua scripting. Lua scripts are atomic, so the entire rate limiting decision becomes race-condition free. Instead of separate read and write operations, we send a Lua script to Redis that reads the current state, calculates the new token count, and updates the bucket all in one atomic step."
+    },
+    {
+      "type": "pattern",
+      "title": "Pattern: Dealing with Contention",
+      "text": "Race conditions in distributed counters are a classic **dealing with contention** challenge. Multiple threads or processes trying to update the same resource simultaneously can lead to lost updates, even when individual operations are atomic. The solution is expanding the atomic boundary to include the entire read-modify-write sequence.",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "type": "paragraph",
+      "text": "Why Redis works perfectly for this:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Speed - Sub-millisecond responses for simple operations",
+        "Automatic cleanup - EXPIRE removes inactive user buckets after 1 hour of no activity",
+        "High availability - Can be replicated across multiple Redis instances",
+        "Atomic operations - The MULTI/EXEC transaction ensures no race conditions between gateways"
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "The end result is precise, consistent rate limiting across all gateway instances. Whether Alice's 100th request goes to Gateway A, B, or C, they all see the same token bucket state and enforce the same limit."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-when-limits-are-exceeded-reject-requests-with-http-429-and-helpful-headers",
+      "text": "3) When limits are exceeded, reject requests with HTTP 429 and helpful headers"
+    },
+    {
+      "type": "paragraph",
+      "text": "Now we need to decide what happens when a user hits their rate limit. This might seem straightforward (just return an error) but there are important design decisions that affect both user experience and system performance."
+    },
+    {
+      "type": "label",
+      "text": "Should we drop requests or queue them?"
+    },
+    {
+      "type": "paragraph",
+      "text": "The first decision is whether to immediately reject excess requests or queue them for later processing. Most rate limiters take the \"fail fast\" approach, they immediately return an HTTP 429 status code when limits are exceeded. This is what we'll implement."
+    },
+    {
+      "type": "paragraph",
+      "text": "The alternative would be queuing excess requests and processing them when the user's rate limit resets. While this sounds user-friendly, it creates more problems than it solves. Queued requests consume memory and processing resources. Users might think their requests failed and retry, creating even more load. Worst of all, queue processing delays make your API response times unpredictable."
+    },
+    {
+      "type": "paragraph",
+      "text": "There are niche cases where queuing makes sense, like batch processing systems that can afford to wait, but for interactive APIs, fast failure is almost always the right choice."
+    },
+    {
+      "type": "label",
+      "text": "How can we make the response helpful?"
+    },
+    {
+      "type": "paragraph",
+      "text": "429 is the standard HTTP status code for \"Too Many Requests\". It exists in the HTTP spec for exactly this purpose."
+    },
+    {
+      "type": "paragraph",
+      "text": "When rejecting a request, we return HTTP 429 \"Too Many Requests\" along with headers that help clients understand what happened and how to recover. The key headers are:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "X-RateLimit-Limit: The rate limit ceiling for that request (e.g., \"100\")",
+        "X-RateLimit-Remaining: Number of requests left in the current window (e.g., \"0\")",
+        "X-RateLimit-Reset: When the rate limit resets, as a Unix timestamp (e.g., \"1640995200\")"
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Some systems also include Retry-After, which tells the client how many seconds to wait before trying again."
+    },
+    {
+      "type": "paragraph",
+      "text": "Here's what a complete 429 response might look like:"
+    },
+    {
+      "type": "code",
+      "code": "HTTP/1.1 429 Too Many Requests\nX-RateLimit-Limit: 100\nX-RateLimit-Remaining: 0\nX-RateLimit-Reset: 1640995200\nRetry-After: 60\nContent-Type: application/json\n\n{\n  \"error\": \"Rate limit exceeded\",\n  \"message\": \"You have exceeded the rate limit of 100 requests per minute. Try again in 60 seconds.\"\n}"
+    },
+    {
+      "type": "paragraph",
+      "text": "These headers allow well-behaved clients to implement proper backoff strategies. A client can see exactly when to retry rather than hammering your API with failed requests."
+    },
+    {
+      "type": "paragraph",
+      "text": "As far as the interview goes, you'll typically just want to callout that you know you'll respond with a 429 and the appropriate headers."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "paragraph",
+      "text": "Up until this point we've designed a simple, single-node (meaning one Redis instance) rate limiter. But now we need to discuss how to scale it to handle 1M requests/second across 10M users while maintaining high availability and low latency."
+    },
+    {
+      "type": "paragraph",
+      "text": "For these distributed system challenges, you should try to lead the conversation toward deep dives that address your non-functional requirements. However, interviewers will likely jump in with probing questions, so be prepared to be flexible."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-scale-to-handle-1m-requests-second",
+      "text": "1) How do we scale to handle 1M requests/second?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Our current design has multiple API gateways talking to a single Redis instance. This works fine for smaller loads, but the math breaks down at our target scale of 1M requests/second. A typical Redis instance can handle around 100,000-200,000 operations per second depending on the operation complexity. Each one of our rate limit checks requires multiple Redis operations, at minimum an HMGET to fetch state and an HSET to update it. So our single Redis instance can realistically handle maybe 50,000-100,000 rate limit checks per second before becoming the bottleneck."
+    },
+    {
+      "type": "paragraph",
+      "text": "At 1M requests/second, we need to distribute the Redis load across multiple instances. But this isn't quite as simple as just spinning up more Redis servers because we need a way to partition the rate limiting data so each request knows which Redis instance to talk to."
+    },
+    {
+      "type": "pattern",
+      "title": "Pattern: Scaling Writes",
+      "text": "Rate limiters demonstrate classic **scaling writes** challenges with millions of counter updates per second. Each rate limit check requires atomic read-modify-write operations to update token buckets or request counters across distributed Redis shards.",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    },
+    {
+      "type": "paragraph",
+      "text": "The sharding strategy depends on our rate limiting rules. Remember we identified multiple client types earlier - user IDs for authenticated users, IP addresses for anonymous users, and API keys for developer access. We need to shard consistently so that all of a client's requests always hit the same Redis instance. If user \"alice\" sometimes hits Redis shard 1 and sometimes hits shard 2, her rate limiting state gets split and becomes useless."
+    },
+    {
+      "type": "paragraph",
+      "text": "We need a distribution algorithm like consistent hashing to solve this. For authenticated users, we hash their user ID to determine which Redis shard stores their rate limit data. For anonymous users, we hash their IP address. For API key requests, we hash the API key. This ensures each client's rate limiting state lives on exactly one shard, while distributing the load evenly across all shards."
+    },
+    {
+      "type": "diagram",
+      "file": "04-redis-sharding.svg",
+      "caption": "Redis Sharding"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each API gateway needs routing logic to determine which Redis shard to query. When a request arrives, the gateway extracts the appropriate identifier (user ID, IP, or API key), applies the distribution algorithm, and routes the rate limit check to the correct Redis instance. The Token Bucket algorithm remains exactly the same, we're just talking to different Redis instances instead of one."
+    },
+    {
+      "type": "paragraph",
+      "text": "With 10 Redis shards, each handling ~100k operations/second, we should be able to handle our 1M request/second target."
+    },
+    {
+      "type": "paragraph",
+      "text": "In production, you'd likely use Redis Cluster rather than managing individual Redis instances yourself. Redis Cluster automatically handles the data sharding we just described by dividing keys across 16,384 hash slots and distributing those slots across multiple Redis nodes. When you store a rate limit key like alice:bucket, Redis Cluster automatically determines which node should store it based on the key's hash slot. This way instead of building custom consistent hashing logic in your API gateways, you just connect to the Redis Cluster and it handles routing automatically."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-ensure-high-availability-and-fault-tolerance",
+      "text": "2) How do we ensure high availability and fault tolerance?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Now that we've scaled to multiple Redis shards, each shard becomes a critical component in our system. If any Redis shard goes down, all users whose rate limiting data lives on that shard lose their rate limiting functionality. This creates availability issues and can lead to cascading failures if users start retrying aggressively when they can't get proper rate limit responses."
+    },
+    {
+      "type": "paragraph",
+      "text": "When a Redis shard becomes unavailable, we face a fundamental decision about our failure mode. We have two options:"
+    },
+    {
+      "type": "paragraph",
+      "text": "You'll see that these are both \"good\" options, this is because it depends on the specific requirements of the system!"
+    },
+    {
+      "type": "paragraph",
+      "text": "For our social media platform, we'll choose fail-closed. While this seems counterintuitive since we want high availability, the reality is that rate limiting failures often coincide with traffic spikes when we need protection most. During viral events, if Redis fails and we fail open, the sudden flood of tweets, timeline updates, and notifications could overwhelm our backend databases, turning a rate limiter outage into complete platform failure. Brief periods of rejected requests are preferable to cascading system collapse."
+    },
+    {
+      "type": "paragraph",
+      "text": "Of course, choosing a failure mode is just damage control. The better approach is preventing Redis failures in the first place through high availability design. The standard solution for Redis availability is master-replica replication. Each Redis shard gets one or more read replicas that continuously synchronize with the master. When the master fails, one of the replicas is automatically promoted to become the new master. This works particularly well with Redis Cluster, which has built-in failover capabilities that can detect master failures and promote replicas without manual intervention. The trade-off is increased infrastructure cost and the need to handle replica synchronization lag, though Redis replication is typically very fast."
+    },
+    {
+      "type": "diagram",
+      "file": "05-redis-failover.svg",
+      "caption": "Redis Failover"
+    },
+    {
+      "type": "paragraph",
+      "text": "While we don't tend to talk about it much in our breakdowns (simply because there are usually most interesting things to mention), monitoring and alerting are important for maintaining our high availability. We'll want to track Redis health metrics like CPU usage, memory consumption, and network connectivity across all shards. We also need application-level monitoring of rate limiting success rates, response latencies, and alerts that trigger when we enter fail-open mode. The goal is detecting and responding to issues quickly enough that users don't experience degraded service."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-minimize-latency-overhead",
+      "text": "3) How do we minimize latency overhead?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Every rate limit check requires a network round trip to Redis, which adds latency to user requests. While Redis operations are typically sub-millisecond, the network overhead can add several milliseconds per request. At 1M requests/second, this latency can become an issue."
+    },
+    {
+      "type": "paragraph",
+      "text": "The most important optimization is connection pooling. Instead of establishing a new TCP connection to Redis for each rate limit check, your API gateways maintain a pool of persistent connections. This eliminates the TCP handshake overhead (which can be 20-50ms depending on network distance) and allows connections to be reused across multiple requests. Most Redis clients handle connection pooling automatically, but you need to tune the pool size based on your request volume and Redis response times."
+    },
+    {
+      "type": "paragraph",
+      "text": "Geographic distribution provides the biggest latency wins. Deploy your rate limiting infrastructure close to your users e.g. API gateways and Redis clusters in multiple regions. A user in Tokyo talking to a Redis instance in Virginia will see much higher latency than talking to one in the same region. The trade-off is complexity around data consistency across regions, but for rate limiting, you can often accept eventual consistency between regions in exchange for lower latency."
+    },
+    {
+      "type": "paragraph",
+      "text": "Other optimizations worth mentioning briefly but we won't dive into: local caching of rate limit state can work but is risky since stale cache data can lead to incorrect rate limiting decisions. Redis pipelining or Lua scripts can batch operations to reduce round trips. Request batching can help when multiple requests from the same user arrive simultaneously. However, these optimizations add complexity and are usually unnecessary if you've handled connection pooling and geographic distribution properly. In an interview, I'd probably avoid them unless explicitly asked."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-how-do-we-handle-hot-keys-viral-content-scenarios",
+      "text": "4) How do we handle hot keys (viral content scenarios)?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Hot keys are often mentioned in system design discussions, and we do cover techniques for handling them in our scaling reads pattern. For rate limiting, hot keys can arise from both abusive traffic and legitimate high-volume clients."
+    },
+    {
+      "type": "pattern",
+      "title": "Pattern: Scaling Reads",
+      "text": "While rate limiters primarily handle writes (counter updates), hot key scenarios create extreme **scaling reads** pressure when thousands of requests from the same IP or user hit rate limit checks simultaneously, overwhelming individual Redis shards.",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    },
+    {
+      "type": "paragraph",
+      "text": "Think about what it would take to create a hot key in our rate limiter. A single user or IP would need to generate enough requests to overwhelm a Redis shard - we're talking tens of thousands of requests per second from one source. While this often indicates abuse (DDoS attacks, misconfigured bots), it can also come from legitimate high-volume clients like analytics systems, data pipelines, or mobile apps with aggressive refresh patterns."
+    },
+    {
+      "type": "paragraph",
+      "text": "We need different strategies for different scenarios:"
+    },
+    {
+      "type": "label",
+      "text": "For Legitimate High-Volume Clients:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "**Client-side rate limiting**: Encourage well-behaved clients to implement their own rate limiting to smooth traffic patterns. This prevents legitimate users from accidentally creating hot shards while reducing server load. Many API SDKs include built-in client-side rate limiting that respects server response headers.",
+        "**Request queuing/batching**: Allow clients to batch multiple operations into single requests, reducing the total number of rate limit checks needed.",
+        "**Premium tiers**: Offer higher rate limits for power users who need them, potentially with dedicated infrastructure."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "For Abusive Traffic:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "**Automatic blocking**: When a client hits rate limits consistently (say, 10 times in a minute), temporarily block their IP/API key entirely by adding them to a blocklist. The list can be kept in one of the Redis shards and only checked in case of cache misses.",
+        "**DDoS protection**: Use services like Cloudflare or AWS Shield that can detect and block malicious traffic before it reaches your rate limiter."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "The key insight is that client-side rate limiting serves as a valuable complement to server-side protection. While you can't trust clients for security, encouraging good citizenship in your API ecosystem reduces infrastructure load and prevents legitimate users from accidentally triggering hot shard scenarios."
+    },
+    {
+      "type": "paragraph",
+      "text": "It's not inconceivable that you could have legitimate users sharing IP addresses (corporate NATs, public WiFi), but you should design your rate limits to account for this upfront rather than trying to handle hot keys after the fact. Set higher limits for IP-based rate limiting and rely more on authenticated user limits where possible."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "5-how-do-we-handle-dynamic-rule-configuration",
+      "text": "5) How do we handle dynamic rule configuration?"
+    },
+    {
+      "type": "paragraph",
+      "text": "So far we've assumed rate limiting rules are static, user X gets Y requests per minute. But production systems need flexibility to adjust limits without deploying new code. You might need to temporarily increase limits during a product launch, give premium customers higher limits, or quickly reduce limits if you're seeing unusual traffic patterns."
+    },
+    {
+      "type": "paragraph",
+      "text": "There are two main approaches for handling dynamic configuration updates:"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "paragraph",
+      "text": "Putting it all together, one final design could look like this:"
+    },
+    {
+      "type": "diagram",
+      "file": "06-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Which rate limiting algorithm best handles bursty traffic patterns while maintaining long-term limits?",
+      "options": [
+        "Fixed Window Counter",
+        "Token Bucket",
+        "Sliding Window Counter",
+        "Sliding Window Log"
+      ],
+      "answer": 1,
+      "explanation": "Tokens accumulate up to the bucket size, allowing short bursts while the refill rate enforces the long-term limit."
+    },
+    {
+      "question": "Which HTTP status code should be returned when a client is rate limited?",
+      "options": [
+        "400 Bad Request",
+        "403 Forbidden",
+        "429 Too Many Requests",
+        "503 Service Unavailable"
+      ],
+      "answer": 2,
+      "explanation": "429 tells the client it exceeded its quota; headers like Retry-After say when to try again."
+    },
+    {
+      "question": "Why is a centralized store such as Redis used for a distributed rate limiter?",
+      "options": [
+        "So every gateway instance sees the same counters",
+        "Because Redis stores data on disk only",
+        "To encrypt requests",
+        "To avoid using any memory"
+      ],
+      "answer": 0,
+      "explanation": "Requests from one client hit many gateway instances; shared counters keep the limit global."
+    },
+    {
+      "question": "What is the main weakness of the fixed window counter?",
+      "options": [
+        "It needs too much memory",
+        "Bursts at window boundaries can allow up to 2× the limit",
+        "It cannot be implemented in Redis",
+        "It is too precise"
+      ],
+      "answer": 1,
+      "explanation": "A client can send a full quota at the end of one window and again at the start of the next."
+    }
+  ]
+}

@@ -1,0 +1,191 @@
+{
+  "section": "deep-dives",
+  "slug": "flink",
+  "category": "Key Technologies",
+  "title": "Flink",
+  "subtitle": "How to use Apache Flink in system design interviews — stream processing, windows, event time and watermarks, state, and exactly-once guarantees.",
+  "seoTitle": "Design Flink | System Design Interview Breakdown",
+  "description": "How to use Apache Flink in system design interviews — stream processing, windows, event time and watermarks, state, and exactly-once guarantees.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "blocks": [
+    {
+      "type": "paragraph",
+      "text": "Apache Flink is a distributed **stream processing** engine. Where Kafka moves events, Flink computes over them continuously: counting clicks per ad per minute, detecting fraud patterns, maintaining live leaderboards. In interviews, Flink is the go-to answer when you need real-time aggregation over an unbounded stream with correct results even when events arrive late or machines fail."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-basics",
+      "text": "The Basics"
+    },
+    {
+      "type": "paragraph",
+      "text": "A Flink **job** is a dataflow graph: **sources** read events (usually from Kafka), **operators** transform, filter, join and aggregate them, and **sinks** write results (to a database, Kafka, or a cache). Flink parallelises each operator across many task slots on a cluster."
+    },
+    {
+      "type": "diagram",
+      "file": "01-a-flink-streaming-job.svg",
+      "caption": "A Flink streaming job"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "key-concepts",
+      "text": "Key Concepts"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "keyed-streams-and-state",
+      "text": "Keyed streams and state"
+    },
+    {
+      "type": "paragraph",
+      "text": "`keyBy` partitions the stream so all events for one key (an ad ID, a user ID) go to the same operator instance. That instance keeps **state** for its keys — counts, running totals, recent events — in memory or in RocksDB for large state. Because state is local, updates are fast; there's no database round trip per event."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "windows",
+      "text": "Windows"
+    },
+    {
+      "type": "paragraph",
+      "text": "Streams never end, so aggregations happen over **windows**:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "**Tumbling** — fixed, non-overlapping (clicks per minute).",
+        "**Sliding** — overlapping (clicks in the last 10 minutes, updated every minute).",
+        "**Session** — bounded by inactivity gaps (a user's browsing session)."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "event-time-and-watermarks",
+      "text": "Event time and watermarks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Events often arrive late or out of order — a phone reconnects and uploads an hour of activity. Flink can process by **event time** (when it happened) rather than processing time (when it arrived). **Watermarks** tell Flink how far event time has progressed (\"we've probably seen everything before 12:05\"), so it knows when a window can be closed. Allowed lateness lets late events still update results."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "If your interview problem cares about *when* something happened — billing per minute, metrics windows — mention event time and watermarks. It's the detail that separates a strong answer."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "checkpoints-and-exactly-once",
+      "text": "Checkpoints and exactly-once"
+    },
+    {
+      "type": "paragraph",
+      "text": "Flink periodically takes consistent **checkpoints** of all operator state plus source offsets, stored durably (e.g. S3). After a failure it restores the last checkpoint and replays from the saved Kafka offsets. Combined with transactional sinks, this gives **exactly-once** state semantics — counts are neither lost nor doubled."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "when-to-use-it-in-an-interview",
+      "text": "When to Use It in an Interview"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Real-time aggregation over high-volume streams — [Ad Click Aggregator](/learn/system-design/problem-breakdowns/ad-click-aggregator).",
+        "Windowed counts and top-K — [YouTube Top K](/learn/system-design/problem-breakdowns/youtube-top-k).",
+        "Alerting on metric streams — [Metrics Monitoring](/learn/system-design/problem-breakdowns/metrics-monitoring).",
+        "Stream joins and enrichment (joining clicks with impressions)."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "limitations",
+      "text": "Limitations"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "**Operational complexity** — managing clusters, state size, checkpoint tuning and job upgrades is real work. Managed offerings help.",
+        "**Overkill for simple pipelines** — if you only need to move or lightly transform events, Kafka consumers or Kafka Streams may be simpler.",
+        "**Large state** — very large keyed state makes checkpoints and recovery slower; design keys and TTLs carefully.",
+        "**Latency vs. completeness** — waiting for late events (watermarks) adds delay to final results."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "summary",
+      "text": "Summary"
+    },
+    {
+      "type": "paragraph",
+      "text": "Flink turns an unbounded event stream into continuously updated, fault-tolerant results. Remember the vocabulary: keyed state, windows, event time with watermarks, and checkpoints for exactly-once. Reach for it when you need correct real-time aggregation at scale."
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What does keyBy do in a Flink job?",
+      "options": [
+        "Encrypts events",
+        "Routes all events with the same key to the same operator instance",
+        "Sorts the whole stream globally",
+        "Writes to Kafka"
+      ],
+      "answer": 1,
+      "explanation": "Keyed partitioning lets each instance keep local state for its keys."
+    },
+    {
+      "question": "What are watermarks used for?",
+      "options": [
+        "Securing data",
+        "Tracking event-time progress so windows can close despite out-of-order events",
+        "Compressing state",
+        "Load balancing"
+      ],
+      "answer": 1,
+      "explanation": "A watermark asserts that events before a certain time have probably all arrived."
+    },
+    {
+      "question": "How does Flink achieve exactly-once state after a failure?",
+      "options": [
+        "By never failing",
+        "Restoring the last checkpoint and replaying from saved source offsets",
+        "Dropping duplicate events randomly",
+        "Using a CDN"
+      ],
+      "answer": 1,
+      "explanation": "Consistent checkpoints of state plus offsets make recovery precise."
+    },
+    {
+      "question": "Which window type suits 'clicks per minute'?",
+      "options": [
+        "Session window",
+        "Tumbling window",
+        "Global window",
+        "No window"
+      ],
+      "answer": 1,
+      "explanation": "Tumbling windows are fixed-size and non-overlapping."
+    }
+  ]
+}

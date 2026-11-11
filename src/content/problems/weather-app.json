@@ -1,0 +1,336 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "weather-app",
+  "category": "Common Problems",
+  "title": "Weather App",
+  "seoTitle": "Design a Weather Application Backend",
+  "description": "Design a weather app — ingesting data from providers, serving current conditions and forecasts by location with aggressive caching, and pushing severe-weather alerts.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    },
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "easy",
+  "askedAt": {
+    "companies": [
+      "Amazon",
+      "Chime",
+      "Facebook",
+      "Hubspot"
+    ],
+    "more": 2
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🌦️",
+      "title": "What is a Weather App?",
+      "text": "A weather app shows current conditions and forecasts for a user's location or saved cities, and alerts users about severe weather nearby."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should see current weather and a 7-day forecast for their location or a searched city.",
+        "Users should be able to save favourite locations.",
+        "Users should receive push alerts for severe weather in their saved locations."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Radar animation and maps.",
+        "Producing forecasts ourselves (we consume providers)."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Fast responses (< 200ms) and very high availability — people check weather constantly.",
+        "Data freshness: current conditions within ~10-15 minutes; forecasts hourly.",
+        "Scale to 50M daily users with spikes during storms.",
+        "Severe-weather alerts delivered within a minute or two."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Historical climate data."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- current + 7-day forecast by location",
+        "- saved locations",
+        "- severe-weather alerts",
+        "",
+        "Non-functional",
+        "- < 200ms, highly available",
+        "- fresh within 10-15 min",
+        "- 50M DAU, storm spikes",
+        "- alerts within minutes"
+      ],
+      "caption": "Weather App Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Location cell**: a grid cell (e.g. geohash precision 5, ~5km) that weather is computed for.",
+        "**Observation / forecast**: weather data for a cell and time.",
+        "**Saved location**: a user's favourite place.",
+        "**Alert**: a severe-weather warning covering a geographic polygon."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /weather?lat&lng -> { current, hourly[], daily[] }\nPOST /users/me/locations { name, lat, lng }\nPOST /devices { pushToken }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-see-current-weather-and-forecasts",
+      "text": "1) Users see current weather and forecasts"
+    },
+    {
+      "type": "paragraph",
+      "text": "An **Ingestion Service** pulls data from weather providers (national weather services, commercial APIs) on a schedule, normalises it, and writes it keyed by **location cell**. The **Weather API** snaps the user's coordinates to a cell and returns that cell's data."
+    },
+    {
+      "type": "diagram",
+      "file": "01-ingest-and-serve.svg",
+      "caption": "Ingest and serve"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-save-favourite-locations",
+      "text": "2) Users save favourite locations"
+    },
+    {
+      "type": "paragraph",
+      "text": "Saved locations live in a user table keyed by user ID, with the cell ID stored alongside for alert matching."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-users-receive-severe-weather-alerts",
+      "text": "3) Users receive severe-weather alerts"
+    },
+    {
+      "type": "paragraph",
+      "text": "Providers publish alerts with polygons. An **Alert Service** finds which cells intersect the polygon, looks up users whose saved locations (or last known locations) fall in those cells, and sends push notifications through the notification system."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-serve-millions-of-requests-cheaply",
+      "text": "1) How do we serve millions of requests cheaply?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Call the provider per request",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Proxy each user request to a weather provider."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Expensive (providers charge per call), slow, and fails when the provider throttles us."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Cache per exact coordinates",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Cache provider responses keyed by lat/lng."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Every user has slightly different coordinates, so the hit rate is terrible."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Snap to cells and cache at the edge",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Round coordinates to a geohash cell so everyone in a neighbourhood shares one cache entry. Pre-fetch data for all populated cells on a schedule rather than on demand, and serve `GET /weather?cell=...` through a CDN with a TTL matching the data freshness (e.g. 10 minutes). Storm spikes are then absorbed by the edge."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Cell size trades precision for hit rate — ~5km is plenty for weather."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-deliver-alerts-quickly-to-the-right-people",
+      "text": "2) How do we deliver alerts quickly to the right people?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Index saved locations by cell ID so \"who is in these cells?\" is a fast lookup. Expand alert polygons to cells once, fan out notifications through a queue, and deduplicate so users don't receive the same alert for multiple saved places. Prioritise severe alerts ahead of marketing notifications."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why snap coordinates to geohash cells?",
+      "options": [
+        "For privacy only",
+        "So nearby users share one cache entry, raising hit rates",
+        "Providers require it",
+        "To encrypt locations"
+      ],
+      "answer": 1,
+      "explanation": "Exact coordinates are nearly unique per user."
+    },
+    {
+      "question": "Why not call the weather provider on every request?",
+      "options": [
+        "It's illegal",
+        "It's slow, costly per call, and subject to provider throttling",
+        "Providers are always down",
+        "It's too accurate"
+      ],
+      "answer": 1,
+      "explanation": "Pre-fetching and caching decouple traffic from provider calls."
+    },
+    {
+      "question": "How do you find users affected by a severe-weather alert?",
+      "options": [
+        "Scan all users",
+        "Convert the alert polygon to cells and look up saved locations by cell",
+        "Email everyone",
+        "Ask the provider"
+      ],
+      "answer": 1,
+      "explanation": "A cell index makes the lookup fast."
+    },
+    {
+      "question": "What should the CDN TTL match?",
+      "options": [
+        "One second",
+        "The data refresh interval",
+        "One year",
+        "Nothing"
+      ],
+      "answer": 1,
+      "explanation": "Caching longer than the refresh interval would serve stale data."
+    }
+  ]
+}

@@ -1,0 +1,337 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "surge-pricing",
+  "category": "Common Problems",
+  "title": "Surge Pricing",
+  "seoTitle": "Design Uber's Surge Pricing System",
+  "description": "Design surge pricing — computing real-time supply and demand per geographic cell from streaming location and request events, and serving price multipliers consistently.",
+  "tags": [
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    },
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Uber",
+      "Lyft"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "⚡",
+      "title": "What is Surge Pricing?",
+      "text": "Surge pricing raises ride prices in an area when demand (ride requests) outstrips supply (available drivers), encouraging more drivers to head there and balancing the market."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "The system should compute a price multiplier (e.g. 1.0×–3.0×) for each geographic area.",
+        "Multipliers should update every minute or so based on current supply and demand.",
+        "Riders should see the multiplier when requesting a fare estimate, and it should be honoured for their ride."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Machine-learned demand forecasting.",
+        "Driver incentive programs."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Process millions of driver location updates and ride requests per minute.",
+        "Multipliers fresh within ~1-2 minutes.",
+        "Fare estimates must read multipliers with low latency (< 50ms) and high availability.",
+        "A quoted surge must be honoured — the price shown is the price charged."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Regulatory price caps per city."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- multiplier per area",
+        "- refresh every ~minute",
+        "- shown + honoured for rides",
+        "",
+        "Non-functional",
+        "- millions of events / min",
+        "- fresh within 1-2 min",
+        "- reads < 50ms, available",
+        "- quoted price is honoured"
+      ],
+      "caption": "Surge Pricing Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Cell**: a geographic area (e.g. an H3 hexagon or geohash).",
+        "**Supply / demand snapshot**: available drivers and open requests per cell per window.",
+        "**Surge multiplier**: the current price factor for a cell, with an expiry.",
+        "**Fare quote**: an estimate that locks in a multiplier for a short time."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /surge?lat&lng -> { cellId, multiplier, expiresAt }\nPOST /fare-estimates { \"pickup\", \"dropoff\" } -> { quoteId, price, multiplier, validUntil }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-compute-supply-and-demand-per-area",
+      "text": "1) Compute supply and demand per area"
+    },
+    {
+      "type": "paragraph",
+      "text": "The city is divided into hexagonal cells (H3). Driver location updates and ride requests are published to **Kafka**. A **stream processor** maps each event to its cell and maintains, per cell, counts of available drivers and open requests over a sliding window (e.g. the last 2 minutes)."
+    },
+    {
+      "type": "diagram",
+      "file": "01-surge-computation-pipeline.svg",
+      "caption": "Surge computation pipeline"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-turn-supply-and-demand-into-a-multiplier",
+      "text": "2) Turn supply and demand into a multiplier"
+    },
+    {
+      "type": "paragraph",
+      "text": "Every minute the **Surge Calculator** computes a ratio such as `demand / max(supply, 1)` per cell and maps it to a multiplier via a pricing curve. It smooths changes (limits how fast multipliers rise or fall) and blends neighbouring cells so prices don't jump sharply across a street."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-show-and-honour-the-multiplier",
+      "text": "3) Show and honour the multiplier"
+    },
+    {
+      "type": "paragraph",
+      "text": "The Fare Service reads the cell's multiplier from Redis (a single key lookup) when creating a quote, stores the quote with that multiplier and a short validity (e.g. 2 minutes), and the ride request references the quote ID — so the rider pays what they saw."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-aggregate-millions-of-events-into-cell-counts",
+      "text": "1) How do we aggregate millions of events into cell counts?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Write every ping to a database and query counts",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Insert locations into a table and `COUNT(*)` per cell every minute."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Millions of writes per minute plus heavy aggregate queries — slow and expensive."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Stream processing with keyed windows",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Partition the stream by cell ID so each cell's events go to one worker, which keeps windowed counts in memory (Flink keyed state with checkpoints). Deduplicate drivers within a window (a driver pinging 20 times counts once). Emit per-cell aggregates every few seconds."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Dense downtown cells can be hot partitions; split them into finer resolution cells or sub-partition by driver hash."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-keep-prices-stable-and-fair",
+      "text": "2) How do we keep prices stable and fair?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Raw ratios are noisy. Apply **exponential smoothing** over recent windows, cap the rate of change per minute, require a minimum number of requests before surging, and spatially smooth across neighbouring hexagons. These reduce flicker that confuses riders and limit manipulation (e.g. drivers going offline together to trigger surge)."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-make-reads-fast-and-highly-available",
+      "text": "3) How do we make reads fast and highly available?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Fare estimates happen constantly, so multipliers live in Redis keyed by cell, replicated, with an expiry. If the surge store is unavailable or a value has expired, fall back to **1.0×** — under-charging briefly is far better than failing fare estimates."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Lock the multiplier into the quote. Recomputing surge at ride creation would charge riders a price they never saw."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why divide the city into hexagonal cells like H3?",
+      "options": [
+        "They look nice",
+        "Uniform neighbour distances make spatial aggregation and smoothing simpler",
+        "Squares are not allowed",
+        "For encryption"
+      ],
+      "answer": 1,
+      "explanation": "Hexagons have equidistant neighbours, which suits local aggregation."
+    },
+    {
+      "question": "How should a rider's price be guaranteed?",
+      "options": [
+        "Recompute surge at ride creation",
+        "Lock the multiplier into a short-lived fare quote",
+        "Charge the highest surge of the day",
+        "Ask the driver"
+      ],
+      "answer": 1,
+      "explanation": "The ride references the quote, so the price shown is the price charged."
+    },
+    {
+      "question": "What should fare estimates do if the surge store is unavailable?",
+      "options": [
+        "Fail the request",
+        "Fall back to a 1.0x multiplier",
+        "Use 3.0x",
+        "Wait indefinitely"
+      ],
+      "answer": 1,
+      "explanation": "Availability of fare estimates matters more than briefly missing surge."
+    },
+    {
+      "question": "Why smooth multipliers over time?",
+      "options": [
+        "To increase revenue",
+        "Raw ratios are noisy; smoothing prevents flicker and manipulation",
+        "To reduce storage",
+        "It's required by Kafka"
+      ],
+      "answer": 1,
+      "explanation": "Stable prices are fairer and harder to game."
+    }
+  ]
+}

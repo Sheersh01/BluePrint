@@ -1,0 +1,368 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "elevator-system",
+  "category": "Common Problems",
+  "title": "Elevator System",
+  "seoTitle": "Design an Elevator (Smart Elevator) System",
+  "description": "Design an elevator control system — modelling cars, hall and car calls, dispatching requests to cars, the SCAN/LOOK scheduling algorithm, destination dispatch for smart elevators, safety states and monitoring.",
+  "tags": [
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🛗",
+      "title": "What is an Elevator System?",
+      "text": "An elevator system controls a bank of elevator cars in a building. People press **hall call** buttons (up/down) on each floor and **car call** buttons inside cars; the controller decides which car serves each call and in what order each car stops. A **smart elevator** uses **destination dispatch**: people enter their destination floor in the lobby, and the system groups passengers going to nearby floors into the same car. It's a popular object-oriented and real-time design question."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Passengers should be able to request a car from any floor (up or down) or enter a destination (smart mode).",
+        "Passengers inside a car should be able to select destination floors.",
+        "The controller should assign each hall call to a car and decide each car's stop order.",
+        "Cars should handle door control, overload, emergency stop and out-of-service states.",
+        "Building staff should see the status of every car and fault alerts."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Motor control and physical safety circuits (handled by certified hardware).",
+        "Fire service mode details."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Safety first: software never overrides hardware safety interlocks; failures fail safe.",
+        "Low average wait and travel time, with no request starving.",
+        "Responsive: button presses acknowledged instantly; dispatch decisions in milliseconds.",
+        "Each car keeps working if the group controller fails.",
+        "Energy efficiency (avoid needless trips)."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Cloud dependency for core operation."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- hall calls / destination entry",
+        "- car calls",
+        "- assign calls + order stops",
+        "- doors, overload, emergency states",
+        "- monitoring + alerts",
+        "",
+        "Non-functional",
+        "- safety first, fail safe",
+        "- low wait, no starvation",
+        "- instant acknowledgement",
+        "- cars work if group controller fails",
+        "- energy efficient"
+      ],
+      "caption": "Elevator Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**ElevatorCar**: ID, current floor, direction, state (idle, moving, doors open, maintenance), load, stop queue.",
+        "**Request**: hall call (floor + direction) or car call (car + floor), or destination request (from floor, to floor).",
+        "**Floor**: buttons and displays.",
+        "**GroupController**: assigns hall calls to cars using a dispatch strategy.",
+        "**CarController**: runs a single car's state machine and stop order."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Object-oriented sketch: `GroupController` holds `ElevatorCar`s and a `DispatchStrategy` (interface: `assign(request, cars)`); each `ElevatorCar` has a `CarController` with a state machine and a `StopScheduler`."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "(floor panel)  hallCall(floor, direction)            -> assigned car shown (smart mode)\n(lobby kiosk)  destinationCall(fromFloor, toFloor)   -> \"Go to car C\"\n(car panel)    carCall(carId, floor)\n(car -> group) status(carId, floor, direction, state, load)   (every ~100 ms)\n(monitoring)   GET /cars -> statuses, faults"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-car-controllers",
+      "text": "1) Car controllers"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each car runs its own **CarController**: a state machine (`IDLE → MOVING_UP/DOWN → DOORS_OPENING → DOORS_OPEN → DOORS_CLOSING`) plus a set of target floors. It moves toward targets, stops when reaching one, opens doors, and continues. Safety inputs (door sensors, overload, emergency stop) are handled by hardware interlocks, and the controller simply moves to a safe state."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-group-controller-and-dispatch",
+      "text": "2) Group controller and dispatch"
+    },
+    {
+      "type": "paragraph",
+      "text": "When a hall call arrives, the **GroupController** asks the `DispatchStrategy` to choose a car, using each car's position, direction, load and existing stops, and adds the floor to that car's targets."
+    },
+    {
+      "type": "diagram",
+      "file": "01-controllers.svg",
+      "caption": "Controllers"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-stop-ordering-within-a-car",
+      "text": "3) Stop ordering within a car"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each car orders its stops with the **LOOK** algorithm (a variant of SCAN, the \"elevator algorithm\"): keep moving in the current direction, serving every target on the way, until there are no more targets ahead; then reverse. This prevents bouncing back and forth and guarantees every request is served on the next sweep."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-monitoring",
+      "text": "4) Monitoring"
+    },
+    {
+      "type": "paragraph",
+      "text": "Cars report status to the group controller, which forwards it to a **building monitoring** service for dashboards, alerts (door faults, stuck cars) and maintenance scheduling."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-which-dispatch-strategy",
+      "text": "1) Which dispatch strategy?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Nearest car",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Assign each hall call to the closest car."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A close car heading the other way may take ages to come back; cars bunch together; some requests wait very long."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Nearest car moving in the right direction",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Prefer cars already moving toward the floor in the requested direction; otherwise idle cars; otherwise the car that will reverse soonest."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Ignores load and the cost to passengers already in the car."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Cost-based assignment with re-evaluation",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "For each candidate car, estimate the **total added cost** of taking the call: the new passenger's waiting time plus the extra delay for passengers already aboard, using travel time, door time per stop and load. Assign to the lowest-cost car, and **re-evaluate** unconfirmed assignments as conditions change. Apply **traffic-pattern modes**: in the morning up-peak, park idle cars at the lobby; at lunch, spread them across floors."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Estimates need a model of travel and door times; display the assigned car only once the choice is stable."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-does-destination-dispatch-help",
+      "text": "2) How does destination dispatch help?"
+    },
+    {
+      "type": "paragraph",
+      "text": "With destination entry, the system knows where each passenger is going before choosing a car, so it can **group** people heading to nearby floors into the same car. Each car makes fewer stops, travel time drops, and the building moves more people per hour at peak. The cost is that passengers must follow the kiosk's assignment (\"Go to car C\"), and the lobby kiosks become the main interface."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Address failure isolation: if the group controller fails, each car falls back to serving its own car calls and a default hall-call pattern, so people aren't trapped and service continues degraded."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-prevent-starvation",
+      "text": "3) How do we prevent starvation?"
+    },
+    {
+      "type": "paragraph",
+      "text": "LOOK guarantees each car eventually reaches every target, but a hall call could be repeatedly reassigned. Track each request's **age** and add a growing penalty to the cost function so old requests win; if a request exceeds a maximum wait, force-assign it to the next available car."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What does the LOOK algorithm do?",
+      "options": [
+        "Serves the nearest floor first",
+        "Keeps moving in one direction serving stops until none remain ahead, then reverses",
+        "Random order",
+        "Always returns to the lobby"
+      ],
+      "answer": 1,
+      "explanation": "It avoids bouncing and guarantees service on the next sweep."
+    },
+    {
+      "question": "Why can 'nearest car' dispatch perform badly?",
+      "options": [
+        "It's too complex",
+        "A nearby car may be heading away and take a long time to return",
+        "Cars are always full",
+        "It ignores floors"
+      ],
+      "answer": 1,
+      "explanation": "Direction and existing stops matter more than distance alone."
+    },
+    {
+      "question": "How does destination dispatch improve throughput?",
+      "options": [
+        "Cars move faster",
+        "It groups passengers going to nearby floors into the same car, reducing stops",
+        "It removes buttons",
+        "It uses fewer cars"
+      ],
+      "answer": 1,
+      "explanation": "Fewer stops per trip means more people moved per hour."
+    },
+    {
+      "question": "What happens if the group controller fails?",
+      "options": [
+        "All cars stop",
+        "Cars fall back to serving their own calls in a degraded mode",
+        "Doors stay open",
+        "The building is evacuated"
+      ],
+      "answer": 1,
+      "explanation": "Each car controller can operate independently."
+    }
+  ]
+}

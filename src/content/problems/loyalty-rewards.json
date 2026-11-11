@@ -1,0 +1,361 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "loyalty-rewards",
+  "category": "Common Problems",
+  "title": "Loyalty Rewards",
+  "seoTitle": "Design a Loyalty Rewards Program",
+  "description": "Design a loyalty rewards program — earning points from purchases via configurable rules, a points ledger with expiry, redemptions, tiers, and handling refunds.",
+  "tags": [
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🎁",
+      "title": "What is a Loyalty Rewards Program?",
+      "text": "A loyalty program gives customers points for purchases and other actions, and lets them redeem points for discounts, free items or perks. Airlines, coffee chains and retailers all run them. Customers often move up **tiers** (Silver, Gold) based on how much they spend in a year, unlocking better earn rates."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Customers should earn points when they make purchases, according to configurable rules (e.g. 1 point per dollar, double points on promotions).",
+        "Customers should see their points balance and history.",
+        "Customers should be able to redeem points at checkout.",
+        "Points should expire after a period (e.g. 12 months).",
+        "Customers should move between tiers based on yearly spend."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Partner networks (earning points at other companies).",
+        "Fraud detection beyond basic limits."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Balances must be accurate: points are a liability on the company's books.",
+        "Redemption at checkout must be fast (< 100 ms) and never let a customer spend points twice.",
+        "Earning can be slightly delayed (seconds to minutes).",
+        "Scale to ~50M members and ~5k transactions per second at peak."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Real-time tier changes (daily is fine)."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- earn points via rules",
+        "- balance + history",
+        "- redeem at checkout",
+        "- expiry",
+        "- tiers",
+        "",
+        "Non-functional",
+        "- accurate balances",
+        "- redeem < 100ms, no double spend",
+        "- earning can lag",
+        "- 50M members"
+      ],
+      "caption": "Loyalty Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Member**: customer ID, tier, tier-qualifying spend this year.",
+        "**Points lot**: points earned from one event, with an earn date and expiry date and remaining amount.",
+        "**Points transaction**: earn, redeem, expire or adjust — an immutable ledger record.",
+        "**Earn rule**: condition (category, promotion, tier) and multiplier."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /members/:id/points -> { balance, expiringSoon[], tier }\nGET  /members/:id/points/history?cursor=\nPOST /redemptions { memberId, points, orderId, idempotencyKey } -> { redemptionId, value }\nPOST /redemptions/:id/cancel\n(internal) purchase events consumed from the orders stream"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-earning-points",
+      "text": "1) Earning points"
+    },
+    {
+      "type": "paragraph",
+      "text": "The order system publishes `order.completed` events. An **Earn Service** consumes them, evaluates **earn rules** (base rate × tier multiplier × active promotions), and writes a **points lot** and an `earn` transaction. Processing is idempotent by order ID, so a redelivered event doesn't award points twice."
+    },
+    {
+      "type": "diagram",
+      "file": "01-earning.svg",
+      "caption": "Earning"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-balance-and-history",
+      "text": "2) Balance and history"
+    },
+    {
+      "type": "paragraph",
+      "text": "The balance is the sum of remaining points across unexpired lots. We store it on the member row too, updated in the same transaction as each points change, so balance reads are a single lookup."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-redeeming-at-checkout",
+      "text": "3) Redeeming at checkout"
+    },
+    {
+      "type": "paragraph",
+      "text": "Checkout calls the **Redemption Service**, which in one transaction checks the balance, consumes points from the **oldest lots first** (so points nearest expiry are used first), writes a `redeem` transaction and reduces the balance. If the order is later cancelled, a reversing transaction restores the points."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-expiry-and-tiers",
+      "text": "4) Expiry and tiers"
+    },
+    {
+      "type": "paragraph",
+      "text": "A daily **expiry job** finds lots past their expiry date with points remaining, writes `expire` transactions and reduces balances. A **tier job** recalculates tiers from qualifying spend and notifies customers who move up or down."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-prevent-double-redemption",
+      "text": "1) How do we prevent double redemption?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Check balance in the app",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Read the balance, then write the redemption."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Two checkouts at the same moment (app and in-store) both pass the check."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Conditional decrement",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "`UPDATE members SET balance = balance - 500 WHERE id = ? AND balance >= 500` in the same transaction as the redemption record."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Correct, but checkout retries may still create two redemptions for one order."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Conditional decrement + idempotent redemptions",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Use the conditional decrement and make redemption **idempotent by order ID**: a unique constraint on `(memberId, orderId)` means a retried checkout returns the existing redemption. For checkout flows that may be abandoned, **reserve** points first (status `held` with a short expiry) and **confirm** when payment succeeds; a sweeper releases expired holds."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Holds reduce the available balance temporarily, which the UI should explain."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-handle-refunds-of-purchases-that-earned-points",
+      "text": "2) How do we handle refunds of purchases that earned points?"
+    },
+    {
+      "type": "paragraph",
+      "text": "A refunded order should claw back the points it earned. The Earn Service consumes `order.refunded` and writes a negative adjustment against the original lot. If the customer already spent those points, the balance can go **negative**; policy decides whether to allow that (and recover from future earning) or charge the cash difference."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention that outstanding points are a financial liability. Finance needs the total unexpired balance and expected breakage (points that will never be redeemed) — another reason for an exact, append-only ledger."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-scale-to-50m-members",
+      "text": "3) How do we scale to 50M members?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Shard the ledger by **member ID**: every operation touches one member, so there are no cross-shard transactions. History is read from a replica or a separate store fed by CDC. The expiry job runs per shard over an index on `expiresAt`, processing lots in batches so it doesn't spike database load at midnight."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why track points in lots rather than only a balance?",
+      "options": [
+        "It's faster",
+        "Each lot has its own expiry date",
+        "To save storage",
+        "Regulations require lots"
+      ],
+      "answer": 1,
+      "explanation": "Lots let points expire on their own schedule and be consumed oldest first."
+    },
+    {
+      "question": "How do we avoid awarding points twice for one order?",
+      "options": [
+        "Hope events arrive once",
+        "Process earn events idempotently by order ID",
+        "Delete duplicates nightly",
+        "Use a bigger queue"
+      ],
+      "answer": 1,
+      "explanation": "Event streams redeliver, so earning must be idempotent."
+    },
+    {
+      "question": "What stops two simultaneous checkouts spending the same points?",
+      "options": [
+        "Caching the balance",
+        "A conditional decrement plus a unique redemption per order",
+        "Rate limiting",
+        "Points can't be spent"
+      ],
+      "answer": 1,
+      "explanation": "The database enforces both the balance check and idempotency."
+    },
+    {
+      "question": "What happens when a purchase that earned points is refunded?",
+      "options": [
+        "Nothing",
+        "A negative adjustment claws back the points",
+        "The member is banned",
+        "Points double"
+      ],
+      "answer": 1,
+      "explanation": "Adjustments keep the ledger consistent with real purchases."
+    }
+  ]
+}

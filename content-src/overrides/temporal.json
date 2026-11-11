@@ -1,0 +1,48 @@
+{
+  "quiz": [
+    {
+      "question": "Which part of a Temporal application should perform an external operation such as charging a card?",
+      "options": [
+        "An Activity",
+        "Mutable State",
+        "A Signal",
+        "A Workflow's replay loop"
+      ],
+      "answer": 0,
+      "explanation": "Side effects belong in Activities; Workflows orchestrate and must be deterministic."
+    },
+    {
+      "question": "Why must Workflow code be deterministic?",
+      "options": [
+        "To run faster",
+        "Temporal replays the workflow history to rebuild state after failures",
+        "To reduce storage",
+        "Because Activities are deterministic"
+      ],
+      "answer": 1,
+      "explanation": "Replay must make the same decisions to arrive at the same state."
+    },
+    {
+      "question": "What does Temporal persist so a workflow survives a crash?",
+      "options": [
+        "The process memory",
+        "An event history of what the workflow has done",
+        "Only the final result",
+        "Nothing"
+      ],
+      "answer": 1,
+      "explanation": "The history of completed steps lets another worker resume exactly where it left off."
+    },
+    {
+      "question": "How do Activities handle transient failures?",
+      "options": [
+        "They fail the workflow immediately",
+        "Temporal retries them according to a retry policy",
+        "They are skipped",
+        "The client retries"
+      ],
+      "answer": 1,
+      "explanation": "Retry policies with backoff are configured per Activity."
+    }
+  ]
+}

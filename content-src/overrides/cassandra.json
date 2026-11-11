@@ -1,0 +1,48 @@
+{
+  "quiz": [
+    {
+      "question": "What is Apache Cassandra?",
+      "options": [
+        "A distributed NoSQL database with eventual consistency",
+        "A message queue system for real-time communication",
+        "A columnar database for analytics workloads",
+        "A relational database with ACID transactions and SQL compliance"
+      ],
+      "answer": 0,
+      "explanation": "Cassandra is a partitioned wide-column NoSQL store with tunable, typically eventual, consistency."
+    },
+    {
+      "question": "What does the partition key determine in Cassandra?",
+      "options": [
+        "Sort order within a partition",
+        "Which nodes store the row",
+        "The replication factor",
+        "The table's schema version"
+      ],
+      "answer": 1,
+      "explanation": "The partition key is hashed onto the token ring to choose the replica nodes."
+    },
+    {
+      "question": "What does a clustering key control?",
+      "options": [
+        "Which datacenter holds the data",
+        "The sort order of rows within a partition",
+        "Encryption",
+        "Compaction strategy"
+      ],
+      "answer": 1,
+      "explanation": "Clustering columns order rows inside a partition, enabling efficient range queries."
+    },
+    {
+      "question": "With replication factor 3, which read/write consistency combination guarantees reads see the latest write?",
+      "options": [
+        "ONE / ONE",
+        "QUORUM / QUORUM",
+        "ANY / ONE",
+        "ONE / ANY"
+      ],
+      "answer": 1,
+      "explanation": "QUORUM writes (2) plus QUORUM reads (2) overlap on at least one replica since 2 + 2 > 3."
+    }
+  ]
+}

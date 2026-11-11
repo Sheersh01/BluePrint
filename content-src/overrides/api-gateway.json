@@ -1,0 +1,48 @@
+{
+  "quiz": [
+    {
+      "question": "What is the primary function of an API Gateway?",
+      "options": [
+        "User interface rendering and client-side hydration",
+        "Routing requests to backend services",
+        "Data storage and persistence",
+        "Database query optimization"
+      ],
+      "answer": 1,
+      "explanation": "Its core job is routing each request to the right backend service; auth, rate limiting and caching are layered on top."
+    },
+    {
+      "question": "Which concern is commonly handled at the gateway instead of in every service?",
+      "options": [
+        "Business logic",
+        "Authentication and rate limiting",
+        "Database migrations",
+        "Batch analytics"
+      ],
+      "answer": 1,
+      "explanation": "Cross-cutting middleware such as auth, rate limiting and SSL termination is centralised at the gateway."
+    },
+    {
+      "question": "Why should a gateway stay thin?",
+      "options": [
+        "It must run on the client",
+        "Heavy logic there becomes a bottleneck and couples services together",
+        "Gateways can't call services",
+        "To reduce DNS lookups"
+      ],
+      "answer": 1,
+      "explanation": "Business logic belongs in services; a thin gateway scales easily and stays generic."
+    },
+    {
+      "question": "How is an API Gateway usually scaled?",
+      "options": [
+        "Vertically only",
+        "Horizontally behind a load balancer, since it's stateless",
+        "By sharding the database",
+        "It doesn't need scaling"
+      ],
+      "answer": 1,
+      "explanation": "Gateways keep no per-request state, so you add instances behind a load balancer."
+    }
+  ]
+}

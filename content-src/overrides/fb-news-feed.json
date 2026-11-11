@@ -1,0 +1,50 @@
+{
+  "solutions": [
+    { "verdict": "bad", "title": "Shotgun the Requests" },
+    { "verdict": "good", "title": "Async Workers" },
+    { "verdict": "great", "title": "Async Workers with Hybrid Feeds" },
+    { "verdict": "good", "title": "Distributed Post Cache" },
+    { "verdict": "great", "title": "Redundant Post Cache" }
+  ],
+  "quiz": [
+    {
+      "question": "What is the most effective approach to handle hot keys in a distributed cache system?",
+      "options": [
+        "Increase the TTL on every key",
+        "Replicate hot keys across multiple cache instances",
+        "Store hot keys only in the database",
+        "Use a single larger cache node"
+      ],
+      "answer": 1,
+      "explanation": "Keeping redundant copies of popular posts on several cache instances spreads reads so no single node becomes the bottleneck."
+    },
+    {
+      "question": "Why do mega accounts (millions of followers) break a pure fan-out-on-write feed?",
+      "options": [
+        "Their posts are larger",
+        "Each post requires writing to millions of precomputed feeds",
+        "They post less often",
+        "Their followers use older clients"
+      ],
+      "answer": 1,
+      "explanation": "Fanning out to millions of feeds per post is enormous write amplification, which is why hybrid feeds fetch those posts at read time instead."
+    },
+    {
+      "question": "In a hybrid feed, how are posts from very popular accounts handled?",
+      "options": [
+        "They are dropped from feeds",
+        "They are merged into the feed at read time",
+        "They are written to every follower's feed synchronously",
+        "They are only shown to mutual friends"
+      ],
+      "answer": 1,
+      "explanation": "Regular accounts are fanned out on write; posts from mega accounts are pulled in and merged when a user reads their feed."
+    },
+    {
+      "question": "Why can the Post cache use a long TTL with LRU eviction?",
+      "options": ["Posts are rarely edited", "Posts are tiny", "Posts are always strongly consistent", "Caches never run out of memory"],
+      "answer": 0,
+      "explanation": "Posts change rarely, so long TTLs are safe and LRU keeps the most recently read posts in memory."
+    }
+  ]
+}

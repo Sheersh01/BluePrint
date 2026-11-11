@@ -1,0 +1,918 @@
+WhatsApp
+
+Real-time Updates
+By
+Stefan Mai
+·
+Updated
+Feb 16, 2026
+·
+medium
+·
+Asked at:
++19
+Watch Video Walkthrough
+Watch the author walk through the problem step-by-step
+
+Understanding the Problem
+🚗 What is Whatsapp?
+Whatsapp is a messaging service that allows users to send and receive encrypted messages and calls from their phones and computers. Whatsapp is famously built on Erlang and renowned for handling high scale with limited engineering and infrastructure outlay.
+Functional Requirements
+Apps like WhatsApp and Messenger have tons of features, but your interviewer doesn't want you to cover them all. The most obvious capabilities are almost definitely in-scope but it's good to ask your interviewer if they want you to move beyond. Spending too much time in requirements will make it harder for you to give detail in the rest of the interview, so we won't dawdle too long here!
+Core Requirements
+Users should be able to start group chats with multiple participants (limit 100).
+Users should be able to send/receive messages.
+Users should be able to receive messages sent while they are not online (up to 30 days).
+Users should be able to send/receive media in their messages.
+That third requirement isn't obvious to everyone (but it's interesting to design) and If I'm your interviewer I'll probably guide you to it.
+Below the line (out of scope)
+Audio/Video calling.
+Interactions with businesses.
+Registration and profile management.
+First Question
+What are the non-functional requirements of the system?
+
+Try it yourself first
+
+We recommend you to practice the question yourself first to get instant personalized feedback as you go.
+
+Non-Functional Requirements
+Before getting into non-functional requirements, it might make sense to ask your interviewer how the app is used by the majority of users if you haven't used it much. Are users mostly doing 1:1 chats, or is the app for large groups? How often are people sending messages? These questions will help you to understand the system that needs to be built and while they are not explicitly "requirements" they will dictate some design decisions that come later.
+Core Requirements
+Messages should be delivered to available users with low latency, < 500ms.
+We should guarantee deliverability of messages - they should make their way to users.
+The system should be able to handle billions of users with high throughput (we'll estimate later).
+Messages should be stored on centralized servers no longer than necessary.
+The system should be resilient against failures of individual components.
+Below the line (out of scope)
+Exhaustive treatment of security concerns.
+Spam and scraping prevention systems.
+Adding features that are out of scope is a "nice to have". It shows product thinking and gives your interviewer a chance to help you reprioritize based on what they want to see in the interview. That said, it's very much a nice to have. If additional features are not coming to you quickly (or you've already burned some time), don't waste your time and move on. It's easy to use precious time defining features that are out of scope, which provides negligible value for a hiring decision.
+Functional
+Start group chats (limit 100 users)
+Send-receive messages
+Send/receive media
+Access messages after they've been offline
+Non-Functional
+Delivered with low-latency, < 500ms
+Guarantee delivery of messages
+Billions of users, high throughput
+Messages not stored unnecessarily
+Fault-tolerant
+Requirements
+The Set Up
+Planning the Approach
+Before you move on to designing the system, it's important to start by taking a moment to plan your strategy for the session. For this problem, we might first recognize that 1:1 messages are simply a special case of larger chats (with 2 participants), so we'll solve for that general case of group messages even while we focus on the 1:1 case. We can also reflect a little and acknowledge that part of the design will be able durably delivering messages to users, and another is about doing so in realtime.
+After this, we should be able to start our design by walking through our core requirements and solving them as simply as possible. This will get us started with a system that is probably slow and not scalable, but a good starting point for us to optimize in the deep dives.
+In our deep dives we'll address scaling, optimizations, and any additional features/functionality the interviewer might want to throw on the fire.
+Defining the Core Entities
+In the core entities section, we'll think through the main "nouns" of our system. The intent here is to give us the right language to reason through the problem and set the stage for our API and data model.
+Interviewers aren't evaluating you on what you list for core entitites, they're an intermediate step to help you reason through the problem. That doesn't mean they don't matter though! Getting the entities wrong is a great way to start building on a broken foundation - so spend a few moments to get them right and keep moving.
+We can walk through our functional requirements to get an idea of what the core entities are. We need:
+Users
+Chats (2-100 users)
+Messages
+Clients (a user might have multiple devices)
+We'll use this language to reason through the problem.
+API or System Interface
+Next, we'll want to think through the API of our system. Unlike a lot of other products where a REST API is probably appropriate, for a chat app, we're going to have high-frequency updates being both sent and received. This is a perfect use case for a bi-directional socket connection!
+Pattern: Real-time Updates
+WebSocket connections and real-time messaging demonstrate the broader real-time updates pattern used across many distributed systems. Whether it's chat messages, live dashboards, collaborative editing, or gaming, the same principles apply: persistent connections for low latency, pub/sub for scaling across servers, and careful state management for reliability.
+For this interview, we'll use WebSockets (over TLS for security), although a custom protocol over a raw TLS-encrypted TCP connection would also work. The idea will be that users will open the app and connect to the server, opening this socket which will be used to send and receive commands which represent our API.
+As we define our API, we'll specify the commands that are sent and received over the connection by the client.
+First, let's be able to create a chat.
+// -> createChat
+{
+    "participants": [],
+    "name": ""
+} -> {
+    "chatId": ""
+}
+Now we should be able to send messages on the chat.
+// -> sendMessage
+{
+    "chatId": "",
+    "message": "",
+    "attachments": []
+} -> {
+    "status": "SUCCESS" | "FAILURE",
+    "messageId": ""
+}
+We need a way to create attachments (note: I'm going to amend this later in the writeup).
+// -> createAttachment
+{
+    "body": ...,
+    "hash": 
+} -> {
+    "attachmentId": ""
+}
+And we need a way to add/remove users to the chat.
+// -> modifyChatParticipants
+{
+    "chatId": "",
+    "userId": "",
+    "operation": "ADD" | "REMOVE"
+} -> "SUCCESS" | "FAILURE"
+Each of these commands will have parallel commands that are sent to other clients. When the command has been received by clients, they'll send an ack command back to the server letting it know the command has been received (and it doesn't have to be sent again)!
+The message receipt acknowledgement is a bit non-obvious but crucial to making sure we don't lose messages. By forcing clients to ack, we can know for certain that the message has been delivered all the way to the client.
+When a chat is created or updated ...
+// <- chatUpdate
+{
+    "chatId": "",
+    "participants": [],
+} -> "RECEIVED"
+When a message is received ...
+// <- newMessage
+{
+    "chatId": "",
+    "userId": ""
+    "message": "",
+    "attachments": []
+} -> "RECEIVED"
+Etc ...
+Note that enumerating all of these APIs can take time! In the actual interview, I might shortcut by only writing the command names and not the full API. It's also usually a good idea to summarize the API initially before you build out the high-level design in case things need to change. "I'll come back to this as I learn more" is completely acceptable!
+Our whiteboard might look like this:
+Commands Sent
+* createChat
+* sendMessage
+* createAttachment
+* modifyParticipants
+Commands Received
+* newMessage
+* chatUpdate
+Commands Exchanged
+Now that we have a base to work with let's figure out how we can implement them while we satisfy our requirements.
+High-Level Design
+1) Users should be able to start group chats with multiple participants (limit 100)
+For our first requirement, we need a way for a user to create a chat. We'll start with a simple service behind an L4 load balancer (we're using Websockets) which can write Chat metadata to a database. Let's use DynamoDB for fast key/value performance and scalability here, although we have lots of other options.
+Can we use an L7 load balancer? In many cases, yes. There is wide support for Websockets in many modern L7 load balancers. But the important thing is that we don't need any L7 capabilities for this service. L7 load balancers shine when we want to, for instance, route traffic with specific paths or headers to different services. They are also helpful when we may want to spread HTTP requests across many servers even behind a single client connection. But neither of these apply here!
+So using an L4 load balancer is sufficient and will generally be higher performance than a L7 load balancer.
+Client
+Chat Server
+Database
+(DynamoDB)
+Chat
+  id
+  name
+  metadata
+WS 
+Connection
+ChatParticipant
+  chatId
+  participantId
+L4 LB
+Create a Chat
+The steps here are:
+User connects to the service and sends a createChat message.
+The service creates a Chat record in the database along with a ChatParticipant record for each user in the chat. For small chats this can be done in a single DynamoDB transaction (up to 100 items), but for chats near the 100-participant limit we may need to batch the writes.
+The service returns the chatId to the user.
+On the chat table, we'll usually just want to look up the details by the chat's ID. Having a simple primary key on the chat id is good enough for this.
+For the ChatParticipant table, we'll want to be able to (1) look up all participants for a given chat and (2) look up all chats for a given user.
+We can do this with a composite primary key where chatId is the partition key and participantId is the sort key. A Query on the chatId partition key will return all participants for a given chat.
+We'll need a Global Secondary Index (GSI) with participantId as the partition key and chatId as the sort key. This will allow us to efficiently query all chats for a given user. The GSI will automatically be kept in sync with the base table by DynamoDB.
+Great! We got some chats. How about messages?
+2) Users should be able to send/receive messages.
+To allow users to send/receive messages, we're going to need to start taking advantage of the websocket connection that we established. To keep things simple while we get off the ground, let's assume we have a single host for our Chat Server.
+This is obviously a terrible solution for scale (and you might say so to your interviewer to keep them from itching), but it's a good starting point that will allow us to incrementally solve those problems as we go.
+For infrastructure-style interviews, I highly recommend reasoning about a solution on a single node first. Oftentimes the path to scale is straightforward from there.
+If you solve scale first without thinking about how the actual mechanics of your solution work underneath, you're more likely to back yourself into a corner.
+When users make Websocket connections to our Chat Server, we'll want to keep track of their connection with a simple in-memory hash map which will map a user id to a websocket connection. This way we know which users are connected and can send them messages.
+To send a message:
+User sends a sendMessage message to the Chat Server.
+The Chat Server looks up all participants in the chat via the ChatParticipant table.
+The Chat Server looks up the websocket connection for each participant in its internal hash table and sends the message via each connection.
+We're making some really strong assumptions here! We're assuming all users are online, connected to the same Chat Server, and that we have a websocket connection for each of them. But under those conditions this works! So let's keep going.
+3) Users should be able to receive messages sent while they are not online (up to 30 days).
+With our next requirement, we're going to need to start storing messages in our database so that we can deliver them to users even when they're offline. We'll take this as an opportunity to add some robustness to our system.
+Let's keep an "Inbox" for each user which will contain all undelivered messages. When messages are sent, we'll write them to the inbox of each recipient user. If they're already online, we can go ahead and try to deliver the message immediately. If they're not online, we'll store the message and wait for them to come back later.
+How much write throughput does this add? The vast majority of chats are 1:1, and the average user sends about 20 messages per day. With 200M active users, that's 4B messages/day or roughly 40K messages/second. For each message in a 1:1 chat, we write once to Messages and once to Inbox (for the recipient). Even accounting for group chats, we're looking at roughly 100K writes/second — well within DynamoDB's capabilities with userId as the partition key.
+Chat Server
+Database
+(DynamoDB)
+Chat
+  id
+  name
+  metadata
+ChatParticipant
+  chatId
+  participantId
+Chat
+Inbox
+  recipientId
+  messageId
+Message
+  id
+  chatId
+  contents
+  creatorId
+  timestamp
+Messsages
+Client
+WS 
+Connection
+L4 LB
+Send a Message
+So, to send a message:
+Sender sends a sendMessage message to the Chat Server.
+The Chat Server looks up all participants in the chat via the ChatParticipant table.
+The Chat Server (a) writes the message to our Message table and (b) creates an entry in our Inbox table for each recipient.
+The Chat Server returns a SUCCESS or FAILURE to the sender with the final message id.
+The Chat Server looks up the websocket connection for each participant and attempts to deliver the message to each of them via newMessage.
+(For connected clients) Upon receipt, the client will send an ack message to the Chat Server to indicate they've received the message. The Chat Server will then delete the message from the Inbox table.
+For clients who aren't connected, we'll keep their messages in the Inbox table for some time. Later, when the client decides to connect, we'll:
+Look up the user's Inbox and find any undelivered message IDs.
+For each message ID, look up the message in the Message table.
+Write those messages to the client's connection via the newMessage message.
+Upon receipt, the client will send an ack message to the Chat Server to indicate they've received the message.
+The Chat Server will then delete the message from the Inbox table.
+Finally, we'll need to periodically clean up the old messages in the Inbox and messages tables. We can do this by setting a TTL on the items of the tables.
+Great! We knocked out some of the durability issues of our initial solution and enabled offline delivery. Our solution still doesn't scale and we've got a lot more work to do, so let's keep moving.
+4) Users should be able to send/receive media in their messages.
+Our final requirement is that users should be able to send/receive media in their messages.
+Users sending and receiving media is annoying. It's bandwidth- and storage- intensive. While we could potentially do this with our Chat Server and database, it's better to use purpose-built technologies for this. This is in fact how Whatsapp actually works: attachments are uploaded via a separate HTTP service.
+Approach
+The worst approach is to have the Chat Server accept the attachment media over our websocket connection and save it in our database. Then we'll need to add an additional message type for users to retrieve attachments.
+Client
+Chat Server
+Database
+Attachments in DB
+Challenges
+This is not a good solution. First, most databases (including DynamoDB) aren't optimized for handling large binary blobs. Second, we're crippling the bandwidth available to our Chat Servers by occupying them with comparitively dumb storage and retrieval. There are better solutions!
+Approach
+A straightforward approach is to have the Chat Server accept the attachment media, then push it off to blob storage with a TTL of 30 days (remember we don't need to keep messages forever!).
+Users who want to retrieve a particular attachment can then query the blob storage directly (via a pre-signed URL for authorization). Ideally, we'd find a way to expire the media once it had been received by all recipients. While we could put a CDN in front of our blob storage, since we're capped at 100 participants the cache benefits are going to be relatively small.
+
+Use Blob Storage
+Challenges
+Unfortunately, our Chat Servers still have to handle the incoming media and forward it to the blob storage (a wasted step). Expiring attachments once they've been downloaded by all recipients isn't handled. Managing encryption and security will require extra steps.
+Approach
+An ideal approach is that we give our users permission (e.g. via pre-signed URLs) to upload directly to the blob storage. As an example, they might send a getAttachmentTarget message to the Chat Server which returns a pre-signed URL. Once uploaded, the user will have a URL for the attachment which they can send to the Chat Server as an opaque URL.
+Then, our solution works much like the "Good" solution. Users who want to retrieve a particular attachment can then query the blob storage directly (via a pre-signed URL for authorization). Ideally, we'd find a way to expire the media once it had been received by all recipients. While we could put a CDN in front of our blob storage, since we're capped at 100 participants the cache benefits are going to be relatively small.
+Client
+Chat Server
+Database
+Blob Storage
+Retrieve Upload
+Target
+Read/Write
+Media
+Use Presigned URLs
+Challenges
+Expiring attachments once they've been downloaded by all recipients isn't handled. Managing encryption and security will require extra steps.
+Ok awesome, so we have a system which has real-time delivery of messages, persistence to handle offline use-cases, and attachments. It just doesn't scale ... yet!
+Potential Deep Dives
+With the core functional requirements met, it's time to dig into the non-functional requirements via deep dives and solve some of the issues we've earmarked to this point. This includes solving obvious scalability issues as well as auxiliary questions which demonstrate your command of system design.
+The degree to which a candidate should proactively lead the deep dives is a function of their seniority. In this problem, all levels should be quick to point out that my single-host solution isn't going to scale. But beyond these bottlenecks, it's reasonable in a mid-level interview for the interviewer to drive the majority of the deep dives. However, in senior and staff+ interviews, the level of agency and ownership expected of the candidate increases. They should be able to proactively look around corners and identify potential issues with their design, proposing solutions to address them.
+1) How can we handle billions of simultaneous users?
+Our single-host system is convenient but unrealistic. Serving billions of users via a single machine isn't possible and it would make deployments and failures a nightmare. So what can we do? The obvious answer is to try to scale out the number of Chat Servers we have.
+If we have 1b users, we might expect 200m of them to be connected at any one time. Whatsapp famously served 1-2m users per host, but this will require us to have hundreds of chat servers. That's a lot of simultaneous connections (!).
+Note that I've included some back-of-the-envelope calculations here. Your interviewer will likely expect them, but you'll get more mileage from your calculations by doing them just-in-time: when you need to figure out a scaling bottleneck.
+Adding more chat servers also introduces some new problems: now the sending and receiving users might be connected to different hosts. If User A is trying to send a message to User B and C via Chat Server 1, but User C is connected to Chat Server 2, we're going to have a problem.
+User A
+User B
+User C
+Chat Server 1
+Chat Server 2
+1. User A tries to send a message to B and C
+2. Message is delivered to B
+3. Message can't be delivered to C
+ because not connected to Server 1
+Host Confusion
+The issue is one of of routing: we need to route messages to the right Chat Servers in order to deliver them. We have a few options here which are discussed in greatest depth in the Realtime Updates lesson.
+Approach
+The most naive (broken) solution is to put a load balancer in front of our Chat Servers and scale horizontally. Just add some hosts!
+Challenges
+The problem is this won't work. A given server might accept a message to be sent to a Chat, but we're no longer guaranteed it will have the connections to each of the clients who needs to receive it. We won't be able to deliver the events and messages!
+Don't be tempted to do this in an interview!
+Approach
+Many candidates instinctively reach for a queue or stream in order to solve the scaling problem. One example solution would be to create a Kafka topic for every user in the system. The idea here would be that we could keep our Inbox table as a Kafka topic. Then our Chat Servers will subscribe to the topic and deliver messages to the user.
+Under this proposal, when a user connects to our Chat Server, they'd subscribe to the topic for their user ID. When we need to send a message to a given user we'd publish the message to the topic for that user. This message would be received by all the chat servers that have subscribed to that topic, and then the message could be passed on to the websocket connection for that user.
+Challenges
+This unfortunately doesn't work - Kafka is not built for billions of topics and carries significant overhead for each one (order of 50kb per topic, so 50tb+ of storage for 1b users).
+There are potential fixes that you might conceive, like creating "super topics" which group together all of the users on a given Chat Server, but you'll quickly find yourself reinventing the good aspects for alternative solutions below with little of the benefit.
+Approach
+Another approach for us to use is to always assign users to a specific Chat Server based on their user ID. If we do this correctly, we'll always know which Chat Server is responsible for a given user so, when we need to send them messages, we can do so directly.
+To do this we'll need to keep a central registry of how many Chat Servers we have, their addresses, and the which segments of a consistent hash space they own. We might use a service like ZooKeeper or Etcd to do this.
+When a request comes in, we'll connect them to the Chat Server they are assigned to based on their user id. When a new event is created, Chat Servers will connect directly with the Chat Server that "owns" that user id, then call an API which delivers a notification the connected user (if they're connected).
+
+Consistently Hashed Chat Servers
+Challenges
+Each Chat Server will need to maintain connections with each other Chat Server which will require that we keep our Chat Servers big in size and small in number.
+Increasing the number of Chat Servers requires careful orchestration of dropping connections so that users reconnect to other servers without triggering a thundering herd (we need to be able to support users moving between servers). During scaling we need to ensure that events are sent to both servers to prevent dropping messages.
+All of these are solvable problems but your interviewer will expect you to talk about them and how to pull it off. I'm rating this "Good" rather than "Great" because it creates a lot of problems you'll need to solve, but if you've read through our Realtime Updates deep dive and feel prepared to talk about them, go for it!
+Approach
+The last approach is to use a purpose-built system for the bouncing messages between servers.
+Redis Pub/Sub is a good example which uses a very lightweight hashmap of socket connections to allow you to ferry messages to arbitrary destinations. With Pub/Sub you can create a subscription for a given user ID and then publish messages to that subscription which are received "at most once" by the subscribers.
+The difference here with Kafka is that Pub/Sub is not managing storage of messages. Kafka requires significant disk-based overhead per topic (in addition to the messages themselves) since it persists messages to disk and maintains consumer offsets. Redis Pub/Sub channels are much lighter — they're essentially in-memory pointers to subscriber connections with no message persistence. That said, we wouldn't run all our pub/sub through a single Redis instance. In practice, we'd shard across a cluster of Redis instances (partitioning channels by user ID), with each instance handling a fraction of the total channels.
+On connection:
+When users connect to our Chat Server, that server will connect to Pub/Sub to subscribe to the topic for that user ID.
+Any messages received on that subscription are then forwarded on to the websocket connection for that user.
+When a message needs to be sent:
+We publish the message to the Pub/Sub topic for the relevant user ID.
+The message is received by all subscribing Chat Servers.
+Those Chat Servers then forward the message to the user's websocket connection.
+Pub/Sub is "at most once" which means it doesn't guarantee delivery. If there's no subscribers listening or Redis has a transient failure, that message is lost.
+This is acceptable because we write to the Inbox and Message tables before publishing to Pub/Sub. The write path is:
+Write message to Message table + create Inbox entries (durable)
+Return success to sender
+Publish to Pub/Sub for real-time delivery (best-effort)
+If step 3 fails, the message is still durably stored. Recipients will receive it when they reconnect (via the Inbox sync described above) or through periodic polling for connected clients that missed a pub/sub message.
+
+Redis Pub/Sub
+Note: Some readers are concerned about the scalability of Pub/Sub. Beyond the memory constraints (we spoke about those earlier, we don't need much memory!), can we really handle the number of messages? Canva has a nice benchmark of this where they supported 100,000 mouse position updates per second on a single Redis host with 27% utilization! Remember that the Pub/Sub is really dumb and just passing messages, so it can be very efficient and scalable!
+Challenges
+The Pub/Sub implementation introduces additional latency because we need to ferry messages via Redis. This is small (single-digit milliseconds) but it's still a cost.
+We also have connections required between each Chat Server and each Redis cluster server. This is surmountable because the number of instances we'll need is relatively small.
+Should we partition by chat or by user?
+You may have the idea: "why do we have the pub/sub topics/channels be per user rather than per chat?", or maybe your interviewer asks you about this! The right choice is going to depend on (a) the number of chats per user, and (b) the size of those chats. Let's consider two scenarios to make this clear:
+If we partition by chat the total number of channels in the system is 125 per user (250 chats / 2 since each chat is shared). But each chat server still needs to subscribe to 250 channels per connected user (one for each of that user's chats). When a message is sent, the server publishes to just 1 channel.
+If we partition by user there's 1 channel per user. Each chat server subscribes to 1 channel per connected user. When a message is sent, the server publishes to 1 channel (the recipient's).
+In this scenario it should be obvious we prefer to partition by user — 1 subscription per user instead of 250.
+If we partition by chat the total number of channels is 1 per 100 users (since all 100 share a single chat channel). Each chat server subscribes to 1 channel per connected user. When a message is sent, the server publishes to just 1 channel.
+If we partition by user there's 1 channel per user. Each chat server subscribes to 1 channel per connected user. When a message is sent, the server has to publish to 99 channels (one for each other participant).
+In this scenario, we save on the number of publishes by having channels partitioned by chat.
+So which is right for this problem? Whatsapp is dominated by 1:1 chats. Having hundreds of redundant channels stresses Redis for little benefit. We also explicitly put a limit on the number of participants per chat to 100.
+For more senior candidates you might be asked to discuss additional efficiencies you can eke out here. This is an example of a "celebrity problem" where an uncommon edge case (large chats) is disproportionately impacting the system. If this is a problem you want to solve, a good solution is to adaptively change the partitioning strategy based on the size of the chat.
+When users connect, we'll list out all the chats they are part of which are larger than some threshold (say, 25 users). They'll subscribe to channels for those chats specifically in addition to the user-level channels. When a message is sent, if the chat is larger than the threshold, we'll publish to the chat-level channel instead of the user-level channel. There's edge cases here: you need to be careful that you give time for the chat servers to subscribe when the chat size changes, so you might be publishing to both channels for a short time.
+2) What do we do to handle multiple clients for a given user?
+To this point we've assumed a user has a single device, but many users have multiple devices: a phone, a tablet, a desktop or laptop - maybe even a work computer. Imagine my phone had received the latest message but my laptop was off. When I wake it up, I want to make sure that all of the latest messages are delivered to my laptop so that it's in sync. We can no longer rely on the user-level "Inbox" table to keep track of delivery!
+Having multiple clients/devices introduces some new problems:
+First, we'll need to add a way for our design to resolve a user to 1 or more clients that may be active at any one time.
+Second, we need a way to deactivate clients so that we're not unnecessarily storing messages for a client which does not exist any longer.
+Lastly, we need to update our message delivery system so that it can handle multiple clients.
+Let's see if we can account for this with minimal changes to our design.
+We'll need to create a new Clients table to keep track of clients by user id.
+When we look up participants for a chat, we'll need to look up all of the clients for that user.
+We'll need to update our Inbox table to be per-client rather than per-user.
+When we send a message, we'll need to send it to all of the clients for that user.
+On the pub/sub side, nothing needs to change. Chat servers will continue to subscribe to a topic with the userId.
+We'll probably want to introduce some limits (3 clients per account) to avoid blowing up our storage and throughput.
+Chat Server
+Database
+(DynamoDB)
+Chat
+  id
+  name
+  metadata
+ChatParticipant
+  chatId
+  participantId
+Chat
+Inbox
+  recipientClientId
+  messageId
+Message
+  id
+  contents
+  creatorId
+  timestamp
+Messsages
+Clients
+Clients
+  id
+  userId
+Redis Pub/Sub
+Client
+WS 
+Connection
+L4 LB
+Adding clients
+3) What happens if the WebSocket connection fails?
+Users often sit on poor network connections. The WebSocket may technically be open, but the connection is functionally severed—we won't know until we try to send a message and it times out. TCP keepalives can take minutes to detect a dead connection, which is far too slow for a chat app. How can we make sure our users aren't impacted?
+Approach
+Do nothing special. When the connection dies, TCP will eventually time out and the socket will close. The client will reconnect and sync from the Inbox.
+Challenges
+TCP keepalives are slow—often configured for minutes, not seconds. Users could be staring at a "connected" app that's actually dead, missing messages the whole time. Not acceptable for a real-time chat app.
+Approach
+When Chat Server delivers a message over the WebSocket, it waits for an ACK from the client. If no ACK arrives within a short timeout (say, 500-2000ms), the server retries delivery. After a few failed retries, the server assumes the WebSocket is broken and closes it, forcing the client to reconnect and sync from the Inbox.
+This pairs naturally with our existing client ACK mechanism (used to clear the Inbox). We're just adding a server-side timeout to detect when the WebSocket has silently failed.
+Challenges
+This only detects failures when we're actively trying to send messages. If the connection dies during a quiet period, we won't notice until the next message arrives.
+Approach
+The Chat Server sends periodic ping messages (every 10-30 seconds) over the WebSocket. The client must respond with a pong within a timeout (say, 5 seconds). If the client doesn't respond, the server closes the connection.
+When the connection closes, the client reconnects and syncs any missed messages from the Inbox. This catches dead connections within seconds rather than minutes.
+Challenges
+Heartbeats add overhead—with 200M connected users and a 10-second heartbeat interval, that's 20M ping/pong exchanges per second. In practice this is fine (they're tiny messages), but it's worth noting.
+The heartbeats give you a guaranteed upper bound on detection time: if your heartbeat interval is 10s and timeout is 5s, you'll detect any dead connection within 15 seconds.
+4) What happens if Redis fails to deliver a message?
+Redis Pub/Sub is "at most once"—if there's no subscriber listening or Redis has a transient failure, the message is lost. We've already handled durability by writing to the Inbox before publishing to Pub/Sub (importantly this means all messages will eventually get delivered), but how do we ensure connected clients quickly receive messages that Pub/Sub dropped?
+Approach
+Connected clients periodically poll the server for missed messages. Every 30-60 seconds, the client sends a "sync" request. The server checks the Inbox table for any undelivered messages and sends them down.
+Challenges
+This adds load proportional to connected users. With 200M connected users polling every 30 seconds, that's ~7M queries/second just for sync checks. You can mitigate with longer intervals, but you're trading latency for load.
+The approach is "good enough" for most cases—the polling interval is a tunable knob.
+Approach
+Each message gets a monotonically increasing sequence number per chat. Clients track the last sequence number they've seen. If they receive message #5 but last saw #3, they know they missed #4 and request a re-sync. We can generate these sequence numbers in a separate Redis instance with simple INCR (atomic increment) commands.
+Challenges
+Gap detection only works when you do receive a message. If the chat goes quiet after the missed message, you won't detect the gap until the next message arrives. You still need polling as a backstop.
+Approach
+Combine heartbeats (from the previous section) with sequence numbers:
+Global sequence per user: Maintain a single incrementing counter per user. Every message to that user increments their sequence.
+Include sequence in heartbeat: When the server sends a heartbeat ping, include the user's current sequence number.
+Client detects gaps: If the client's local sequence is behind the server's, it immediately requests a sync.
+This gives you fast detection of missed messages (within one heartbeat interval) with minimal additional load because you're already sending heartbeats.
+Challenges
+The global sequence per user requires an atomic counter, which adds coordination. You can use Redis INCR commands, but it's another dependency. The benefit is that a single sequence catches all missed messages regardless of which chat they're in.
+In practice, most production systems combine these strategies: heartbeats detect dead WebSocket connections, sequence numbers on to detect missed messages, and periodic polling serves as a final backstop.
+5) How do we handle out-of-order messages?
+The simple answer is: we don't, or at least not directly.
+Out-of-order messages are a fact of life in distributed systems and engineering such that messages are processed in the exact order they were sent is actually a considerable amount of additional complexity. We'd need to have delays to ensure we have time for late messages to arrive and a re-ordering mechanism to handle them. You can see an example in our Flink deep dive where Flink's Bounded Out-Of-Orderness Watermark Strategy effectively waits for late messages to arrive before processing them.
+But for apps like this, it's not how they work! Users would rather see new messages as quickly as possible than guarantee order. So what do we do?
+All of the Chat Servers will sync their time over NTP (Network Time Protocol). This doesn't guarantee perfect time, but it's pretty good. When a message arrives on the Chat Server, we'll "stamp" it with the time it was received. Then, when clients retrieve messages, they'll have the timestamp that they were received by the server. When we display messages, we display them ordered by this time. Messages have a consistent ordering across all clients even if they arrive in a different order than they are displayed.
+On occasion, this will mean a message will pop-in "above" another message that was actually sent later. Users find this acceptable!
+6) How can we handle a "last seen" functionality?
+Our interviewer asks "how can we add a 'last seen' functionality to chats, which shows you when the other person was last online?"
+Ideally, we want a solution that is both efficient and scalable.
+Approach
+The naive approach is to update a lastSeen timestamp in our database every time a user does anything: sends a message, receives a message, or responds to a heartbeat.
+Challenges
+This creates massive write amplification. With 200M connected users and heartbeats every 10-30 seconds, we're handling millions of writes per second just for last seen updates. Even DynamoDB would struggle with this load, and we'd be paying a fortune for writes that have minimal value.
+The data is also stale immediately after writing—by the time you query it, the user may have done something else. We're paying for strong consistency we don't need.
+Approach
+There's two insights we can use this to our advantage.
+First, when users connect to our Chat Servers, they are creating a new Websocket connection. When they disconnect (or we close the connection due to missed heartbeats), we know about it.
+Second, if users are online they can tell us.
+So what can we do? We'll create a new table in DynamoDB which will keep track of the last disconnect for a given user. Whenever a user disconnects from a Chat Server, we'll update this value using the current timestamp. We can use DynamoDB's conditional expressions (e.g., only update if the new timestamp is greater than the existing one) to ensure that two servers don't race each other and accidentally overwrite a more recent disconnect time.
+Next, we'll have a special request we send from a client who wants to request a "last seen" a given user.
+// -> getLastSeen
+{
+    "targetUserId": "",
+    "requestingUserId": "",
+}
+We'll have a corresponding update message
+// -> updateLastSeen
+{
+    "targetUserId": "",
+    "reporter": "DATABASE" | "SERVER",
+    "lastSeen": "ONLINE" | "$DATE"
+}
+In order to get the last seen for a given user:
+The client publishes a getLastSeen message with their targetUserId and the requestingUserId.
+The Chat Server receives the message. In parallel, it will: 2a) Check the LastSeen table for the targetUserId and publish a updateLastSeen message to the Pub/Sub channel for the requestingUserId. 2b) Forward a getLastSeen message to the Pub/Sub channel for the targetUserId.
+If the target user's Chat Server receives the getLastSeen and the user is connected, it will publish an updateLastSeen message with lastSeen of "ONLINE" to the Pub/Sub channel for the requestingUserId.
+Finally, the client will merge the responses. If it receives an ONLINE message, the bubble is green. If it doesn't, it will show when the user last disconnected from the service.
+This minimizes the storage required (we only need 1 record for every user) and the number of updates (we only need to update our durable storage when a user disconnects).
+Challenges
+It's possible for there to be some delay between the two responses for an online user. We'll need the client to be able to handle this, either by waiting a moment before displaying the result or being able to update the UI seamlessly.
+We are depending on Chat Servers to report disconnect times, which can be a problem if those Chat Servers fail. Fortunately, if the servers fail and the users are still connected, they'll reconnect shortly. If we want to be more robust, we can write to the LastSeen table when the connection happens as well.
+**Title:** Design a Messaging App Like WhatsApp | Hello Interview System Design in a Hurry
+
+**Author:** Stefan Mai
+
+**Date:** 7/17/2024
+
+**Source:** [https://www.hellointerview.com/learn/system-design/problem-breakdowns/whatsapp](https://www.hellointerview.com/learn/system-design/problem-breakdowns/whatsapp)
+
+---
+
+# Page Structure Map
+```text
+Design a Messaging App Like WhatsApp | Hello Interview System Design in a Hurry
+├── Understanding the Problem
+│   ├── Functional Requirements
+│   └── Non-Functional Requirements
+├── The Set Up
+│   ├── Planning the Approach
+│   ├── Defining the Core Entities
+│   └── API or System Interface
+│       └── Pattern: Real-time Updates
+├── High-Level Design
+│   ├── 1) Users should be able to start group chats with multiple participants (limit 100)
+│   ├── 2) Users should be able to send/receive messages.
+│   ├── 3) Users should be able to receive messages sent while they are not online (up to 30 days).
+│   └── 4) Users should be able to send/receive media in their messages.
+├── Potential Deep Dives
+│   ├── 1) How can we handle billions of simultaneous users?
+│   │   └── Should we partition by chat or by user?
+│   ├── 2) What do we do to handle multiple clients for a given user?
+│   ├── 3) What happens if the WebSocket connection fails?
+│   ├── 4) What happens if Redis fails to deliver a message?
+│   ├── 5) How do we handle out-of-order messages?
+│   └── 6) How can we handle a "last seen" functionality?
+```
+
+---
+
+**Up to 25% off Premium** for a limited time
+
+## Understanding the Problem
+
+**🚗 What is Whatsapp?** Whatsapp is a messaging service that allows users to send and receive encrypted messages and calls from their phones and computers. Whatsapp is famously built on Erlang and renowned for handling high scale with limited engineering and infrastructure outlay.
+
+### Functional Requirements
+
+Apps like WhatsApp and Messenger have tons of features, but your interviewer doesn't want you to cover them all. The most obvious capabilities are almost definitely in-scope but it's good to ask your interviewer if they want you to move beyond. Spending too much time in requirements will make it harder for you to give detail in the rest of the interview, so we won't dawdle too long here!
+
+**Core Requirements**
+
+1. Users should be able to start group chats with multiple participants (limit 100).
+2. Users should be able to send/receive messages.
+3. Users should be able to receive messages sent while they are not online (up to 30 days).
+4. Users should be able to send/receive media in their messages.
+
+That third requirement isn't obvious to everyone (but it's interesting to design) and If I'm your interviewer I'll probably guide you to it.
+
+**Below the line (out of scope)**
+
+1. Audio/Video calling.
+2. Interactions with businesses.
+3. Registration and profile management.
+
+First Question
+
+What are the non-functional requirements of the system?
+
+Try it yourself first
+
+We recommend you to practice the question yourself first to get instant personalized feedback as you go.
+
+### Non-Functional Requirements
+
+Before getting into non-functional requirements, it might make sense to ask your interviewer how the app is used by the majority of users if you haven't used it much. Are users mostly doing 1:1 chats, or is the app for large groups? How often are people sending messages? These questions will help you to understand the system that needs to be built and while they are not explicitly "requirements" they will dictate some design decisions that come later.
+
+**Core Requirements**
+
+1. Messages should be delivered to available users with low latency, < 500ms.
+2. We should guarantee deliverability of messages - they should make their way to users.
+3. The system should be able to handle billions of users with high throughput (we'll estimate later).
+4. Messages should be stored on centralized servers no longer than necessary.
+5. The system should be resilient against failures of individual components.
+
+**Below the line (out of scope)**
+
+1. Exhaustive treatment of security concerns.
+2. Spam and scraping prevention systems.
+
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 843.3291015625 234.86328125"><defs></defs><rect x="0" y="0" width="843.3291015625" height="234.86328125" fill="#ffffff"></rect><g transform="translate(10 74.86328125) rotate(0 215.13980102539062 75)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Functional</text> <text x="0" y="25" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Start group chats (limit 100 users)</text> <text x="0" y="50" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Send-receive messages</text> <text x="0" y="75" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Send/receive media</text> <text x="0" y="100" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Access messages after they've been offline</text></g> <g transform="translate(480.109375 10) rotate(0 176.60986328125 100)"><text x="0" y="50" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Non-Functional</text> <text x="0" y="75" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Delivered with low-latency, &lt; 500ms</text> <text x="0" y="100" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Guarantee delivery of messages</text> <text x="0" y="125" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Billions of users, high throughput</text> <text x="0" y="150" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Messages not stored unnecessarily</text> <text x="0" y="175" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Fault-tolerant</text></g></svg>
+
+Requirements
+
+## The Set Up
+
+### Planning the Approach
+
+Before you move on to designing the system, it's important to start by taking a moment to plan your strategy for the session. For this problem, we might first recognize that 1:1 messages are simply a special case of larger chats (with 2 participants), so we'll solve for that general case of group messages even while we focus on the 1:1 case. We can also reflect a little and acknowledge that part of the design will be able durably delivering messages to users, and another is about doing so in realtime.
+
+After this, we should be able to start our design by walking through our core requirements and solving them as simply as possible. This will get us started with a system that is probably slow and not scalable, but a good starting point for us to optimize in the deep dives.
+
+In our deep dives we'll address scaling, optimizations, and any additional features/functionality the interviewer might want to throw on the fire.
+
+### Defining the Core Entities
+
+In the core entities section, we'll think through the main "nouns" of our system. The intent here is to give us the right language to reason through the problem and set the stage for our API and data model.
+
+Interviewers aren't evaluating you on what you list for core entitites, they're an intermediate step to help you reason through the problem. That doesn't mean they don't matter though! Getting the entities wrong is a great way to start building on a broken foundation - so spend a few moments to get them right and keep moving.
+
+We can walk through our functional requirements to get an idea of what the core entities are. We need:
+
+- Users
+- Chats (2-100 users)
+- Messages
+- Clients (a user might have multiple devices)
+
+We'll use this language to reason through the problem.
+
+### API or System Interface
+
+Next, we'll want to think through the API of our system. Unlike a lot of other products where a REST API is probably appropriate, for a chat app, we're going to have high-frequency updates being both sent and received. This is a perfect use case for a bi-directional socket connection!
+
+###### Pattern: Real-time Updates
+
+WebSocket connections and real-time messaging demonstrate the broader **real-time updates pattern** used across many distributed systems. Whether it's chat messages, live dashboards, collaborative editing, or gaming, the same principles apply: persistent connections for low latency, pub/sub for scaling across servers, and careful state management for reliability.
+
+Learn This Pattern
+
+For this interview, we'll use WebSockets (over TLS for security), although a custom protocol over a raw TLS-encrypted TCP connection would also work. The idea will be that users will open the app and connect to the server, opening this socket which will be used to send and receive commands which represent our API.
+
+As we define our API, we'll specify the commands that are sent and received over the connection by the client.
+
+First, let's be able to create a chat.
+
+```
+// -> createChat
+{
+    "participants": [],
+    "name": ""
+} -> {
+    "chatId": ""
+}
+```
+
+Now we should be able to send messages on the chat.
+
+```
+// -> sendMessage
+{
+    "chatId": "",
+    "message": "",
+    "attachments": []
+} -> {
+    "status": "SUCCESS" | "FAILURE",
+    "messageId": ""
+}
+```
+
+We need a way to create attachments (note: I'm going to amend this later in the writeup).
+
+```
+// -> createAttachment
+{
+    "body": ...,
+    "hash": 
+} -> {
+    "attachmentId": ""
+}
+```
+
+And we need a way to add/remove users to the chat.
+
+```
+// -> modifyChatParticipants
+{
+    "chatId": "",
+    "userId": "",
+    "operation": "ADD" | "REMOVE"
+} -> "SUCCESS" | "FAILURE"
+```
+
+Each of these commands will have parallel commands that are sent to other clients. When the command has been received by clients, they'll send an ack command back to the server letting it know the command has been received (and it doesn't have to be sent again)!
+
+The message receipt acknowledgement is a bit non-obvious but crucial to making sure we don't lose messages. By forcing clients to ack, we can know for certain that the message has been delivered all the way to the client.
+
+When a chat is created or updated...
+
+```
+// <- chatUpdate
+{
+    "chatId": "",
+    "participants": [],
+} -> "RECEIVED"
+```
+
+When a message is received...
+
+```
+// <- newMessage
+{
+    "chatId": "",
+    "userId": ""
+    "message": "",
+    "attachments": []
+} -> "RECEIVED"
+```
+
+Etc...
+
+Note that enumerating all of these APIs can take time! In the actual interview, I might shortcut by only writing the command names and not the full API. It's also usually a good idea to summarize the API initially before you build out the high-level design in case things need to change. "I'll come back to this as I learn more" is completely acceptable!
+
+Our whiteboard might look like this:
+
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 505.5703125 174.86328125"><defs></defs><rect x="0" y="0" width="505.5703125" height="174.86328125" fill="#ffffff"></rect><g transform="translate(10 14.86328125) rotate(0 99.43990325927734 75)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Commands Sent</text> <text x="0" y="25" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">* createChat</text> <text x="0" y="50" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">* sendMessage</text> <text x="0" y="75" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">* createAttachment</text> <text x="0" y="100" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">* modifyParticipants</text></g> <g transform="translate(308.73046875 10) rotate(0 93.419921875 37.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Commands Received</text> <text x="0" y="25" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">* newMessage</text> <text x="0" y="50" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">* chatUpdate</text></g></svg>
+
+Commands Exchanged
+
+Now that we have a base to work with let's figure out how we can implement them while we satisfy our requirements.
+
+## High-Level Design
+
+### 1) Users should be able to start group chats with multiple participants (limit 100)
+
+For our first requirement, we need a way for a user to create a chat. We'll start with a simple service behind an L4 load balancer (we're using Websockets) which can write Chat metadata to a database. Let's use DynamoDB for fast key/value performance and scalability here, although we have lots of other options.
+
+Can we use an L7 load balancer? In many cases, yes. There is wide support for Websockets in many modern L7 load balancers. But the important thing is that *we don't need any L7 capabilities for this service*. L7 load balancers shine when we want to, for instance, route traffic with specific paths or headers to different services. They are also helpful when we may want to spread HTTP requests across many servers even behind a single client connection. But neither of these apply here!
+
+So using an L4 load balancer is sufficient and will generally be higher performance than a L7 load balancer.
+
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 1144.7467956542969 251.5390625"><defs></defs><rect x="0" y="0" width="1144.7467956542969" height="251.5390625" fill="#ffffff"></rect><g stroke-linecap="round" transform="translate(10 78.099609375) rotate(0 79.794921875 79.705078125)"><path d="M93.41 1.12 C103.51 1.67, 114.12 7.14, 123.18 12.98 C132.23 18.82, 141.67 27.12, 147.74 36.18 C153.81 45.25, 158.16 56.46, 159.59 67.37 C161.02 78.27, 159.32 91.15, 156.32 101.62 C153.32 112.09, 148.5 121.91, 141.6 130.18 C134.69 138.45, 124.54 146.34, 114.89 151.24 C105.24 156.13, 94.43 159.28, 83.69 159.55 C72.96 159.82, 60.69 156.96, 50.48 152.87 C40.27 148.77, 30.15 142.57, 22.45 134.96 C14.75 127.35, 8.02 117.23, 4.27 107.22 C0.53 97.21, -0.66 85.76, 0 74.89 C0.65 64.03, 3.11 51.64, 8.21 42.05 C13.32 32.46, 21.99 23.88, 30.64 17.35 C39.29 10.82, 48.82 5.6, 60.12 2.89 C71.42 0.18, 91.43 0.75, 98.42 1.1 C105.42 1.45, 102.58 3.55, 102.11 5 M45.58 8.4 C54.56 2.74, 68.31 -0.23, 78.98 -0.76 C89.66 -1.3, 99.79 0.89, 109.63 5.19 C119.48 9.49, 130.32 17.33, 138.06 25.06 C145.79 32.79, 152.53 41.58, 156.04 51.56 C159.56 61.54, 159.92 73.8, 159.14 84.96 C158.35 96.12, 156.21 108.76, 151.32 118.52 C146.44 128.28, 138.72 137.31, 129.84 143.53 C120.97 149.75, 108.95 153.48, 98.07 155.85 C87.18 158.22, 75.18 159.4, 64.55 157.74 C53.91 156.08, 43.3 151.93, 34.27 145.87 C25.24 139.82, 16.02 130.86, 10.36 121.43 C4.7 112, 1.54 99.8, 0.32 89.31 C-0.91 78.82, -0.03 68.6, 3 58.48 C6.03 48.37, 11.52 37.01, 18.5 28.64 C25.47 20.27, 40.4 11.27, 44.83 8.27 C49.26 5.27, 44.19 9.68, 45.08 10.64" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(62.82141897875704 145.44468626280894) rotate(0 27.049972534179688 12.5)"><text x="27.049972534179688" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Client</text></g> <g stroke-linecap="round" transform="translate(509.203125 97.466796875) rotate(0 78.412109375 65.912109375)"><path d="M32 0 C60.87 -1.38, 89.29 -1.15, 124.82 0 M32 0 C56.52 -0.66, 81.9 0.28, 124.82 0 M124.82 0 C146.57 0.22, 154.97 10.07, 156.82 32 M124.82 0 C145.06 -1.64, 156.32 10.29, 156.82 32 M156.82 32 C156.96 54.31, 156.46 76.85, 156.82 99.82 M156.82 32 C156.52 57.49, 156.27 82.6, 156.82 99.82 M156.82 99.82 C156.8 121.16, 146.51 132.59, 124.82 131.82 M156.82 99.82 C158.99 119.94, 145.28 130.56, 124.82 131.82 M124.82 131.82 C92.15 132.2, 62.09 134.27, 32 131.82 M124.82 131.82 C91.03 131.36, 57.33 132, 32 131.82 M32 131.82 C10.08 132.36, -1.96 121.11, 0 99.82 M32 131.82 C10.08 130.39, -0.38 123.12, 0 99.82 M0 99.82 C0.33 80.65, 1.57 65.82, 0 32 M0 99.82 C-0.38 83.08, 0.77 67.02, 0 32 M0 32 C0.8 10.94, 10.61 -1.84, 32 0 M0 32 C-1.28 12.17, 10.55 -1.4, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(528.0652847290039 150.87890625) rotate(0 59.549949645996094 12.5)"><text x="59.549949645996094" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Chat Server</text></g> <g stroke-linecap="round" transform="translate(777.6328125 94.998046875) rotate(0 88.328125 62.013671875)"><path d="M31.01 0 C54.92 1.71, 80.81 0.12, 145.65 0 M31.01 0 C61.73 -0.59, 91.12 -1, 145.65 0 M145.65 0 C165.37 -1.42, 176.21 10.01, 176.66 31.01 M145.65 0 C166.89 -2.05, 175.09 11.19, 176.66 31.01 M176.66 31.01 C178.32 48.66, 177.75 70.6, 176.66 93.02 M176.66 31.01 C176.68 48.04, 176.87 65.46, 176.66 93.02 M176.66 93.02 C178.54 112.63, 165.56 122.93, 145.65 124.03 M176.66 93.02 C177.39 114.18, 167.97 121.87, 145.65 124.03 M145.65 124.03 C114.14 126.86, 81.12 124.39, 31.01 124.03 M145.65 124.03 C121.09 124.02, 96.14 123.73, 31.01 124.03 M31.01 124.03 C9.82 122.78, -0.33 115.4, 0 93.02 M31.01 124.03 C9.52 124.93, -0.74 114.38, 0 93.02 M0 93.02 C-1.87 78.31, -2.21 62.74, 0 31.01 M0 93.02 C-0.1 79.59, -0.53 64.97, 0 31.01 M0 31.01 C-1.12 11.64, 10.24 -1.22, 31.01 0 M0 31.01 C-0.91 11.13, 10.94 1.83, 31.01 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(807.6609802246094 132.01171875) rotate(0 58.299957275390625 25)"><text x="58.299957275390625" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Database</text> <text x="58.299957275390625" y="25" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">(DynamoDB)</text></g> <g stroke-linecap="round"><g transform="translate(678.90234375 164.019732804338) rotate(0 39.77734375 -1.605671975993829)"><path d="M0.25 0.13 C13.3 -0.59, 65.32 -2.87, 78.44 -3.57 M-1.08 -0.85 C12.31 -1.46, 67.4 -1.83, 80.57 -2.22" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(678.90234375 164.019732804338) rotate(0 39.77734375 -1.605671975993829)"><path d="M52.56 8.52 C61.44 3.26, 69.35 0.82, 80.57 -2.22 M52.56 8.52 C59.24 5.21, 64.72 4.02, 80.57 -2.22" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(678.90234375 164.019732804338) rotate(0 39.77734375 -1.605671975993829)"><path d="M52.21 -12 C61.32 -10.87, 69.35 -6.91, 80.57 -2.22 M52.21 -12 C58.92 -10.61, 64.49 -7.11, 80.57 -2.22" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g></g><mask></mask><g transform="translate(979.68359375 10) rotate(0 58.799964904785156 50)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Chat</text> <text x="0" y="25" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">id</text> <text x="0" y="50" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">name</text> <text x="0" y="75" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">metadata</text></g> <g transform="translate(162.07421875 61.8515625) rotate(0 49.859954833984375 25)"><text x="49.859954833984375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">WS </text><text x="49.859954833984375" y="25" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Connection</text></g> <g transform="translate(978.2469329833984 166.5390625) rotate(0 78.24993133544922 37.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">ChatParticipant</text> <text x="0" y="25" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">chatId</text> <text x="0" y="50" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">participantId</text></g> <g stroke-linecap="round" transform="translate(259.68394470214844 94.3916015625) rotate(0 78.412109375 65.912109375)"><path d="M32 0 C69.25 0.9, 101.07 0.3, 124.82 0 M32 0 C64.86 0.44, 96.74 -0.09, 124.82 0 M124.82 0 C145.26 -1.72, 158.09 10.5, 156.82 32 M124.82 0 C144.52 0.37, 156.56 11.73, 156.82 32 M156.82 32 C156.95 58.73, 158.08 81.06, 156.82 99.82 M156.82 32 C155.63 48.95, 156.91 66.43, 156.82 99.82 M156.82 99.82 C156.6 121.44, 146.11 133.56, 124.82 131.82 M156.82 99.82 C157.5 122.45, 148.08 130.22, 124.82 131.82 M124.82 131.82 C103.38 131.82, 81.45 130.02, 32 131.82 M124.82 131.82 C90.06 133.23, 55.53 133.3, 32 131.82 M32 131.82 C10.86 131.42, 1.84 121.74, 0 99.82 M32 131.82 C12.59 130.49, 1.66 120.02, 0 99.82 M0 99.82 C0.42 72.58, 1.32 48.97, 0 32 M0 99.82 C0.05 73.22, -0.73 47.04, 0 32 M0 32 C-1.94 12.52, 9.45 0.14, 32 0 M0 32 C-0.76 10.5, 12.66 -0.44, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(307.4460678100586 147.8037109375) rotate(0 30.649986267089844 12.5)"><text x="30.649986267089844" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">L4 LB</text></g><g stroke-linecap="round"><g transform="translate(177.67808532714844 152.6005859375) rotate(0 34.798828125 -0.796875)"><path d="M-1 -0.17 C10.82 -0.34, 57.98 -1.19, 69.78 -1.57 M0.68 -1.3 C12.46 -1.21, 57.51 0.03, 68.93 -0.02" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(177.67808532714844 152.6005859375) rotate(0 34.798828125 -0.796875)"><path d="M40.61 9.85 C46.19 8.37, 52.33 6.44, 68.93 -0.02 M40.61 9.85 C47.29 7.32, 54.22 5.61, 68.93 -0.02" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(177.67808532714844 152.6005859375) rotate(0 34.798828125 -0.796875)"><path d="M40.89 -10.67 C46.32 -7.94, 52.4 -5.65, 68.93 -0.02 M40.89 -10.67 C47.45 -8.49, 54.32 -5.5, 68.93 -0.02" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(428.55308532714844 166.9287109375) rotate(0 33.478515625 0.19140625)"><path d="M-0.97 -0.57 C10.02 -0.36, 54.99 0.42, 66.51 0.66 M0.72 1.74 C11.46 1.63, 54.12 -0.82, 65.33 -1.32" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(428.55308532714844 166.9287109375) rotate(0 33.478515625 0.19140625)"><path d="M37.7 10.37 C46.46 5.76, 57.53 4.37, 65.33 -1.32 M37.7 10.37 C46.8 6.56, 56.45 2.26, 65.33 -1.32" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(428.55308532714844 166.9287109375) rotate(0 33.478515625 0.19140625)"><path d="M36.65 -10.13 C45.67 -7.56, 57.1 -1.79, 65.33 -1.32 M36.65 -10.13 C46.16 -7.05, 56.17 -4.46, 65.33 -1.32" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g></g><mask></mask></svg>
+
+Create a Chat
+
+The steps here are:
+
+1. User connects to the service and sends a createChat message.
+2. The service creates a Chat record in the database along with a ChatParticipant record for each user in the chat. For small chats this can be done in a single DynamoDB transaction (up to 100 items), but for chats near the 100-participant limit we may need to batch the writes.
+3. The service returns the chatId to the user.
+
+On the chat table, we'll usually just want to look up the details by the chat's ID. Having a simple primary key on the chat id is good enough for this.
+
+For the ChatParticipant table, we'll want to be able to (1) look up all participants for a given chat and (2) look up all chats for a given user.
+
+1. We can do this with a composite primary key where chatId is the partition key and participantId is the sort key. A Query on the chatId partition key will return all participants for a given chat.
+2. We'll need a Global Secondary Index (GSI) with participantId as the partition key and chatId as the sort key. This will allow us to efficiently query all chats for a given user. The GSI will automatically be kept in sync with the base table by DynamoDB.
+
+Great! We got some chats. How about messages?
+
+### 2) Users should be able to send/receive messages.
+
+To allow users to send/receive messages, we're going to need to start taking advantage of the websocket connection that we established. To keep things simple while we get off the ground, let's assume we have a single host for our Chat Server.
+
+This is obviously a terrible solution for scale (and you might say so to your interviewer to keep them from itching), but it's a good starting point that will allow us to incrementally solve those problems as we go.
+
+For infrastructure-style interviews, I highly recommend reasoning about a solution on a single node first. Oftentimes the path to scale is straightforward from there.
+
+If you solve scale first without thinking about how the actual mechanics of your solution work underneath, you're more likely to back yourself into a corner.
+
+When users make Websocket connections to our Chat Server, we'll want to keep track of their connection with a simple in-memory hash map which will map a user id to a websocket connection. This way we know which users are connected and can send them messages.
+
+To send a message:
+
+1. User sends a sendMessage message to the Chat Server.
+2. The Chat Server looks up all participants in the chat via the ChatParticipant table.
+3. The Chat Server looks up the websocket connection for each participant in its internal hash table and sends the message via each connection.
+
+We're making some really strong assumptions here! We're assuming all users are online, connected to the same Chat Server, and that we have a websocket connection for each of them. But under those conditions this works! So let's keep going.
+
+### 3) Users should be able to receive messages sent while they are not online (up to 30 days).
+
+With our next requirement, we're going to need to start storing messages in our database so that we can deliver them to users even when they're offline. We'll take this as an opportunity to add some robustness to our system.
+
+Let's keep an "Inbox" for each user which will contain all undelivered messages. When messages are sent, we'll write them to the inbox of each recipient user. If they're already online, we can go ahead and try to deliver the message immediately. If they're not online, we'll store the message and wait for them to come back later.
+
+How much write throughput does this add? The vast majority of chats are 1:1, and the average user sends about 20 messages per day. With 200M active users, that's 4B messages/day or roughly **40K messages/second**. For each message in a 1:1 chat, we write once to Messages and once to Inbox (for the recipient). Even accounting for group chats, we're looking at roughly **100K writes/second** — well within DynamoDB's capabilities with userId as the partition key.
+
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 1264.8235931396484 755.607421875"><defs></defs><rect x="0" y="0" width="1264.8235931396484" height="755.607421875" fill="#ffffff"></rect><g stroke-linecap="round" transform="translate(496.6611328125 243.7724609375) rotate(0 78.412109375 65.912109375)"><path d="M32 0 C66.25 1.13, 105.15 -0.1, 124.82 0 M32 0 C61.28 -0.02, 89.41 0.21, 124.82 0 M124.82 0 C145.35 0.23, 155.05 10.36, 156.82 32 M124.82 0 C147.46 -1.38, 156.1 8.38, 156.82 32 M156.82 32 C157.81 48.31, 158.08 66.14, 156.82 99.82 M156.82 32 C156.18 51.02, 155.88 69.17, 156.82 99.82 M156.82 99.82 C158.5 120.09, 148.1 130.05, 124.82 131.82 M156.82 99.82 C156.91 122.57, 147.96 132.46, 124.82 131.82 M124.82 131.82 C92.75 130.53, 59.07 131.68, 32 131.82 M124.82 131.82 C89.36 133.53, 54.51 133.64, 32 131.82 M32 131.82 C9.23 132.82, -0.55 122.83, 0 99.82 M32 131.82 C9.56 133.36, 2.01 123.3, 0 99.82 M0 99.82 C0.64 78.11, 0.49 61.26, 0 32 M0 99.82 C-0.47 76.07, -1.32 53.35, 0 32 M0 32 C0.11 12.56, 11.12 -1.27, 32 0 M0 32 C0.93 12.32, 12.27 -1.99, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(515.5232925415039 297.1845703125) rotate(0 59.549949645996094 12.5)"><text x="59.549949645996094" y="17.619999999999997" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">Chat Server</text></g> <g stroke-linecap="round" transform="translate(778.0048828125 254.1044921875) rotate(0 88.328125 62.013671875)"><path d="M31.01 0 C70.58 1.01, 111.15 1.01, 145.65 0 M31.01 0 C72.44 -0.89, 113.79 -1.16, 145.65 0 M145.65 0 C167.45 -1.2, 176.02 8.35, 176.66 31.01 M145.65 0 C165.19 1.99, 177.43 10.8, 176.66 31.01 M176.66 31.01 C176.35 45.9, 175.09 63.59, 176.66 93.02 M176.66 31.01 C177.23 51.65, 177.37 72.47, 176.66 93.02 M176.66 93.02 C176.73 114.92, 167.89 124.58, 145.65 124.03 M176.66 93.02 C178.01 113.81, 164.92 125.45, 145.65 124.03 M145.65 124.03 C116.99 125, 86.94 123.63, 31.01 124.03 M145.65 124.03 C100.38 125.67, 56.27 126, 31.01 124.03 M31.01 124.03 C9.38 125.36, 1.75 115.56, 0 93.02 M31.01 124.03 C10.19 123.82, 1.68 114.36, 0 93.02 M0 93.02 C0.61 81.23, -2.07 66.88, 0 31.01 M0 93.02 C0.61 80.8, 0.79 66.05, 0 31.01 M0 31.01 C0.81 11.77, 11.73 -1.73, 31.01 0 M0 31.01 C1.04 9.83, 10.86 -0.19, 31.01 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(808.0330505371094 291.1181640625) rotate(0 58.299957275390625 25)"><text x="58.299957275390625" y="17.619999999999997" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">Database</text> <text x="58.299957275390625" y="42.62" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">(DynamoDB)</text></g> <g stroke-linecap="round"><g transform="translate(666.3603515625 314.4453248125696) rotate(0 46.234375 0.267096791421487)"><path d="M-0.41 1.05 C14.85 1.04, 76.68 0.79, 91.98 0.67 M1.58 0.56 C16.59 0.69, 75.42 2.11, 90.78 2.28" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(666.3603515625 314.4453248125696) rotate(0 46.234375 0.267096791421487)"><path d="M67.14 10.41 C76.88 6.91, 83.4 3.19, 90.78 2.28 M67.14 10.41 C73.51 7.24, 80.06 6.79, 90.78 2.28" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(666.3603515625 314.4453248125696) rotate(0 46.234375 0.267096791421487)"><path d="M67.45 -6.69 C77.2 -4.37, 83.61 -2.28, 90.78 2.28 M67.45 -6.69 C73.83 -4.99, 80.3 -0.58, 90.78 2.28" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g></g><mask></mask><g transform="translate(1054.8447265625 87.3251953125) rotate(0 58.799964904785156 50)"><text x="0" y="17.619999999999997" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">Chat</text> <text x="0" y="42.62" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">id</text> <text x="0" y="67.62" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">name</text> <text x="0" y="92.62" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">metadata</text></g> <g transform="translate(1053.4080657958984 243.8642578125) rotate(0 78.24993133544922 37.5)"><text x="0" y="17.619999999999997" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">ChatParticipant</text> <text x="0" y="42.62" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">chatId</text> <text x="0" y="67.62" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">participantId</text></g> <g stroke-linecap="round" transform="translate(1007.3587493896484 10) rotate(0 123.732421875 159.720703125)"><path d="M32 0 C101.66 -1.28, 172.25 -1.12, 215.46 0 M215.46 0 C238.12 1.9, 247.77 11.29, 247.46 32 M247.46 32 C249.61 99.43, 248.92 168.2, 247.46 287.44 M247.46 287.44 C245.8 308.06, 235.13 319.36, 215.46 319.44 M215.46 319.44 C176 319.36, 133.54 320.93, 32 319.44 M32 319.44 C12.59 319.02, 0.91 310.57, 0 287.44 M0 287.44 C-3.07 211.05, -0.62 132.18, 0 32 M0 32 C1.72 11.91, 11.42 1.95, 32 0" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="8 10"></path></g><g transform="translate(1103.7532806396484 31.7109375) rotate(0 33.17998504638672 17.5)"><text x="0" y="24.668" font-family="Virgil, Segoe UI Emoji" font-size="28px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">Chat</text></g> <g transform="translate(1045.6865234375 437.8623046875) rotate(0 61.029945373535156 37.5)"><text x="0" y="17.619999999999997" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">Inbox</text> <text x="0" y="42.62" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">recipientId</text> <text x="0" y="67.62" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">messageId</text></g> <g transform="translate(1035.2459564208984 563.8896484375) rotate(0 58.64994812011719 75)"><text x="0" y="17.619999999999997" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">Message</text> <text x="0" y="42.62" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">id</text> <text x="0" y="67.62" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">chatId</text> <text x="0" y="92.62" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">contents</text> <text x="0" y="117.62" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">creatorId</text> <text x="0" y="142.62" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">timestamp</text></g> <g stroke-linecap="round" transform="translate(998.2005462646484 360.130859375) rotate(0 126.384765625 192.73828125)"><path d="M32 0 C88.59 0.51, 143.35 0.48, 220.77 0 M220.77 0 C240.17 -0.06, 250.97 9.09, 252.77 32 M252.77 32 C252.77 135.02, 253.18 239.37, 252.77 353.48 M252.77 353.48 C254.42 375.95, 241.57 387.3, 220.77 385.48 M220.77 385.48 C171.51 385.46, 124.55 387.69, 32 385.48 M32 385.48 C12.28 386.08, -0.94 373.91, 0 353.48 M0 353.48 C0.01 258.48, 0.33 166.19, 0 32 M0 32 C-0.4 10.18, 9.99 -0.2, 32 0" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="8 10"></path></g><g transform="translate(1055.9661712646484 381.005859375) rotate(0 72.79998016357422 17.5)"><text x="0" y="24.668" font-family="Virgil, Segoe UI Emoji" font-size="28px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">Messsages</text></g> <g stroke-linecap="round" transform="translate(10 233.974609375) rotate(0 79.794921875 79.705078125)"><path d="M99.03 2.18 C109.39 3.12, 120.36 9.21, 128.77 15.81 C137.18 22.4, 144.34 32.1, 149.51 41.73 C154.68 51.37, 159 62.74, 159.77 73.63 C160.54 84.53, 157.84 96.94, 154.1 107.1 C150.37 117.27, 144.62 127.05, 137.38 134.62 C130.14 142.18, 120.45 148.3, 110.66 152.5 C100.88 156.69, 89.62 160.07, 78.67 159.78 C67.73 159.49, 54.92 155.52, 44.99 150.75 C35.06 145.98, 26.02 139.29, 19.07 131.15 C12.12 123.02, 6.44 112.35, 3.29 101.93 C0.13 91.51, -1.28 79.2, 0.13 68.65 C1.54 58.09, 6.13 47.74, 11.75 38.61 C17.38 29.48, 24.81 19.92, 33.87 13.87 C42.92 7.83, 54.41 3.9, 66.09 2.32 C77.77 0.74, 96.78 3.46, 103.96 4.4 C111.15 5.33, 109.63 6.71, 109.2 7.94 M49.72 6.52 C58.95 1.59, 71.28 0.01, 81.84 0.41 C92.41 0.81, 103.21 4.61, 113.12 8.91 C123.02 13.21, 134.35 18.32, 141.28 26.22 C148.2 34.12, 151.54 45.77, 154.66 56.31 C157.78 66.85, 161.3 78.66, 160.01 89.48 C158.71 100.3, 152.42 112.09, 146.92 121.23 C141.41 130.36, 135.72 138.07, 126.97 144.28 C118.21 150.49, 105.31 156.43, 94.36 158.47 C83.42 160.51, 71.52 159.2, 61.28 156.52 C51.04 153.83, 41.55 148.58, 32.93 142.36 C24.32 136.13, 14.96 128.57, 9.59 119.17 C4.22 109.77, 1.76 96.69, 0.69 85.95 C-0.38 75.21, -0.41 64.78, 3.17 54.74 C6.75 44.69, 14.84 33.63, 22.18 25.69 C29.52 17.75, 42.46 10.17, 47.21 7.1 C51.96 4.04, 50.09 6.25, 50.66 7.31" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(62.82141897875704 301.31968626280894) rotate(0 27.049972534179688 12.499999999999998)"><text x="27.049972534179688" y="17.619999999999997" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">Client</text></g> <g transform="translate(162.07421875 217.7265625) rotate(0 49.859954833984375 25)"><text x="49.859954833984375" y="17.619999999999997" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">WS </text><text x="49.859954833984375" y="42.62" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">Connection</text></g> <g stroke-linecap="round" transform="translate(259.68394470214844 250.2666015625) rotate(0 78.412109375 65.912109375)"><path d="M32 0 C69.96 -1.22, 105.33 0.27, 124.82 0 M32 0 C64.73 0.52, 95.84 1.13, 124.82 0 M124.82 0 C144.53 1.77, 157.62 9.61, 156.82 32 M124.82 0 C144.02 -0.23, 155.95 10.62, 156.82 32 M156.82 32 C156.53 49.97, 155.13 65.64, 156.82 99.82 M156.82 32 C158.23 59.45, 158.45 85.21, 156.82 99.82 M156.82 99.82 C157.92 119.55, 145.06 130.79, 124.82 131.82 M156.82 99.82 C158.45 121.46, 147.09 132.43, 124.82 131.82 M124.82 131.82 C98.06 130.65, 74.4 133.94, 32 131.82 M124.82 131.82 C97.86 131.6, 68.56 132.44, 32 131.82 M32 131.82 C9.97 130.7, 1.59 119.86, 0 99.82 M32 131.82 C10.07 133.15, 0.6 120.15, 0 99.82 M0 99.82 C0.04 82.94, 0.58 71.75, 0 32 M0 99.82 C0.61 80.75, 1.26 62.9, 0 32 M0 32 C-1.13 12.33, 9.76 -1.8, 32 0 M0 32 C-1.21 10.86, 12.22 -1.07, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(307.4460678100586 303.6787109375) rotate(0 30.649986267089844 12.5)"><text x="30.649986267089844" y="17.619999999999997" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">L4 LB</text></g><g stroke-linecap="round"><g transform="translate(177.67808532714844 308.4755859375) rotate(0 34.798828125 -0.796875)"><path d="M0.16 0.52 C11.93 0.14, 58.17 -2.29, 69.91 -2.72 M-1.22 -0.25 C10.49 -0.49, 57.19 -1.66, 69.13 -1.77" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(177.67808532714844 308.4755859375) rotate(0 34.798828125 -0.796875)"><path d="M45.8 7.21 C52.26 5.56, 55.09 4.63, 69.13 -1.77 M45.8 7.21 C51.16 5.65, 58.56 1.86, 69.13 -1.77" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(177.67808532714844 308.4755859375) rotate(0 34.798828125 -0.796875)"><path d="M45.49 -9.89 C51.96 -7.46, 54.87 -4.31, 69.13 -1.77 M45.49 -9.89 C50.95 -6.91, 58.43 -6.17, 69.13 -1.77" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(429.8673629760742 312.4736328125) rotate(0 26.9296875 -0.751953125)"><path d="M0.9 0.34 C9.9 0.31, 45.09 -0.51, 54.03 -0.72 M-0.08 -0.53 C8.77 -0.85, 44.13 -2.03, 53.17 -2.43" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(429.8673629760742 312.4736328125) rotate(0 26.9296875 -0.751953125)"><path d="M30.02 7.01 C37.62 4.27, 45.34 2.32, 53.17 -2.43 M30.02 7.01 C37.73 3.32, 46.49 0.52, 53.17 -2.43" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(429.8673629760742 312.4736328125) rotate(0 26.9296875 -0.751953125)"><path d="M29.37 -10.08 C37.09 -7.67, 45.01 -4.46, 53.17 -2.43 M29.37 -10.08 C37.23 -7.8, 46.21 -4.65, 53.17 -2.43" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask></svg>
+
+Send a Message
+
+So, to send a message:
+
+1. Sender sends a sendMessage message to the Chat Server.
+2. The Chat Server looks up all participants in the chat via the ChatParticipant table.
+3. The Chat Server (a) writes the message to our Message table and (b) creates an entry in our Inbox table for each recipient.
+4. The Chat Server returns a SUCCESS or FAILURE to the sender with the final message id.
+5. The Chat Server looks up the websocket connection for each participant and attempts to deliver the message to each of them via newMessage.
+6. (For connected clients) Upon receipt, the client will send an ack message to the Chat Server to indicate they've received the message. The Chat Server will then delete the message from the Inbox table.
+
+For clients who aren't connected, we'll keep their messages in the Inbox table for some time. Later, when the client decides to connect, we'll:
+
+1. Look up the user's Inbox and find any undelivered message IDs.
+2. For each message ID, look up the message in the Message table.
+3. Write those messages to the client's connection via the newMessage message.
+4. Upon receipt, the client will send an ack message to the Chat Server to indicate they've received the message.
+5. The Chat Server will then delete the message from the Inbox table.
+
+Finally, we'll need to periodically clean up the old messages in the Inbox and messages tables. We can do this by setting a TTL on the items of the tables.
+
+Great! We knocked out some of the durability issues of our initial solution and enabled offline delivery. Our solution still doesn't scale and we've got a lot more work to do, so let's keep moving.
+
+### 4) Users should be able to send/receive media in their messages.
+
+Our final requirement is that users should be able to send/receive media in their messages.
+
+Users sending and receiving media is annoying. It's bandwidth- and storage- intensive. While we could potentially do this with our Chat Server and database, it's better to use purpose-built technologies for this. This is in fact how Whatsapp actually works: attachments are uploaded via a separate HTTP service.
+
+Ok awesome, so we have a system which has real-time delivery of messages, persistence to handle offline use-cases, and attachments. It just doesn't scale... yet!
+
+## Potential Deep Dives
+
+With the core functional requirements met, it's time to dig into the non-functional requirements via deep dives and solve some of the issues we've earmarked to this point. This includes solving obvious scalability issues as well as auxiliary questions which demonstrate your command of system design.
+
+The degree to which a candidate should proactively lead the deep dives is a function of their seniority. In this problem, all levels should be quick to point out that my single-host solution isn't going to scale. But beyond these bottlenecks, it's reasonable in a mid-level interview for the interviewer to drive the majority of the deep dives. However, in senior and staff+ interviews, the level of agency and ownership expected of the candidate increases. They should be able to proactively look around corners and identify potential issues with their design, proposing solutions to address them.
+
+### 1) How can we handle billions of simultaneous users?
+
+Our single-host system is convenient but unrealistic. Serving billions of users via a single machine isn't possible and it would make deployments and failures a nightmare. So what can we do? The obvious answer is to try to scale out the number of Chat Servers we have.
+
+If we have 1b users, we might expect 200m of them to be connected at any one time. Whatsapp famously served 1-2m users per host, but this will require us to have hundreds of chat servers. That's a lot of simultaneous connections (!).
+
+Note that I've included some back-of-the-envelope calculations here. Your interviewer will likely expect them, but you'll get more mileage from your calculations by doing them just-in-time: when you need to figure out a scaling bottleneck.
+
+Adding more chat servers also introduces some new problems: now the sending and receiving users might be connected to different hosts. If User A is trying to send a message to User B and C via Chat Server 1, but User C is connected to Chat Server 2, we're going to have a problem.
+
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 738.6116333007812 612.71484375"><defs></defs><rect x="0" y="0" width="738.6116333007812" height="612.71484375" fill="#ffffff"></rect><g stroke-linecap="round" transform="translate(10 91.01171875) rotate(0 60.849609375 67.8359375)"><path d="M30.42 0 C50.36 -0.04, 68.74 -0.3, 91.27 0 M30.42 0 C42.81 1.04, 56.44 1.38, 91.27 0 M91.27 0 C112.46 0.74, 120.66 8.61, 121.7 30.42 M91.27 0 C111.74 1.63, 123.22 11.24, 121.7 30.42 M121.7 30.42 C119.86 57, 122.83 83.25, 121.7 105.25 M121.7 30.42 C121.2 54.43, 122.06 76.62, 121.7 105.25 M121.7 105.25 C122.38 126.89, 112.47 134.32, 91.27 135.67 M121.7 105.25 C122.26 125.55, 111.85 134.05, 91.27 135.67 M91.27 135.67 C74.99 134.78, 59.79 135.11, 30.42 135.67 M91.27 135.67 C66.63 135, 42.1 135.32, 30.42 135.67 M30.42 135.67 C8.94 135.98, 1.26 124.66, 0 105.25 M30.42 135.67 C8.54 136.59, 1.34 124.06, 0 105.25 M0 105.25 C-1.36 90.06, 1.14 74.42, 0 30.42 M0 105.25 C0.37 77.59, 0.81 48.28, 0 30.42 M0 30.42 C-1.6 9.61, 8.38 -1.57, 30.42 0 M0 30.42 C0.4 8.35, 7.87 -0.39, 30.42 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(36.94963073730469 146.34765625) rotate(0 33.89997863769531 12.5)"><text x="33.89997863769531" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">User A</text></g> <g stroke-linecap="round" transform="translate(13.572265625 272.21875) rotate(0 60.849609375 67.8359375)"><path d="M30.42 0 C52.28 0.66, 72.84 1.54, 91.27 0 M30.42 0 C49.85 -0.62, 71.2 -0.62, 91.27 0 M91.27 0 C109.58 -0.34, 121.73 10.18, 121.7 30.42 M91.27 0 C111.62 2.12, 119.7 7.98, 121.7 30.42 M121.7 30.42 C120.7 48.11, 120.19 68.01, 121.7 105.25 M121.7 30.42 C122.45 49.4, 121.93 67.33, 121.7 105.25 M121.7 105.25 C120.68 124.29, 110.75 135.36, 91.27 135.67 M121.7 105.25 C121.81 127.2, 111.35 136.66, 91.27 135.67 M91.27 135.67 C68.49 136.86, 49.05 136.86, 30.42 135.67 M91.27 135.67 C73.33 136.09, 54.88 136.02, 30.42 135.67 M30.42 135.67 C9.02 135.61, -1.82 125.09, 0 105.25 M30.42 135.67 C8.01 137.24, 0.47 126.01, 0 105.25 M0 105.25 C-1.43 85.02, -0.64 65.53, 0 30.42 M0 105.25 C-1.5 75.33, -1.04 47.37, 0 30.42 M0 30.42 C-0.22 11.26, 10.28 0.25, 30.42 0 M0 30.42 C-1.17 10.5, 8.89 1.32, 30.42 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(39.81189727783203 327.5546875) rotate(0 34.60997772216797 12.5)"><text x="34.60997772216797" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">User B</text></g> <g stroke-linecap="round" transform="translate(10.216796875 457.80078125) rotate(0 60.849609375 67.8359375)"><path d="M30.42 0 C51.75 1.79, 71.24 -0.54, 91.27 0 M30.42 0 C48.29 0.02, 66.71 -0.56, 91.27 0 M91.27 0 C109.9 -1.58, 120.74 10.01, 121.7 30.42 M91.27 0 C110.87 0.07, 121.75 11.11, 121.7 30.42 M121.7 30.42 C122.7 49.8, 122.82 68.05, 121.7 105.25 M121.7 30.42 C121.18 53.29, 120.56 78.01, 121.7 105.25 M121.7 105.25 C122.74 123.84, 110 134.81, 91.27 135.67 M121.7 105.25 C123.6 125.97, 113.59 134.72, 91.27 135.67 M91.27 135.67 C74.31 136.56, 56.11 136.81, 30.42 135.67 M91.27 135.67 C74.37 136.76, 55.61 137.12, 30.42 135.67 M30.42 135.67 C10.31 137.23, 0.97 126.88, 0 105.25 M30.42 135.67 C10.77 135.28, 2.28 124.81, 0 105.25 M0 105.25 C-0.3 85.29, 1.37 70.54, 0 30.42 M0 105.25 C-0.12 81.75, -0.26 58.41, 0 30.42 M0 30.42 C0.39 9.41, 11.03 -0.26, 30.42 0 M0 30.42 C0.53 11.01, 9.77 1.68, 30.42 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(37.28643035888672 513.13671875) rotate(0 33.77997589111328 12.5)"><text x="33.77997589111328" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">User C</text></g> <g stroke-linecap="round" transform="translate(225.5625 153.66796875) rotate(0 83.466796875 70.19140625)"><path d="M32 0 C65.6 1.39, 94.66 0.55, 134.93 0 M32 0 C72.78 0.09, 111.71 -1.43, 134.93 0 M134.93 0 C156.82 1.33, 167.59 9.96, 166.93 32 M134.93 0 C154.15 -0.49, 168.27 8.71, 166.93 32 M166.93 32 C165.02 52.21, 165.23 77.53, 166.93 108.38 M166.93 32 C165.95 53.61, 166.56 77.31, 166.93 108.38 M166.93 108.38 C166.98 130.55, 154.34 140.11, 134.93 140.38 M166.93 108.38 C168.63 129.76, 154.34 139.99, 134.93 140.38 M134.93 140.38 C109.21 139.78, 79.94 138.79, 32 140.38 M134.93 140.38 C108.18 140.72, 81.34 141.41, 32 140.38 M32 140.38 C12.13 139.83, -1.28 129.7, 0 108.38 M32 140.38 C11.42 141.51, 0.94 130.36, 0 108.38 M0 108.38 C-1.6 86.15, 2.13 66.58, 0 32 M0 108.38 C0.46 83.44, 0.78 56.79, 0 32 M0 32 C1.69 11.98, 9.26 0.86, 32 0 M0 32 C-0.82 9.87, 11.04 1.79, 32 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(241.76934814453125 211.359375) rotate(0 67.25994873046875 12.5)"><text x="67.25994873046875" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Chat Server 1</text></g> <g stroke-linecap="round" transform="translate(221.095703125 365.36328125) rotate(0 83.466796875 70.19140625)"><path d="M32 0 C56.65 1.05, 82.98 -0.02, 134.93 0 M32 0 C57.38 -1.22, 82.42 0.22, 134.93 0 M134.93 0 C155.49 0.35, 165.75 11.04, 166.93 32 M134.93 0 C157.91 -1.55, 167.38 12.7, 166.93 32 M166.93 32 C167.63 59, 165.63 84.46, 166.93 108.38 M166.93 32 C166.84 56.51, 167.43 82.66, 166.93 108.38 M166.93 108.38 C165.78 129.34, 157.51 140.2, 134.93 140.38 M166.93 108.38 C165.59 130.18, 156.52 139.14, 134.93 140.38 M134.93 140.38 C96.01 142.09, 58.01 140.27, 32 140.38 M134.93 140.38 C106.26 141.38, 75.56 140.63, 32 140.38 M32 140.38 C11.64 139.51, 1.26 131.23, 0 108.38 M32 140.38 C12.19 138.94, -0.5 130.69, 0 108.38 M0 108.38 C0.38 81.14, 0.34 54.01, 0 32 M0 108.38 C0.25 83.85, 1.26 58.03, 0 32 M0 32 C-0.8 9.29, 9.25 -0.66, 32 0 M0 32 C-1.97 8.57, 11.74 -0.98, 32 0" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(232.8925552368164 423.0546875) rotate(0 71.6699447631836 12.5)"><text x="71.6699447631836" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Chat Server 2</text></g> <g stroke-linecap="round"><g transform="translate(139.2421875 517.62890625) rotate(0 34.111328125 -27.982421875)"><path d="M-1.07 -0.64 C10.38 -9.97, 56.28 -47.55, 67.64 -56.67 M0.56 1.63 C12.51 -7.49, 58.57 -45.67, 70.05 -55.5" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(139.2421875 517.62890625) rotate(0 34.111328125 -27.982421875)"><path d="M14.27 -26.42 C9.81 -22.09, 6.47 -17.55, -1.07 -0.64 M14.27 -26.42 C8.2 -18.09, 4.18 -8.77, -1.07 -0.64" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(139.2421875 517.62890625) rotate(0 34.111328125 -27.982421875)"><path d="M27.25 -10.53 C20.14 -9.67, 14.07 -8.48, -1.07 -0.64 M27.25 -10.53 C16.67 -7.85, 8.09 -4.1, -1.07 -0.64" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(147.9375 337.60546875) rotate(0 29.267578125 -28.7421875)"><path d="M-0.81 0.74 C9.21 -9.08, 49.41 -48.34, 59.32 -58.08 M0.97 0.08 C10.96 -9.65, 49.29 -47.42, 58.78 -56.86" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(147.9375 337.60546875) rotate(0 29.267578125 -28.7421875)"><path d="M12.17 -26.31 C10.54 -18.76, 5.27 -13.57, -0.81 0.74 M12.17 -26.31 C8.97 -17.84, 5.83 -11.63, -0.81 0.74" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(147.9375 337.60546875) rotate(0 29.267578125 -28.7421875)"><path d="M26.52 -11.63 C21.43 -7.62, 12.8 -5.87, -0.81 0.74 M26.52 -11.63 C19.36 -7.27, 12.24 -5.13, -0.81 0.74" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(142.46875 162.21484375) rotate(0 31.830078125 17.96875)"><path d="M0.38 -0.97 C11.07 5.05, 54.11 29.41, 64.58 35.66 M-0.89 1.14 C9.7 7.38, 53.6 31.49, 64.12 37.05" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(142.46875 162.21484375) rotate(0 31.830078125 17.96875)"><path d="M34.44 32.65 C42.72 35.57, 53.77 34.77, 64.12 37.05 M34.44 32.65 C44.65 34.46, 55.43 35.05, 64.12 37.05" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g><g transform="translate(142.46875 162.21484375) rotate(0 31.830078125 17.96875)"><path d="M44.21 14.61 C49.16 23.57, 56.95 28.8, 64.12 37.05 M44.21 14.61 C51.1 22.73, 58.48 29.61, 64.12 37.05" stroke="#1e1e1e" stroke-width="2" fill="none"></path></g></g><mask></mask><g transform="translate(91.34765625 10) rotate(0 233.2498779296875 12.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">1. User A tries to send a message to B and C</text></g> <g stroke-linecap="round"><g transform="translate(227.796875 44.55859375) rotate(0 -31.8203125 48.9296875)"><path d="M-0.88 0.66 C-10.22 5.92, -45.17 15.16, -55.53 31.46 C-65.89 47.76, -61.88 87.38, -63.05 98.47" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="8 10"></path></g><g transform="translate(227.796875 44.55859375) rotate(0 -31.8203125 48.9296875)"><path d="M-73 70.17 C-68.49 78.36, -64.39 90.71, -63.05 98.47" stroke="#1e1e1e" stroke-width="2.5" fill="none"></path></g><g transform="translate(227.796875 44.55859375) rotate(0 -31.8203125 48.9296875)"><path d="M-52.48 70.39 C-55.03 78.35, -57.99 90.63, -63.05 98.47" stroke="#1e1e1e" stroke-width="2.5" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(489.09375 286.41796875) rotate(0 -149.3046875 24.05078125)"><path d="M-0.03 0.86 C-18.01 9.07, -58.66 42.99, -108.32 48.23 C-157.99 53.47, -266.26 34.94, -298.03 32.29" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="8 10"></path></g><g transform="translate(489.09375 286.41796875) rotate(0 -149.3046875 24.05078125)"><path d="M-268.8 25.55 C-275.11 25.59, -284 30.05, -298.03 32.29" stroke="#1e1e1e" stroke-width="2.5" fill="none"></path></g><g transform="translate(489.09375 286.41796875) rotate(0 -149.3046875 24.05078125)"><path d="M-271.3 45.91 C-276.77 40.61, -285.01 39.72, -298.03 32.29" stroke="#1e1e1e" stroke-width="2.5" fill="none"></path></g></g><mask></mask><g transform="translate(440.171875 246.38671875) rotate(0 144.21987915039062 12.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">2. Message is delivered to B</text></g> <g transform="translate(252.296875 552.71484375) rotate(0 176.62985229492188 25)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#e03131" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">3. Message can't be delivered to C</text> <text x="0" y="25" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#e03131" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">because not connected to Server 1</text></g><g stroke-linecap="round"><g transform="translate(241.640625 562.63671875) rotate(0 -29.79296875 -27.783203125)"><path d="M-0.8 -0.96 C-7.71 -1.08, -31.57 7.53, -41.2 -1.38 C-50.83 -10.29, -55.49 -45.46, -58.57 -54.42" stroke="#e03131" stroke-width="2.5" fill="none" stroke-dasharray="8 10"></path></g><g transform="translate(241.640625 562.63671875) rotate(0 -29.79296875 -27.783203125)"><path d="M-43.01 -30.9 C-49.49 -37.32, -51.89 -44.44, -58.57 -54.42" stroke="#e03131" stroke-width="2.5" fill="none"></path></g><g transform="translate(241.640625 562.63671875) rotate(0 -29.79296875 -27.783203125)"><path d="M-61.77 -26.4 C-62.19 -34.14, -58.55 -42.71, -58.57 -54.42" stroke="#e03131" stroke-width="2.5" fill="none"></path></g></g><mask></mask></svg>
+
+Host Confusion
+
+The issue is one of of routing: we need to route messages to the right Chat Servers in order to deliver them. We have a few options here which are discussed in greatest depth in the Realtime Updates lesson.
+
+#### Should we partition by chat or by user?
+
+You may have the idea: "why do we have the pub/sub topics/channels be per user rather than per chat?", or maybe your interviewer asks you about this! The right choice is going to depend on (a) the number of chats per user, and (b) the size of those chats. Let's consider two scenarios to make this clear:
+
+So which is right for this problem? Whatsapp is dominated by 1:1 chats. Having hundreds of redundant channels stresses Redis for little benefit. We also explicitly put a limit on the number of participants per chat to 100.
+
+For more senior candidates you might be asked to discuss additional efficiencies you can eke out here. This is an example of a "celebrity problem" where an uncommon edge case (large chats) is disproportionately impacting the system. If this is a problem you want to solve, a good solution is to adaptively change the partitioning strategy based on the size of the chat.
+
+When users connect, we'll list out all the chats they are part of which are larger than some threshold (say, 25 users). They'll subscribe to channels for *those chats specifically* in addition to the user-level channels. When a message is sent, if the chat is larger than the threshold, we'll publish to the chat-level channel instead of the user-level channel. There's edge cases here: you need to be careful that you give time for the chat servers to subscribe when the chat size changes, so you might be publishing to both channels for a short time.
+
+### 2) What do we do to handle multiple clients for a given user?
+
+To this point we've assumed a user has a single device, but many users have multiple devices: a phone, a tablet, a desktop or laptop - maybe even a work computer. Imagine my phone had received the latest message but my laptop was off. When I wake it up, I want to make sure that all of the latest messages are delivered to my laptop so that it's in sync. We can no longer rely on the user-level "Inbox" table to keep track of delivery!
+
+Having multiple clients/devices introduces some new problems:
+
+- First, we'll need to add a way for our design to resolve a user to 1 or more clients that may be active at any one time.
+- Second, we need a way to deactivate clients so that we're not unnecessarily storing messages for a client which does not exist any longer.
+- Lastly, we need to update our message delivery system so that it can handle multiple clients.
+
+Let's see if we can account for this with minimal changes to our design.
+
+- We'll need to create a new Clients table to keep track of clients by user id.
+- When we look up participants for a chat, we'll need to look up all of the clients for that user.
+- We'll need to update our Inbox table to be per-client rather than per-user.
+- When we send a message, we'll need to send it to all of the clients for that user.
+- On the pub/sub side, nothing needs to change. Chat servers will continue to subscribe to a topic with the userId.
+
+We'll probably want to introduce some limits (3 clients per account) to avoid blowing up our storage and throughput.
+
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 1263.1939739376012 729.353515625"><defs></defs><rect x="0" y="0" width="1263.1939739376012" height="729.353515625" fill="#ffffff"></rect><g stroke-linecap="round" transform="translate(495.03151361045263 243.7724609375) rotate(0 78.412109375 65.912109375)"><path d="M32 0 C58.15 -0.12, 78.55 1.4, 124.82 0 M32 0 C53.8 0.4, 74.9 -1.13, 124.82 0 M124.82 0 C145.32 -0.76, 157.49 9.19, 156.82 32 M124.82 0 C143.87 -0.86, 158.31 12.35, 156.82 32 M156.82 32 C155.16 50.47, 156.13 70.66, 156.82 99.82 M156.82 32 C155.8 55.3, 155.98 78.05, 156.82 99.82 M156.82 99.82 C155.25 121.29, 147.15 133.43, 124.82 131.82 M156.82 99.82 C158.81 120.43, 147.16 131.89, 124.82 131.82 M124.82 131.82 C92.05 130.82, 62.49 131.47, 32 131.82 M124.82 131.82 C93.49 132.19, 64.16 133.43, 32 131.82 M32 131.82 C9.48 130.36, -0.58 121.13, 0 99.82 M32 131.82 C10.48 130.48, 0.87 120.07, 0 99.82 M0 99.82 C1.28 85.33, 0.8 72.01, 0 32 M0 99.82 C0.79 84.38, 0.4 69.57, 0 32 M0 32 C-1.61 10.09, 10.22 1.63, 32 0 M0 32 C1.01 10.91, 10.53 1.34, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(513.8936733394565 297.1845703125) rotate(0 59.549949645996094 12.5)"><text x="59.549949645996094" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Chat Server</text></g> <g stroke-linecap="round" transform="translate(776.3752636104526 254.1044921875) rotate(0 88.328125 62.013671875)"><path d="M31.01 0 C62.97 -0.54, 98.29 -0.15, 145.65 0 M31.01 0 C72.8 0.59, 115.76 0.23, 145.65 0 M145.65 0 C164.33 -0.74, 177.95 11.8, 176.66 31.01 M145.65 0 C166.1 0.35, 175.4 8.31, 176.66 31.01 M176.66 31.01 C177.25 44.57, 177.06 59.43, 176.66 93.02 M176.66 31.01 C175.61 50.3, 176.89 70.26, 176.66 93.02 M176.66 93.02 C178.38 113.06, 167.19 124.09, 145.65 124.03 M176.66 93.02 C177.62 115.46, 167.48 122.86, 145.65 124.03 M145.65 124.03 C120.29 121.7, 95.44 122.35, 31.01 124.03 M145.65 124.03 C115.72 124.21, 86.69 124.93, 31.01 124.03 M31.01 124.03 C10.17 122.85, 0.76 112.75, 0 93.02 M31.01 124.03 C8.05 126.18, -0.78 115.89, 0 93.02 M0 93.02 C-1.93 77.66, 0.76 63.2, 0 31.01 M0 93.02 C-1.16 74.88, -0.58 58.12, 0 31.01 M0 31.01 C0.88 10.55, 10.22 1.16, 31.01 0 M0 31.01 C0.09 10.03, 12.48 -1.51, 31.01 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(806.403431335062 291.1181640625) rotate(0 58.299957275390625 25)"><text x="58.299957275390625" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Database</text> <text x="58.299957275390625" y="25" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">(DynamoDB)</text></g> <g stroke-linecap="round"><g transform="translate(664.7307323604526 314.4453248125696) rotate(0 46.234375 0.2670967914214941)"><path d="M-0.1 -1.02 C15.17 -1.14, 76.47 -0.03, 91.97 0.08 M-1.61 1.06 C13.43 1.03, 75.1 1.47, 90.76 1.38" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(664.7307323604526 314.4453248125696) rotate(0 46.234375 0.2670967914214941)"><path d="M62.55 11.6 C70.12 7.4, 80.39 5.52, 90.76 1.38 M62.55 11.6 C69.68 10.13, 75.32 7.23, 90.76 1.38" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(664.7307323604526 314.4453248125696) rotate(0 46.234375 0.2670967914214941)"><path d="M62.58 -8.92 C70.28 -6.33, 80.54 -1.42, 90.76 1.38 M62.58 -8.92 C69.5 -5.75, 75.13 -4, 90.76 1.38" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g></g><mask></mask><g transform="translate(1053.2151073604527 87.3251953125) rotate(0 58.799964904785156 50)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Chat</text> <text x="0" y="25" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">id</text> <text x="0" y="50" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">name</text> <text x="0" y="75" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">metadata</text></g> <g transform="translate(1051.7784465938512 243.8642578125) rotate(0 78.24993133544922 37.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">ChatParticipant</text> <text x="0" y="25" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">chatId</text> <text x="0" y="50" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">participantId</text></g> <g stroke-linecap="round" transform="translate(1005.7291301876011 10) rotate(0 123.732421875 159.720703125)"><path d="M32 0 C70.28 -1.38, 105.93 -2.28, 215.46 0 M215.46 0 C235.03 -1.22, 246.67 9.95, 247.46 32 M247.46 32 C245.21 119.55, 245.49 206.19, 247.46 287.44 M247.46 287.44 C245.89 308.91, 237.79 321.05, 215.46 319.44 M215.46 319.44 C144.67 321.09, 75.29 321.25, 32 319.44 M32 319.44 C9.65 317.97, 1.18 307.96, 0 287.44 M0 287.44 C0.95 202.17, 3.21 119.6, 0 32 M0 32 C-1.18 9.2, 10.09 -0.03, 32 0" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="8 10"></path></g><g transform="translate(1102.1236614376012 31.7109375) rotate(0 33.17998504638672 17.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="28px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Chat</text></g> <g transform="translate(1044.0569042354527 437.8623046875) rotate(0 88.07991790771484 37.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Inbox</text> <text x="0" y="25" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">recipientClientId</text> <text x="0" y="50" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">messageId</text></g> <g transform="translate(1033.6163372188512 563.8896484375) rotate(0 58.64994812011719 62.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Message</text> <text x="0" y="25" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">id</text> <text x="0" y="50" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">contents</text> <text x="0" y="75" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">creatorId</text> <text x="0" y="100" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">timestamp</text></g> <g stroke-linecap="round" transform="translate(996.5709270626011 360.130859375) rotate(0 127.10546875 179.611328125)"><path d="M32 0 C78.28 -0.57, 123.52 -0.52, 222.21 0 M222.21 0 C243.74 -0.85, 253.49 9.1, 254.21 32 M254.21 32 C256.57 122.03, 255.94 213.05, 254.21 327.22 M254.21 327.22 C255.05 350.09, 244.55 358.21, 222.21 359.22 M222.21 359.22 C179.73 356.58, 137.75 357.24, 32 359.22 M32 359.22 C9.78 360.81, 1.59 347.37, 0 327.22 M0 327.22 C0.51 259.45, 1.19 192.71, 0 32 M0 32 C-1.99 12.54, 9.98 1.91, 32 0" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="8 10"></path></g><g transform="translate(1054.3365520626012 381.005859375) rotate(0 72.79998016357422 17.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="28px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Messsages</text></g> <g stroke-linecap="round" transform="translate(708.6869625240269 431.9912109375) rotate(0 127.10546874999994 85.47265625)"><path d="M32 0 C79.86 -2.14, 127.08 0.08, 222.21 0 M222.21 0 C242.85 -0.52, 254.42 10.28, 254.21 32 M254.21 32 C255.07 66.35, 252.45 102.98, 254.21 138.95 M254.21 138.95 C255.1 159.54, 242.09 172.17, 222.21 170.95 M222.21 170.95 C145.31 172.84, 73.69 172.49, 32 170.95 M32 170.95 C10.99 172.6, 1.91 158.37, 0 138.95 M0 138.95 C0.75 106.15, -1.12 74.28, 0 32 M0 32 C-0.35 9.95, 11.38 0.64, 32 0" stroke="#1e1e1e" stroke-width="2.5" fill="none" stroke-dasharray="8 10"></path></g><g transform="translate(790.0002636104526 453.2822265625) rotate(0 45.47197723388672 17.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="28px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Clients</text></g> <g transform="translate(740.802357116312 512.6416015625) rotate(0 42.01996612548828 37.5)"><text x="0" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Clients</text> <text x="0" y="25" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">id</text> <text x="0" y="50" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">userId</text></g> <g stroke-linecap="round" transform="translate(487.32856408652685 473.85148219373076) rotate(0 87.173828125 62.2578125)"><path d="M31.13 0 C58.23 -0.09, 84.67 1.2, 143.22 0 M31.13 0 C57.08 1.6, 84.47 1.53, 143.22 0 M143.22 0 C164.39 1.94, 172.47 11.04, 174.35 31.13 M143.22 0 C164.88 -0.01, 173.26 8.9, 174.35 31.13 M174.35 31.13 C173.28 54.01, 173.34 75.42, 174.35 93.39 M174.35 31.13 C174.74 54.37, 175.7 76.94, 174.35 93.39 M174.35 93.39 C176.26 112.32, 163.08 124.35, 143.22 124.52 M174.35 93.39 C174.68 112.62, 164.38 124.52, 143.22 124.52 M143.22 124.52 C116.01 125.57, 90.84 123.3, 31.13 124.52 M143.22 124.52 C119.3 125.43, 96.69 124.56, 31.13 124.52 M31.13 124.52 C9.95 124.37, 1.66 112.77, 0 93.39 M31.13 124.52 C11.99 124.62, 0.37 112.69, 0 93.39 M0 93.39 C-2.59 70.58, -1.93 47.95, 0 31.13 M0 93.39 C0.63 77.46, -0.51 62.39, 0 31.13 M0 31.13 C1.45 11.29, 10.82 -1.12, 31.13 0 M0 31.13 C1.03 12.15, 9.5 1.41, 31.13 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g stroke-linecap="round" transform="translate(499.96332971152685 483.57804469373076) rotate(0 87.173828125 62.2578125)"><path d="M31.13 0 C63.34 1.18, 94.16 1.81, 143.22 0 M31.13 0 C57.3 -0.18, 83.85 0, 143.22 0 M143.22 0 C162.1 0.66, 175.14 10.37, 174.35 31.13 M143.22 0 C162.88 -1.48, 175.67 8.51, 174.35 31.13 M174.35 31.13 C173.67 54.94, 175.61 81.13, 174.35 93.39 M174.35 31.13 C174.96 48.24, 175.17 65.39, 174.35 93.39 M174.35 93.39 C173.46 113.97, 164.26 123.19, 143.22 124.52 M174.35 93.39 C174.76 114.15, 162.55 124.42, 143.22 124.52 M143.22 124.52 C120.02 125.36, 92.91 126.86, 31.13 124.52 M143.22 124.52 C109.29 125.48, 74.84 125.42, 31.13 124.52 M31.13 124.52 C12.04 123.14, 1.4 114.23, 0 93.39 M31.13 124.52 C10.75 123.07, 1.62 116.33, 0 93.39 M0 93.39 C-0.71 69.4, -0.4 44.26, 0 31.13 M0 93.39 C-0.87 75.83, 0.3 58.72, 0 31.13 M0 31.13 C0.44 9.26, 11.27 1.54, 31.13 0 M0 31.13 C-0.88 11.79, 10.71 -0.88, 31.13 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(517.3672222286167 533.3358571937308) rotate(0 69.76993560791016 12.5)"><text x="69.76993560791016" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Redis Pub/Sub</text></g> <g stroke-linecap="round"><g transform="translate(525.4202690958549 394.51945094373076) rotate(0 -0.4108125559287714 36.939453125)"><path d="M1.01 -0.79 C0.62 11.82, -1.41 62.31, -1.73 74.92 M0.08 1.41 C0 13.77, 0.81 61.41, 0.51 73.34" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(525.4202690958549 394.51945094373076) rotate(0 -0.4108125559287714 36.939453125)"><path d="M10.22 27.76 C5.84 16.27, 5.63 7.55, 1.01 -0.79 M10.22 27.76 C5.73 17.36, 3.57 6.2, 1.01 -0.79" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(525.4202690958549 394.51945094373076) rotate(0 -0.4108125559287714 36.939453125)"><path d="M-10.29 27 C-7.45 15.61, -0.43 7.16, 1.01 -0.79 M-10.29 27 C-7 16.69, -1.38 5.81, 1.01 -0.79" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(525.4202690958549 394.51945094373076) rotate(0 -0.4108125559287714 36.939453125)"><path d="M-9.71 45.13 C-7.6 53.47, -0.96 64.75, 0.51 73.34 M-9.71 45.13 C-6.71 56.06, -1.51 66.42, 0.51 73.34" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(525.4202690958549 394.51945094373076) rotate(0 -0.4108125559287714 36.939453125)"><path d="M10.81 45.16 C5.69 53.66, 5.1 64.93, 0.51 73.34 M10.81 45.16 C6.03 56.28, 3.45 66.62, 0.51 73.34" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(562.3559078365269 398.77335719373076) rotate(0 0.4609375 33.478515625)"><path d="M-0.91 1.04 C-0.94 12.49, 0.48 56.73, 0.82 67.91 M0.82 0.53 C0.53 11.73, -0.13 55.31, -0.18 66.28" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(562.3559078365269 398.77335719373076) rotate(0 0.4609375 33.478515625)"><path d="M10.03 28.97 C7.74 17.99, 3.4 7.85, -0.91 1.04 M10.03 28.97 C6.35 17.91, 1.14 6.19, -0.91 1.04" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(562.3559078365269 398.77335719373076) rotate(0 0.4609375 33.478515625)"><path d="M-10.49 29.47 C-4.89 18.45, -1.36 8.12, -0.91 1.04 M-10.49 29.47 C-6.02 18.14, -3.09 6.22, -0.91 1.04" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(562.3559078365269 398.77335719373076) rotate(0 0.4609375 33.478515625)"><path d="M-10.14 37.98 C-4.77 48.76, -1.09 60.22, -0.18 66.28 M-10.14 37.98 C-6.05 49.18, -2.97 59.78, -0.18 66.28" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(562.3559078365269 398.77335719373076) rotate(0 0.4609375 33.478515625)"><path d="M10.38 38.2 C7.87 48.74, 3.67 60.11, -0.18 66.28 M10.38 38.2 C6.32 49.38, 1.26 59.89, -0.18 66.28" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(613.1215328365269 399.80460719373076) rotate(0 0.900390625 33.75390625)"><path d="M-0.1 0.95 C0.39 12.22, 1.92 57.51, 2.05 68.67 M-1.61 0.4 C-1.18 11.89, 0.47 56.27, 1.24 67.16" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(613.1215328365269 399.80460719373076) rotate(0 0.900390625 33.75390625)"><path d="M11.12 28.77 C9.94 22.94, 7.78 14.4, -0.1 0.95 M11.12 28.77 C6.8 18.86, 4.11 9.42, -0.1 0.95" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(613.1215328365269 399.80460719373076) rotate(0 0.900390625 33.75390625)"><path d="M-9.39 29.48 C-5.97 23.5, -3.53 14.8, -0.1 0.95 M-9.39 29.48 C-6.88 19.33, -2.74 9.66, -0.1 0.95" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(613.1215328365269 399.80460719373076) rotate(0 0.900390625 33.75390625)"><path d="M-10.45 39.53 C-6 46.16, -3.02 50.07, 1.24 67.16 M-10.45 39.53 C-6.92 48.09, -1.98 57.13, 1.24 67.16" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(613.1215328365269 399.80460719373076) rotate(0 0.900390625 33.75390625)"><path d="M10.05 38.48 C9.9 45.33, 8.28 49.48, 1.24 67.16 M10.05 38.48 C6.75 47.4, 4.86 56.78, 1.24 67.16" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g></g><mask></mask><g stroke-linecap="round" transform="translate(483.3638840076377 232.54125224179847) rotate(0 78.412109375 65.912109375)"><path d="M32 0 C67.84 2.33, 99.22 1.86, 124.82 0 M32 0 C67.37 1.59, 102.79 0.02, 124.82 0 M124.82 0 C144.81 0.93, 155.03 9.35, 156.82 32 M124.82 0 C148.11 -2.12, 155.7 9.71, 156.82 32 M156.82 32 C156.35 51.22, 157.08 74.45, 156.82 99.82 M156.82 32 C157.93 57.93, 156.27 83.08, 156.82 99.82 M156.82 99.82 C158.13 121.28, 144.5 131.01, 124.82 131.82 M156.82 99.82 C158.2 121.4, 147.67 132.01, 124.82 131.82 M124.82 131.82 C95.7 133.07, 69.44 131.34, 32 131.82 M124.82 131.82 C96.41 131.83, 68.17 131.47, 32 131.82 M32 131.82 C11.94 130.89, -1.5 119.55, 0 99.82 M32 131.82 C10.7 132.08, -0.54 122.29, 0 99.82 M0 99.82 C-2.08 77.69, 1.11 53.02, 0 32 M0 99.82 C-0.36 76.87, 0.17 54.9, 0 32 M0 32 C-1.07 11.14, 12.18 -0.45, 32 0 M0 32 C1.18 12.27, 10.78 -2.03, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g stroke-linecap="round" transform="translate(10 215.27540169199233) rotate(0 79.794921875 79.705078125)"><path d="M98.69 1.76 C108.9 3.08, 119.62 9.78, 128.37 16.52 C137.12 23.25, 146 32.56, 151.18 42.19 C156.37 51.82, 158.75 63.57, 159.48 74.29 C160.21 85.01, 159.41 96.27, 155.57 106.53 C151.73 116.78, 144.19 127.84, 136.41 135.83 C128.63 143.81, 118.68 150.6, 108.89 154.44 C99.1 158.28, 88.18 159.36, 77.67 158.86 C67.16 158.37, 55.72 156.15, 45.81 151.47 C35.9 146.8, 25.17 138.99, 18.18 130.82 C11.2 122.66, 6.94 112.86, 3.91 102.47 C0.88 92.08, -1.39 79.29, 0 68.48 C1.39 57.67, 6.32 46.61, 12.27 37.61 C18.22 28.62, 26.72 20.48, 35.7 14.48 C44.68 8.49, 54.19 3.16, 66.16 1.67 C78.13 0.18, 99.69 4.25, 107.52 5.56 C115.35 6.86, 113.81 8.21, 113.16 9.49 M103.49 3.06 C113.51 5.06, 124.22 12.49, 132.61 19.86 C141 27.22, 149.18 37.01, 153.82 47.25 C158.47 57.49, 160.91 70.67, 160.49 81.3 C160.07 91.94, 156.03 101.59, 151.29 111.08 C146.55 120.57, 139.99 130.73, 132.07 138.25 C124.15 145.76, 113.71 152.49, 103.77 156.16 C93.84 159.83, 83.15 161.67, 72.47 160.25 C61.79 158.83, 49.27 153.21, 39.69 147.64 C30.12 142.07, 21.58 135.52, 15.02 126.85 C8.46 118.17, 2.38 106.44, 0.33 95.58 C-1.73 84.73, 0.06 72.23, 2.68 61.71 C5.3 51.18, 9.67 40.89, 16.06 32.41 C22.45 23.94, 31.49 16.2, 41.02 10.86 C50.55 5.52, 62.43 1.45, 73.23 0.38 C84.04 -0.7, 100.66 3.78, 105.88 4.41 C111.09 5.03, 105.15 3.03, 104.52 4.15" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(62.82141897875704 282.6204785798013) rotate(0 27.049972534179688 12.5)"><text x="27.049972534179688" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Client</text></g> <g transform="translate(162.07421875 199.02735481699233) rotate(0 49.859954833984375 25)"><text x="49.859954833984375" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">WS </text><text x="49.859954833984375" y="25" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">Connection</text></g> <g stroke-linecap="round" transform="translate(259.68394470214844 231.56739387949233) rotate(0 78.412109375 65.912109375)"><path d="M32 0 C54.53 -0.16, 81.06 0.43, 124.82 0 M32 0 C60.25 -1.53, 90.08 -1.56, 124.82 0 M124.82 0 C147.85 1.24, 155.82 12.59, 156.82 32 M124.82 0 C146.42 -1.17, 156.49 12.53, 156.82 32 M156.82 32 C156.63 57.72, 157.41 84.65, 156.82 99.82 M156.82 32 C157.9 53.27, 157.14 75.58, 156.82 99.82 M156.82 99.82 C158.73 122.43, 146.1 131.17, 124.82 131.82 M156.82 99.82 C154.93 119.73, 144.94 130.58, 124.82 131.82 M124.82 131.82 C92.45 130.67, 54.84 131.18, 32 131.82 M124.82 131.82 C103.33 133.04, 80.13 131.54, 32 131.82 M32 131.82 C10.6 132.53, -1.81 120.61, 0 99.82 M32 131.82 C12.01 130.07, 0.99 120.84, 0 99.82 M0 99.82 C-0.19 77.08, 0.4 51.67, 0 32 M0 99.82 C0.97 85.63, -0.23 70.47, 0 32 M0 32 C0.84 11.28, 10.35 0.4, 32 0 M0 32 C-1.08 9.31, 12.82 -1.52, 32 0" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(307.4460678100586 284.97950325449233) rotate(0 30.649986267089844 12.5)"><text x="30.649986267089844" y="0" font-family="Virgil, Segoe UI Emoji" font-size="20px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="text-before-edge">L4 LB</text></g><g stroke-linecap="round"><g transform="translate(177.67808532714844 289.77637825449233) rotate(0 34.798828125 -0.796875)"><path d="M-0.07 0.1 C11.63 -0.2, 58.29 -0.21, 69.82 -0.66 M-1.57 -0.89 C10.03 -1, 57.38 -2.15, 68.99 -2.29" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(177.67808532714844 289.77637825449233) rotate(0 34.798828125 -0.796875)"><path d="M41 8.5 C48.47 6.04, 57.25 2.01, 68.99 -2.29 M41 8.5 C47.9 6.99, 52.68 4.97, 68.99 -2.29" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(177.67808532714844 289.77637825449233) rotate(0 34.798828125 -0.796875)"><path d="M40.61 -12.01 C48.38 -9.05, 57.26 -7.66, 68.99 -2.29 M40.61 -12.01 C47.75 -9.03, 52.62 -6.56, 68.99 -2.29" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(427.6145978069418 300.2844519174258) rotate(0 21.8940437384355 0.4369148319242413)"><path d="M0.38 -0.21 C7.59 0.03, 36.08 1.1, 43.29 1.27 M-0.08 -0.8 C7.29 -0.68, 37.05 0.15, 44.26 0.51" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(427.6145978069418 300.2844519174258) rotate(0 21.8940437384355 0.4369148319242413)"><path d="M23.42 7.24 C29.43 4.19, 36.93 2.72, 44.26 0.51 M23.42 7.24 C29.14 5.31, 34.94 3.62, 44.26 0.51" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g><g transform="translate(427.6145978069418 300.2844519174258) rotate(0 21.8940437384355 0.4369148319242413)"><path d="M23.98 -7.73 C29.79 -6.19, 37.11 -3.07, 44.26 0.51 M23.98 -7.73 C29.58 -5.35, 35.21 -2.74, 44.26 0.51" stroke="#1e1e1e" stroke-width="1" fill="none"></path></g></g><mask></mask></svg>
+
+Adding clients
+
+### 3) What happens if the WebSocket connection fails?
+
+Users often sit on poor network connections. The WebSocket may technically be open, but the connection is functionally severed—we won't know until we try to send a message and it times out. TCP keepalives can take minutes to detect a dead connection, which is far too slow for a chat app. How can we make sure our users aren't impacted?
+
+### 4) What happens if Redis fails to deliver a message?
+
+Redis Pub/Sub is "at most once"—if there's no subscriber listening or Redis has a transient failure, the message is lost. We've already handled durability by writing to the Inbox before publishing to Pub/Sub (importantly **this means all messages will eventually get delivered**), but how do we ensure connected clients quickly receive messages that Pub/Sub dropped?
+
+In practice, most production systems combine these strategies: heartbeats detect dead WebSocket connections, sequence numbers on to detect missed messages, and periodic polling serves as a final backstop.
+
+### 5) How do we handle out-of-order messages?
+
+The simple answer is: **we don't**, or at least not directly.
+
+Out-of-order messages are a fact of life in distributed systems and engineering such that messages are processed in the exact order they were sent is actually a considerable amount of additional complexity. We'd need to have delays to ensure we have time for late messages to arrive and a re-ordering mechanism to handle them. You can see an example in our Flink deep dive where Flink's Bounded Out-Of-Orderness Watermark Strategy effectively waits for late messages to arrive before processing them.
+
+But for apps like this, it's not how they work! Users would rather see new messages as quickly as possible than guarantee order. So what do we do?
+
+All of the Chat Servers will sync their time over NTP (Network Time Protocol). This doesn't guarantee perfect time, but it's pretty good. When a message arrives on the Chat Server, we'll "stamp" it with the time it was received. Then, when clients retrieve messages, they'll have the timestamp that they were received by the server. When we display messages, we display them ordered by this time. Messages have a consistent ordering across all clients even if they arrive in a different order than they are displayed.
+
+On occasion, this will mean a message will pop-in "above" another message that was actually sent later. Users find this acceptable!
+
+### 6) How can we handle a "last seen" functionality?
+
+Our interviewer asks "how can we add a 'last seen' functionality to chats, which shows you when the other person was last online?"
+
+Ideally, we want a solution that is both efficient and scalable.
+
+## References
+
+- What Happens When You Make a Move in Lichess
+
+###### Test Your Knowledge
+
+Answer the question below to find your gaps.
+
+Question 1 of 15
+
+Which is NOT a benefit of using acknowledgment patterns in message systems?
+
+1
+
+Enables retry logic
+
+2
+
+Prevents message loss during network failures
+
+3
+
+Reduces server memory usage
+
+4
+
+Confirms message delivery to the recipient
+
+Reading Progress
+
+On This PageUnderstanding the Problem
+
+Functional Requirements
+
+Non-Functional Requirements
+
+The Set Up
+
+Planning the Approach
+
+Defining the Core Entities
+
+API or System Interface
+
+High-Level Design
+
+1) Users should be able to start group chats with multiple participants (limit 100)
+
+2) Users should be able to send/receive messages.
+
+3) Users should be able to receive messages sent while they are not online (up to 30 days).
+
+4) Users should be able to send/receive media in their messages.
+
+Potential Deep Dives
+
+1) How can we handle billions of simultaneous users?
+
+2) What do we do to handle multiple clients for a given user?
+
+3) What happens if the WebSocket connection fails?
+
+4) What happens if Redis fails to deliver a message?
+
+5) How do we handle out-of-order messages?
+
+6) How can we handle a "last seen" functionality?
+
+References

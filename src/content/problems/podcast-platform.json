@@ -1,0 +1,360 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "podcast-platform",
+  "category": "Common Problems",
+  "title": "Podcast Platform",
+  "seoTitle": "Design a Podcast Platform like Apple Podcasts",
+  "description": "Design a podcast platform — ingesting millions of RSS feeds, detecting new episodes efficiently, serving audio from CDNs, subscriptions and new-episode notifications, and syncing playback position.",
+  "tags": [
+    {
+      "label": "Handling Large Blobs",
+      "href": "/learn/system-design/patterns/handling-large-blobs"
+    },
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🎙️",
+      "title": "What is a Podcast Platform?",
+      "text": "A podcast platform (Apple Podcasts, Pocket Casts, Spotify's podcast side) lets listeners find shows, subscribe, and play or download episodes. Unlike music, most podcasts aren't uploaded to the platform: creators publish an **RSS feed** on their own hosting, and the platform must discover new episodes by polling millions of feeds."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "The platform should ingest podcasts from RSS feeds and pick up new episodes soon after publication.",
+        "Users should be able to search and subscribe to shows.",
+        "Subscribers should be notified of new episodes, and episodes can auto-download.",
+        "Users should be able to stream or download episodes and resume where they left off on any device."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Creator hosting and uploads (mentioned briefly).",
+        "Ads insertion and analytics for creators.",
+        "Recommendations."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "New episodes should appear within ~15 minutes for popular shows, and within hours for inactive ones.",
+        "Be polite to creators' servers: don't hammer feeds.",
+        "Handle ~5M shows and ~100M listeners, with huge download spikes when a popular show releases.",
+        "Playback position syncs across devices within seconds."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Transcoding (episodes are already MP3/AAC)."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- ingest RSS feeds",
+        "- search + subscribe",
+        "- new-episode notifications",
+        "- stream / download, resume anywhere",
+        "",
+        "Non-functional",
+        "- popular shows < 15 min fresh",
+        "- polite polling",
+        "- 5M shows, release spikes",
+        "- position sync in seconds"
+      ],
+      "caption": "Podcast Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Show**: feed URL, title, author, artwork, last fetched, polling schedule.",
+        "**Episode**: show, GUID from the feed, title, audio URL, duration, publish date.",
+        "**Subscription**: user, show, auto-download preference.",
+        "**Playback state**: user, episode, position, completed flag, updated at."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /search?q=\nPOST /subscriptions { showId }\nGET  /me/feed?cursor=           -> new episodes from subscribed shows\nGET  /episodes/:id/audio         -> redirect to CDN or original host\nPUT  /me/playback/:episodeId { positionSec, updatedAt }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-ingesting-feeds",
+      "text": "1) Ingesting feeds"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **feed scheduler** decides when each show is due for a fetch and puts it on a queue. **Fetchers** download the RSS XML, the **parser** extracts episodes and upserts them by their feed **GUID** (so re-fetching the same feed doesn't create duplicates), and new episodes are published as events."
+    },
+    {
+      "type": "diagram",
+      "file": "01-feed-ingestion.svg",
+      "caption": "Feed ingestion"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-search-and-subscribe",
+      "text": "2) Search and subscribe"
+    },
+    {
+      "type": "paragraph",
+      "text": "Shows and episodes are indexed into a search index. Subscriptions are rows of `(userId, showId)`, sharded by user."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-new-episode-notifications",
+      "text": "3) New-episode notifications"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **notification worker** consumes new-episode events, looks up subscribers of the show (an index by show ID), and sends push notifications and auto-download signals. For a show with millions of subscribers, the fan-out is batched and spread over a few minutes."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-playing-and-syncing-position",
+      "text": "4) Playing and syncing position"
+    },
+    {
+      "type": "paragraph",
+      "text": "Episode audio is served through **our CDN** (cached from the creator's host) so popular releases don't overwhelm small hosts. Clients send their playback position every ~15-30 seconds and on pause; the latest `updatedAt` wins, and other devices fetch it when the episode is opened."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-poll-5m-feeds-efficiently",
+      "text": "1) How do we poll 5M feeds efficiently?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Poll every feed every few minutes",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Fetch every feed on a fixed short interval."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "~5M feeds × every 5 minutes is 16k requests per second, mostly for feeds that haven't changed in months, and it hammers small creators' servers."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Adaptive polling",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Schedule each feed based on how often it publishes and how many subscribers it has: daily news shows every few minutes, dormant feeds once a day. Use **conditional GETs** (`ETag`, `If-Modified-Since`) so unchanged feeds return a tiny `304`."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Still up to minutes of delay, and still polling."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Adaptive polling plus push",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Support **WebSub** (PubSubHubbub) and hosting-provider webhooks: big podcast hosts notify us when a feed changes, so we fetch immediately. Polling remains as a safety net with adaptive intervals, and a publish-time **prediction** (many shows release at the same weekday and hour) tightens the schedule around expected releases."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Not every host supports push, so the polling path must remain robust."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-survive-release-day-spikes",
+      "text": "2) How do we survive release-day spikes?"
+    },
+    {
+      "type": "paragraph",
+      "text": "When a top show drops an episode, millions of auto-downloads start within minutes. Serving through a **CDN** with request collapsing means the creator's host is hit once per edge; staggering auto-downloads with a small random delay (or on Wi-Fi/charging) flattens the peak further. Notification fan-out is rate-limited so push providers and our API aren't flooded at once."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention download analytics: creators are paid by downloads, so the platform should count downloads once per device per episode, following IAB-style rules (deduplicate by IP and user agent within 24 hours)."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-sync-playback-position",
+      "text": "3) How do we sync playback position?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Writes are frequent but tiny. Store positions in a key-value store keyed by `(userId, episodeId)` with **last-write-wins** on `updatedAt` from the client clock, plus a server timestamp to break ties. Clients batch updates and flush on pause, background and app close, so data use stays small."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "How do most podcasts reach the platform?",
+      "options": [
+        "Creators upload to it",
+        "The platform polls the creator's RSS feed",
+        "Email",
+        "FTP"
+      ],
+      "answer": 1,
+      "explanation": "RSS is the open distribution format for podcasts."
+    },
+    {
+      "question": "What keeps feed polling cheap?",
+      "options": [
+        "Fetching everything every minute",
+        "Adaptive schedules and conditional GETs that return 304 when unchanged",
+        "Bigger servers",
+        "Ignoring old shows"
+      ],
+      "answer": 1,
+      "explanation": "Most feeds rarely change, so most fetches cost almost nothing."
+    },
+    {
+      "question": "How do we avoid duplicate episodes when re-fetching a feed?",
+      "options": [
+        "Compare titles",
+        "Upsert by the episode's GUID",
+        "Delete and reinsert",
+        "Ask the creator"
+      ],
+      "answer": 1,
+      "explanation": "The GUID uniquely identifies each item in the feed."
+    },
+    {
+      "question": "Why serve popular episodes through our CDN?",
+      "options": [
+        "Branding",
+        "So release spikes don't overwhelm creators' hosting",
+        "Required by RSS",
+        "To transcode audio"
+      ],
+      "answer": 1,
+      "explanation": "The CDN fetches once per edge and serves millions."
+    }
+  ]
+}

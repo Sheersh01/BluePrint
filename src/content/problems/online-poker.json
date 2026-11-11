@@ -1,0 +1,368 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "online-poker",
+  "category": "Common Problems",
+  "title": "Online Poker",
+  "seoTitle": "Design an Online Card Game like Poker or Blackjack",
+  "description": "Design an online card game like poker or blackjack — tables and seating, a server-authoritative game engine, fair shuffling, hidden information, turn timers, chip balances with a ledger, and handling disconnects.",
+  "tags": [
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    },
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🃏",
+      "title": "What is Online Poker?",
+      "text": "An online poker (or blackjack) site lets players sit at virtual tables and play hands in real time against each other (or a dealer). Each hand involves shuffling, dealing hidden cards, rounds of betting with timers, and settling chips at the end. Because real money or valuable chips are involved, the game must be fair, cheat-resistant and never lose track of a single chip."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Players should be able to find a table, buy in with chips and take a seat.",
+        "The game should deal cards and run betting rounds (check, bet, call, raise, fold) with turn timers.",
+        "Each player sees only their own hidden cards; shared cards are revealed to all at the right time.",
+        "At the end of a hand, pots are awarded and chip balances updated.",
+        "Players who disconnect should be handled fairly."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Tournaments with many tables (mentioned briefly).",
+        "Payments and cash-outs.",
+        "Chat and social features."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Fairness: shuffles are unpredictable and unbiased; clients can't see hidden cards.",
+        "Low latency: actions reflected for all players in < 200 ms.",
+        "Chips are never created or lost; every change is auditable.",
+        "Scale to ~100k concurrent tables and ~1M players.",
+        "A server crash mid-hand must not lose chips."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Regulatory certification details."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- find table, buy in, sit",
+        "- deal + betting rounds + timers",
+        "- hidden cards per player",
+        "- award pots",
+        "- handle disconnects",
+        "",
+        "Non-functional",
+        "- fair, unpredictable shuffles",
+        "- < 200ms actions",
+        "- chips never lost",
+        "- 100k tables",
+        "- survive crashes mid-hand"
+      ],
+      "caption": "Card Game Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Table**: game type, stakes, seats, current hand, assigned game server.",
+        "**Seat**: table, player, stack (chips at the table), status (active, sitting out).",
+        "**Hand**: deck order, cards dealt, betting actions, pots, result — an event log.",
+        "**Wallet**: player's chip balance outside tables, backed by a ledger."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "In object-oriented terms: `Table` holds `Seat`s and runs `Hand`s; a `Hand` uses a `Deck` and a `BettingRound` state machine; a `HandEvaluator` ranks hands; `PotManager` handles side pots."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /lobby?game=holdem&stakes= -> tables with open seats\nPOST /tables/:id/seats { seat, buyIn } -> joins the table\nWS   /tables/:id\n  client -> { action: \"raise\", amount, handId, seq }\n  server -> { type: \"deal\", yourCards }           (only to that player)\n  server -> { type: \"action\", player, action, pot, nextToAct, deadline }\n  server -> { type: \"showdown\", hands, winners }\nPOST /tables/:id/leave"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-tables-and-seating",
+      "text": "1) Tables and seating"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Lobby Service** lists tables and their open seats. Each table is owned by exactly one **game server** (assigned by consistent hashing or a table directory). Buying in moves chips from the player's **wallet** to their seat stack through a ledger transaction."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-the-game-engine",
+      "text": "2) The game engine"
+    },
+    {
+      "type": "paragraph",
+      "text": "The game server runs each table's **state machine** in memory: shuffle, post blinds, deal, betting rounds, community cards, showdown. Clients only send **intents** (\"raise 200\"); the server validates them against the rules and current state, so a modified client can't act out of turn or bet chips it doesn't have."
+    },
+    {
+      "type": "diagram",
+      "file": "01-table-server.svg",
+      "caption": "Table server"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-hidden-information",
+      "text": "3) Hidden information"
+    },
+    {
+      "type": "paragraph",
+      "text": "The server sends each player a **personalised view**: their own hole cards, everyone's actions and the community cards. Other players' hole cards are never sent to a client until showdown, so inspecting network traffic reveals nothing."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-settling-hands",
+      "text": "4) Settling hands"
+    },
+    {
+      "type": "paragraph",
+      "text": "At showdown, the `HandEvaluator` ranks hands and the `PotManager` splits main and side pots. Stack changes are recorded in the hand log; the wallet only changes on buy-in and leaving the table."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-make-shuffles-fair",
+      "text": "1) How do we make shuffles fair?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Language default random function",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Shuffle with a standard pseudo-random generator seeded by the clock."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Predictable seeds have been exploited in real poker sites to reconstruct the deck."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Cryptographically secure RNG",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Use a **cryptographically secure** random source with a correct Fisher-Yates shuffle (no modulo bias)."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Players still have to trust the operator."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Secure RNG + certification + audit trail",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Use a hardware-backed or OS CSPRNG, a verified Fisher-Yates implementation, independent **RNG certification**, and record each hand's deck order in the immutable hand log for audits and disputes. Some games publish a hash of the shuffled deck before the hand and reveal it afterwards, letting players verify the deck wasn't changed mid-hand."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "The deck order in the log is highly sensitive and must be stored securely and revealed only after the hand."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-survive-a-game-server-crash",
+      "text": "2) How do we survive a game server crash?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each table's events (shuffle, actions, results) are appended to a **durable hand log** before they're broadcast. If a server dies, the table is reassigned and the new server **replays the log** to rebuild the current hand, or, if the hand can't continue safely, **cancels it and returns all bets** to stacks. Because stacks are derived from the log and wallets only change via ledger transactions, no chips are lost or duplicated."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention action sequence numbers: each client action carries the hand ID and expected sequence, so a delayed or duplicated message after a reconnect is rejected instead of applied twice."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-handle-disconnects-and-timers",
+      "text": "3) How do we handle disconnects and timers?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each turn has a **server-side deadline**; clients show a countdown, but only the server decides. If time runs out, the server auto-checks or folds. A disconnected player gets a short **time bank** to reconnect; their seat stays and they sit out future hands if they don't return. Reconnecting clients receive the full current view."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why must the server be authoritative?",
+      "options": [
+        "Clients are slow",
+        "Modified clients could act out of turn or bet chips they don't have",
+        "Servers are cheaper",
+        "For graphics"
+      ],
+      "answer": 1,
+      "explanation": "Clients send intents; the server validates and decides."
+    },
+    {
+      "question": "How do we keep other players' cards secret?",
+      "options": [
+        "Encrypt them on the client",
+        "Never send them to a client until showdown",
+        "Hide them in CSS",
+        "Trust players"
+      ],
+      "answer": 1,
+      "explanation": "Each player only receives their own hidden cards."
+    },
+    {
+      "question": "What's wrong with shuffling using a clock-seeded random function?",
+      "options": [
+        "It's slow",
+        "The seed can be predicted, revealing the deck order",
+        "It's biased toward aces",
+        "Nothing"
+      ],
+      "answer": 1,
+      "explanation": "Shuffles need a cryptographically secure source."
+    },
+    {
+      "question": "How do we avoid losing chips if a game server crashes mid-hand?",
+      "options": [
+        "Hope it doesn't",
+        "Replay the durable hand log or cancel the hand and return bets",
+        "Give everyone extra chips",
+        "Restart the site"
+      ],
+      "answer": 1,
+      "explanation": "Events are logged before they're broadcast."
+    }
+  ]
+}

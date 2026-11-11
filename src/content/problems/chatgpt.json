@@ -1,0 +1,424 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "chatgpt",
+  "category": "Common Problems",
+  "title": "ChatGPT",
+  "seoTitle": "Design a Chat Assistant Like ChatGPT",
+  "description": "Design ChatGPT — conversations with an LLM, streaming token responses, conversation history, GPU capacity management, and rate limiting.",
+  "tags": [
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    },
+    {
+      "label": "Managing Long Running Tasks",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "OpenAI",
+      "Anthropic",
+      "Google"
+    ],
+    "more": 9
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🤖",
+      "title": "What is ChatGPT?",
+      "text": "ChatGPT is a conversational assistant. Users send messages in a chat, and a large language model (LLM) generates a reply that streams back token by token."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to start a conversation and send messages.",
+        "Responses should stream back to the user as they are generated.",
+        "Users should be able to view and continue past conversations."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Training the model.",
+        "File uploads, tools, image generation, and voice.",
+        "Sharing conversations."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Time to first token should be low (< 1s at normal load).",
+        "The system should scale to 100M weekly users and use expensive GPU capacity efficiently.",
+        "Conversations must be durable — a user's history should never disappear.",
+        "The system should degrade gracefully under overload (queue or rate limit rather than fall over)."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Safety classifiers and content moderation.",
+        "Strong consistency across devices mid-stream."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- send messages in a conversation",
+        "- stream responses token by token",
+        "- view / continue past conversations",
+        "",
+        "Non-functional",
+        "- time to first token < 1s",
+        "- 100M weekly users, efficient GPU use",
+        "- durable history",
+        "- graceful degradation under load"
+      ],
+      "caption": "ChatGPT Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "Most of the system is a fairly standard chat app. What's unusual is the **inference tier**: requests are long-running (seconds to minutes), extremely expensive, and capacity-constrained by GPUs. We'll focus the deep dives there."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**User**: with a plan tier that determines limits.",
+        "**Conversation**: an ordered list of messages with a title.",
+        "**Message**: role (user/assistant), content, token count, status (streaming/complete/error).",
+        "**Model**: which LLM serves the request."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Core Entities",
+        "- User (plan tier)",
+        "- Conversation",
+        "- Message",
+        "- Model"
+      ],
+      "caption": "ChatGPT Entities"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /conversations -> { \"conversationId\" }\n\nPOST /conversations/:id/messages\n{ \"content\": \"Explain consistent hashing\", \"model\": \"default\" }\n-> text/event-stream of { \"delta\": \"Consistent\", ... } ... { \"done\": true }\n\nGET /conversations?cursor -> Conversation[]\nGET /conversations/:id/messages -> Message[]"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-should-be-able-to-send-messages",
+      "text": "1) Users should be able to send messages"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Chat Service** stores the user's message, builds the prompt from the conversation history (truncated or summarised to fit the model's context window), and sends it to the **Inference Service**."
+    },
+    {
+      "type": "diagram",
+      "file": "01-send-a-message.svg",
+      "caption": "Send a message"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-responses-should-stream-back-as-they-are-generated",
+      "text": "2) Responses should stream back as they are generated"
+    },
+    {
+      "type": "paragraph",
+      "text": "The model generates one token at a time. Rather than waiting for the full answer, the Inference Service streams tokens to the Chat Service, which forwards them to the client over **Server-Sent Events**. The response is a single long-lived HTTP response, so SSE fits naturally — no bidirectional WebSocket needed."
+    },
+    {
+      "type": "paragraph",
+      "text": "When generation completes, the full assistant message is written to the database."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-users-should-be-able-to-view-past-conversations",
+      "text": "3) Users should be able to view past conversations"
+    },
+    {
+      "type": "paragraph",
+      "text": "Conversations and messages are stored in a database keyed by `userId` / `conversationId`. A wide-column or document store (e.g. DynamoDB with partition key `conversationId`, sort key `messageTs`) scales well for this append-heavy, read-by-conversation pattern."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-use-scarce-gpu-capacity-efficiently",
+      "text": "1) How do we use scarce GPU capacity efficiently?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "One request per GPU at a time",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Route each request to a free GPU worker, which processes it to completion before taking another."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "GPUs are memory-bandwidth bound during generation; serving one sequence at a time leaves most of the compute idle and throughput terrible."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Continuous batching on inference servers",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Inference servers batch many concurrent requests together and use **continuous (in-flight) batching**: new requests join the batch as others finish, at token granularity. Combined with a KV cache for attention state, this multiplies throughput per GPU. A router sends requests to the replica with available KV-cache capacity."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Larger batches raise per-token latency, so batch size is tuned against latency SLOs. Long prompts consume lots of cache memory and must be scheduled carefully."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-what-happens-when-demand-exceeds-gpu-capacity",
+      "text": "2) What happens when demand exceeds GPU capacity?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Accept everything and let latency grow",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Send every request to inference and hope capacity holds."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Queues grow unbounded, requests time out after users have waited a long time, and the system thrashes."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Admission control: rate limits, priority queues and load shedding",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Enforce per-user rate limits by plan (token bucket on messages and on tokens per minute). Put admitted requests into **priority queues** (paid tiers first) in front of the inference router with a bounded wait; when the queue is full or the expected wait exceeds a threshold, return a friendly \"at capacity\" error immediately. Optionally fall back to a smaller, cheaper model under pressure."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Requires accurate capacity signals (queue depth, KV-cache utilisation) and careful UX for degraded responses."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-what-if-the-user-s-connection-drops-mid-stream",
+      "text": "3) What if the user's connection drops mid-stream?"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Tie generation to the HTTP connection",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "If the client disconnects, cancel generation and discard the partial response."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Mobile users lose answers constantly, and wasted GPU work is thrown away."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Decouple generation from delivery",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Generation writes tokens to a short-lived stream (e.g. Redis Stream keyed by messageId) and persists the final message to the database. The SSE handler reads from that stream. A reconnecting client calls `GET /messages/:id/stream?offset=N` and resumes from where it left off; if generation already finished, it simply reads the stored message."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "More moving parts; streams need TTLs, and explicit \"stop generating\" requests must still cancel the inference job to save GPU time."
+        }
+      ]
+    },
+    {
+      "type": "pattern",
+      "title": "Pattern: Managing Long Running Tasks",
+      "text": "LLM responses can take a minute. Separating the work (generation) from the client connection (delivery) is what makes them resilient.",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why is SSE a natural fit for streaming LLM responses?",
+      "options": [
+        "Traffic during generation is one-way, server to client, over a single response",
+        "It supports binary uploads",
+        "It is required by GPUs",
+        "It guarantees exactly-once delivery"
+      ],
+      "answer": 0,
+      "explanation": "The client sends one request and receives a stream of tokens back."
+    },
+    {
+      "question": "What does continuous batching improve?",
+      "options": [
+        "Prompt quality",
+        "GPU throughput by adding and removing requests from the batch at token granularity",
+        "Network latency",
+        "Storage costs"
+      ],
+      "answer": 1,
+      "explanation": "Keeping the batch full uses GPU compute that single-request serving leaves idle.",
+      "section": "1-how-do-we-use-scarce-gpu-capacity-efficiently"
+    },
+    {
+      "question": "How should the system behave when GPU demand exceeds capacity?",
+      "options": [
+        "Accept all requests",
+        "Rate limit, queue with priorities and shed load with a fast error",
+        "Restart GPUs",
+        "Disable streaming"
+      ],
+      "answer": 1,
+      "explanation": "Admission control keeps latency bounded instead of letting everything time out.",
+      "section": "2-what-happens-when-demand-exceeds-gpu-capacity"
+    },
+    {
+      "question": "How can a client resume a response after its connection drops?",
+      "options": [
+        "Re-send the prompt",
+        "Generation writes to a stream the client can resume from an offset",
+        "It can't",
+        "Use a CDN"
+      ],
+      "answer": 1,
+      "explanation": "Decoupling generation from delivery lets clients reconnect without losing or regenerating work.",
+      "section": "3-what-if-the-user-s-connection-drops-mid-stream"
+    }
+  ]
+}

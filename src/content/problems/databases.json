@@ -1,0 +1,290 @@
+{
+  "section": "questions",
+  "slug": "databases",
+  "category": "Questions",
+  "title": "Databases & Storage",
+  "subtitle": "SQL vs NoSQL, indexes, replication, sharding and the operational questions that follow.",
+  "seoTitle": "System Design Interview Questions — Databases & Storage",
+  "description": "SQL vs NoSQL, indexes, replication, sharding and the operational questions that follow.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "blocks": [
+    {
+      "type": "qa",
+      "number": 26,
+      "qtype": "Compare",
+      "level": "B",
+      "question": "SQL vs NoSQL: structure, schema, scaling, consistency, use cases.",
+      "id": "q-26",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "**SQL (relational)** databases store data in tables with a fixed schema, support joins and ACID transactions, and scale primarily vertically plus read replicas. Great for structured, relational data with integrity constraints: orders, payments, users."
+        },
+        {
+          "type": "paragraph",
+          "text": "**NoSQL** covers several models — key-value (Redis, DynamoDB), document (MongoDB), wide-column (Cassandra), graph (Neo4j). They usually have flexible schemas, scale horizontally by design, and often trade strong consistency or joins for throughput and availability. Great for massive scale, simple access patterns, and high write volumes."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** Compare on access patterns, not hype — \"we need multi-row transactions, so Postgres; the activity log is append-heavy and keyed by user, so Cassandra.\""
+        },
+        {
+          "type": "paragraph",
+          "text": "**Go deeper:** [PostgreSQL](/learn/system-design/deep-dives/postgresql) · [Cassandra](/learn/system-design/deep-dives/cassandra) · [DynamoDB](/learn/system-design/deep-dives/dynamodb)"
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 27,
+      "qtype": "Decide",
+      "level": "I",
+      "question": "When would you choose SQL vs NoSQL? How do you decide for a new project?",
+      "id": "q-27",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Start from the data and its access patterns:"
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "Need **transactions across rows/tables**, complex queries or joins, strong constraints? → SQL.",
+            "Need **massive write throughput**, simple key-based access, horizontal scale from day one, flexible schemas? → NoSQL.",
+            "Unsure? Default to **Postgres** — it scales further than most products ever need and supports JSON for flexible fields."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "Many systems are hybrid: SQL for the system of record, plus Redis for caching, Elasticsearch for search, and a wide-column store for high-volume event data."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Default Postgres; I'd move a specific access pattern to NoSQL only when I can name the scale or shape it can't handle.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 28,
+      "qtype": "Define",
+      "level": "B",
+      "question": "What is a database index and why does it matter? Trade-offs?",
+      "id": "q-28",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "An index is an auxiliary data structure — usually a **B-tree**, sometimes a hash, GIN or GiST index — that lets the database find rows without scanning the whole table, turning O(n) lookups into O(log n)."
+        },
+        {
+          "type": "paragraph",
+          "text": "Trade-offs:"
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Slower writes**: every insert/update must also update each index.",
+            "**Storage**: indexes take space, sometimes as much as the table.",
+            "**Choosing wisely**: composite indexes follow the leftmost-prefix rule; low-selectivity columns (booleans) rarely help on their own."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** Name the index for each hot query — \"an index on `(user_id, created_at DESC)` serves 'this user's latest posts' directly.\""
+        },
+        {
+          "type": "paragraph",
+          "text": "**Go deeper:** [PostgreSQL](/learn/system-design/deep-dives/postgresql)"
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 29,
+      "qtype": "Define",
+      "level": "B",
+      "question": "What is database replication? Types: master-slave, master-master, synchronous, asynchronous.",
+      "id": "q-29",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Replication keeps copies of data on multiple nodes for availability, durability and read scaling."
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Primary-replica (master-slave)**: one node takes writes; replicas copy its log and serve reads. Simple; writes don't scale.",
+            "**Multi-primary (master-master)**: several nodes accept writes. Better write availability, but concurrent writes conflict and need resolution.",
+            "**Synchronous**: the primary waits for replicas to confirm before acknowledging. No data loss on failover; higher latency.",
+            "**Asynchronous**: the primary acknowledges immediately. Faster, but replicas lag and a failover can lose recent writes."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"One synchronous standby in another zone for zero-loss failover, plus async read replicas for read scaling.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 30,
+      "qtype": "Define",
+      "level": "B",
+      "question": "What is database sharding and how does it help scalability?",
+      "id": "q-30",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Sharding splits a dataset horizontally across multiple database servers — each shard holds a subset of rows (e.g. users A–M on shard 1). Since each shard handles only part of the data and traffic, write throughput and storage scale with the number of shards."
+        },
+        {
+          "type": "paragraph",
+          "text": "Costs: queries spanning shards become expensive scatter-gathers, cross-shard transactions are hard, rebalancing data is operationally painful, and a bad shard key creates hot shards."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"We shard only when one primary can't handle writes or storage — by `user_id`, so each user's data lives on one shard and most queries stay local.\""
+        },
+        {
+          "type": "paragraph",
+          "text": "**Go deeper:** [Scaling Writes](/learn/system-design/patterns/scaling-writes)"
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 31,
+      "qtype": "How",
+      "level": "I",
+      "question": "What sharding strategies exist (range, hash, directory) and how do you pick a shard key?",
+      "id": "q-31",
+      "blocks": [
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Range-based**: shard by key ranges (dates, alphabetical). Range queries are efficient, but recent or popular ranges become hot.",
+            "**Hash-based**: `hash(key)` decides the shard (often with consistent hashing). Even distribution; range queries must hit every shard.",
+            "**Directory-based**: a lookup service maps each key (or tenant) to a shard. Flexible and easy to rebalance, but the directory is another component to keep available."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "A good shard key has **high cardinality**, spreads load **evenly**, and matches the **dominant access pattern** so most queries hit one shard (e.g. `user_id` for per-user data, `tenant_id` for B2B)."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Shard key `user_id` with consistent hashing: even spread, and the timeline query only touches the user's own shard.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 32,
+      "qtype": "Define",
+      "level": "I",
+      "question": "What is data partitioning (horizontal, vertical, directory-based)? Partitioning vs replication?",
+      "id": "q-32",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "**Partitioning** divides data into pieces:"
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Horizontal** (sharding): different rows in different partitions.",
+            "**Vertical**: different columns or tables in different stores (e.g. move large blobs or rarely used columns elsewhere; split services by domain).",
+            "**Directory-based**: a lookup table decides where each piece lives."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "**Partitioning vs replication**: partitioning splits data so each node holds *different* data — it scales capacity. Replication copies the *same* data to multiple nodes — it scales reads and adds fault tolerance. Production systems combine both: each partition is replicated."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Partition by user for scale, replicate each partition three ways for availability.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 33,
+      "qtype": "How",
+      "level": "I",
+      "question": "How do you handle hot partitions?",
+      "id": "q-33",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "A hot partition gets disproportionate traffic — a celebrity's user ID, a viral post, today's date."
+        },
+        {
+          "type": "paragraph",
+          "text": "Fixes:"
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Better keys**: avoid low-cardinality or time-based keys for write-heavy data.",
+            "**Key salting**: append a suffix (`post123#0..9`) to spread one logical key over several partitions; read by combining them.",
+            "**Caching** hot reads in front of the partition.",
+            "**Write aggregation**: batch increments in memory and flush periodically.",
+            "**Split or isolate** hot keys onto dedicated partitions; adaptive capacity in managed stores."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"The viral post's like counter is sharded into 16 sub-counters and aggregated on read.\""
+        },
+        {
+          "type": "paragraph",
+          "text": "**Go deeper:** [Like Counter](/learn/system-design/problem-breakdowns/like-counter)"
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 34,
+      "qtype": "How",
+      "level": "I",
+      "question": "How do you handle database schema migrations in large systems with no downtime?",
+      "id": "q-34",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Use the **expand-and-contract** pattern so old and new code both work at every step:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Expand**: add the new column/table (nullable, no locks); deploy code that writes to both old and new.",
+            "**Backfill** existing rows in small batches, throttled to protect production.",
+            "**Switch reads** to the new column behind a feature flag; verify.",
+            "**Contract**: stop writing the old column, then drop it later."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "Also: avoid long table locks (online schema-change tools like gh-ost/pg_repack, `CREATE INDEX CONCURRENTLY`), make migrations backward compatible with the previous deploy, and always have a rollback plan."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Every migration is backward compatible with the currently running code, so deploys and rollbacks never need downtime.\""
+        }
+      ]
+    }
+  ],
+  "quiz": []
+}

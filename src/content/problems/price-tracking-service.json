@@ -1,0 +1,423 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "price-tracking-service",
+  "category": "Common Problems",
+  "title": "Price Tracking Service",
+  "seoTitle": "Design a Price Tracking Service Like CamelCamelCamel",
+  "description": "Design a price tracker — collecting product prices at scale, showing price history charts, and notifying users when a price drops below their target.",
+  "tags": [
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Amazon",
+      "Google"
+    ],
+    "more": 5
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🏷️",
+      "title": "What is a Price Tracking Service?",
+      "text": "A price tracker (like CamelCamelCamel or Honey) monitors product prices on e-commerce sites, shows how a price has changed over time, and alerts users when a product drops below a price they choose."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to view the price history of a product as a chart.",
+        "Users should be able to subscribe to a price-drop alert with a target price.",
+        "Users should be notified (by email) when the price falls below their target."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Browser extension UI.",
+        "Searching across retailers."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Track ~500M products; popular products should be checked at least hourly.",
+        "Price-drop alerts should go out within an hour of the change.",
+        "Price history charts should load in < 500ms.",
+        "Prefer availability; history can be eventually consistent."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Legal terms of each retailer."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- view price history chart",
+        "- subscribe: notify below target price",
+        "- email on price drop",
+        "",
+        "Non-functional",
+        "- 500M products, popular hourly",
+        "- alerts within 1 hour",
+        "- charts < 500ms",
+        "- availability >> consistency"
+      ],
+      "caption": "Price Tracking Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "The system has a **write-heavy ingestion** side (collecting billions of price points) and a lightweight read side. We'll design collection, storage and alerting, then go deep on each."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Product**: a retailer product (URL/ASIN, title, current price).",
+        "**PricePoint**: (productId, price, timestamp).",
+        "**Subscription**: a user's alert — productId, targetPrice, status.",
+        "**User**: who receives notifications."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Core Entities",
+        "- Product",
+        "- PricePoint",
+        "- Subscription",
+        "- User"
+      ],
+      "caption": "Price Tracking Entities"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /products/:productId/history?period=1y -> PricePoint[]\n\nPOST /subscriptions\n{ \"productId\": \"B00X...\", \"targetPrice\": 199.99 } -> Subscription\n\nDELETE /subscriptions/:id"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-should-be-able-to-view-price-history",
+      "text": "1) Users should be able to view price history"
+    },
+    {
+      "type": "paragraph",
+      "text": "Price points are written by collectors and read by a **Product Service** that returns the series for a time range."
+    },
+    {
+      "type": "diagram",
+      "file": "01-price-history.svg",
+      "caption": "Price history"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-should-be-able-to-subscribe-to-price-drops",
+      "text": "2) Users should be able to subscribe to price drops"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **Subscription Service** stores subscriptions keyed by `productId`, with an index so we can quickly find every subscriber of a given product."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-users-should-be-notified-when-the-price-drops",
+      "text": "3) Users should be notified when the price drops"
+    },
+    {
+      "type": "paragraph",
+      "text": "When a collector records a new price that is lower than the previous one, it emits a `price_changed` event. A **Notification Worker** looks up subscriptions for that product with `targetPrice >= newPrice` and sends emails."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-collect-prices-for-500m-products",
+      "text": "1) How do we collect prices for 500M products?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Crawl every product on a fixed schedule",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Scrape all 500M product pages every hour."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "That's ~140k page fetches per second, most for products nobody watches. We'd be blocked by retailers and the cost would be enormous."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Prioritised crawling",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Assign each product a crawl priority based on number of subscribers, views, and how volatile its price has been. A scheduler places products on a priority queue; popular items are checked hourly, the long tail daily or weekly."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Rarely viewed products may miss short-lived deals; that's an acceptable trade."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Prioritised crawling + official APIs + crowd-sourced prices",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Use retailer product APIs where available (cheaper and allowed), prioritised crawling elsewhere, and accept price observations from the browser extension when users visit product pages — validated against recent crawls to reject bad data."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Crowd-sourced data must be verified (e.g. require agreement or a confirming crawl before alerting) to avoid false notifications."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-should-we-store-billions-of-price-points",
+      "text": "2) How should we store billions of price points?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "One relational table with a row per observation",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "`price_points(product_id, price, ts)` in Postgres."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Billions of rows grow without bound; range scans for a chart get slower and storage is wasteful when the price rarely changes."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Store changes only, in a time-series store",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Write a point **only when the price changes** (plus a periodic heartbeat), which shrinks data dramatically. Use a time-series database (e.g. TimescaleDB, or Cassandra partitioned by `productId` with clustering on `ts`). Chart queries are a single-partition range scan; pre-aggregate daily min/max for long periods."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A chart now needs \"carry forward\" logic between change points, which the client or service handles."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-notify-subscribers-efficiently-and-reliably",
+      "text": "3) How do we notify subscribers efficiently and reliably?"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Query subscriptions on every price change",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "On each `price_changed` event, `SELECT user_id FROM subscriptions WHERE product_id = ? AND target_price >= ? AND status = 'ACTIVE'`, then send emails."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Works well with an index on `(product_id, target_price)`. A popular product might have hundreds of thousands of subscribers, so sending must be batched."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Event-driven pipeline with a durable queue",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Collectors publish `price_changed` events to Kafka partitioned by `productId`. Notification workers fetch matching subscriptions, enqueue individual email jobs, and mark each subscription `NOTIFIED` (so a user isn't spammed if the price bounces). The email sender is idempotent per `(subscriptionId, priceEventId)`."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Must handle retries and deduplication carefully; that's what the idempotency key is for."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What is the most effective way to cut price-history storage?",
+      "options": [
+        "Compress JSON",
+        "Write a point only when the price changes",
+        "Store prices in the cache",
+        "Delete products"
+      ],
+      "answer": 1,
+      "explanation": "Prices change rarely, so recording only changes removes most redundant rows.",
+      "section": "2-how-should-we-store-billions-of-price-points"
+    },
+    {
+      "question": "How should crawl frequency be decided?",
+      "options": [
+        "Same for all products",
+        "By priority: subscribers, views and price volatility",
+        "Randomly",
+        "Alphabetically"
+      ],
+      "answer": 1,
+      "explanation": "Spending crawl budget where users care keeps alerts timely without crawling the long tail hourly.",
+      "section": "1-how-do-we-collect-prices-for-500m-products"
+    },
+    {
+      "question": "Why mark a subscription as NOTIFIED after sending?",
+      "options": [
+        "To delete the user",
+        "To avoid spamming users when the price fluctuates around the target",
+        "To speed up crawling",
+        "It is required by SMTP"
+      ],
+      "answer": 1,
+      "explanation": "Without it, a price bouncing above and below the target would trigger repeated emails."
+    },
+    {
+      "question": "Which index best supports finding subscribers for a price change?",
+      "options": [
+        "(user_id)",
+        "(product_id, target_price)",
+        "(created_at)",
+        "(email)"
+      ],
+      "answer": 1,
+      "explanation": "It lets the query jump directly to a product's subscriptions with target at or above the new price."
+    }
+  ]
+}

@@ -1,0 +1,335 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "blogging-platform",
+  "category": "Common Problems",
+  "title": "Blogging Platform",
+  "seoTitle": "Design a Blogging Platform Like Medium",
+  "description": "Design a blogging platform — writing and publishing posts with drafts, serving read-heavy articles fast via caching and static rendering, comments, and follower feeds.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "easy",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "✍️",
+      "title": "What is a Blogging Platform?",
+      "text": "A blogging platform like Medium or WordPress.com lets writers draft and publish articles, and lets readers read, comment on and follow writers."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Writers should be able to create drafts, edit them, and publish posts with images.",
+        "Readers should be able to read published posts by URL.",
+        "Readers should be able to comment on posts.",
+        "Readers should be able to follow writers and see a feed of new posts."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Monetisation and paywalls.",
+        "Recommendations."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Extremely read-heavy (1000:1); post pages load in < 200ms worldwide.",
+        "Highly available reads; publishing can take a few seconds to propagate.",
+        "Drafts must never be lost while writing.",
+        "SEO-friendly pages (server-rendered HTML)."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Spam detection."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- drafts, edit, publish w/ images",
+        "- read by URL",
+        "- comments",
+        "- follow + feed",
+        "",
+        "Non-functional",
+        "- read-heavy, < 200ms globally",
+        "- available reads",
+        "- never lose drafts",
+        "- SEO-friendly HTML"
+      ],
+      "caption": "Blogging Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Post**: author, title, slug, body (rich text / markdown), status (draft/published), timestamps.",
+        "**Revision**: saved versions of a draft.",
+        "**Comment**: post, author, text, parent comment.",
+        "**Follow**: reader → writer."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST  /posts -> { postId } (draft)\nPATCH /posts/:id { title, body } (autosave)\nPOST  /posts/:id/publish -> { url }\nGET   /@author/:slug -> HTML page\nPOST  /posts/:id/comments { text, parentId? }\nGET   /feed?cursor -> Post[]"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-writers-draft-and-publish",
+      "text": "1) Writers draft and publish"
+    },
+    {
+      "type": "paragraph",
+      "text": "The editor autosaves to the **Post Service** every few seconds, storing revisions so nothing is lost. Images upload directly to blob storage via presigned URLs. Publishing marks the post published and triggers rendering."
+    },
+    {
+      "type": "diagram",
+      "file": "01-write-and-read-paths.svg",
+      "caption": "Write and read paths"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-readers-read-posts",
+      "text": "2) Readers read posts"
+    },
+    {
+      "type": "paragraph",
+      "text": "Published posts rarely change, so render them to HTML at publish time (or on first request) and serve them from a **CDN**. Edits re-render and purge that URL. Dynamic bits (comment counts, \"you follow this author\") load separately via small API calls."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-comments",
+      "text": "3) Comments"
+    },
+    {
+      "type": "paragraph",
+      "text": "Comments are stored per post and loaded via the API with cursor pagination, cached briefly per post since most readers see the same first page."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-follow-feed",
+      "text": "4) Follow feed"
+    },
+    {
+      "type": "paragraph",
+      "text": "When a writer publishes, a worker adds the post to followers' feeds (fan-out on write is fine — publishing is rare compared to reading), stored as capped lists in a cache."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-serve-posts-fast-to-a-global-audience",
+      "text": "1) How do we serve posts fast to a global audience?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Render from the database on every request",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Query the post and render HTML per page view."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Wasted work at 1000:1 read ratios and slow for distant readers."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Application cache",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Cache rendered HTML in Redis near the app servers."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Faster, but readers far from the region still pay network latency."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Static rendering + CDN with targeted purge",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Generate HTML at publish time (incremental static regeneration), cache it at the CDN edge with long TTLs, and purge just that URL on edits. Personalised fragments load client-side so the page itself stays cacheable for everyone."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Purge latency means an edit may take seconds to appear everywhere — acceptable here."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-never-lose-a-draft",
+      "text": "2) How do we never lose a draft?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Autosave frequently with small diffs, store revisions server-side with optimistic concurrency (a version number) to detect conflicting edits from two tabs, and keep a local copy in the browser so writing continues offline and syncs when the connection returns."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why render posts to HTML at publish time?",
+      "options": [
+        "For security",
+        "Posts are read far more than written, so render once and serve many times",
+        "Databases can't store HTML",
+        "Writers prefer it"
+      ],
+      "answer": 1,
+      "explanation": "Pre-rendered pages are cheap to cache and serve."
+    },
+    {
+      "question": "How do you keep post pages cacheable while showing personalised info?",
+      "options": [
+        "Disable caching",
+        "Load personalised fragments separately via small API calls",
+        "Render per user",
+        "Use cookies in the cache key"
+      ],
+      "answer": 1,
+      "explanation": "The page stays identical for everyone; personalised bits load client-side."
+    },
+    {
+      "question": "Why is fan-out on write fine for follower feeds here?",
+      "options": [
+        "Writers have few followers",
+        "Publishing is rare compared to reading",
+        "Feeds are small",
+        "It's required"
+      ],
+      "answer": 1,
+      "explanation": "Infrequent publishes keep write amplification affordable."
+    },
+    {
+      "question": "What protects drafts from being lost?",
+      "options": [
+        "Manual save only",
+        "Frequent autosave with server-side revisions and a local copy",
+        "Email backups",
+        "Caching"
+      ],
+      "answer": 1,
+      "explanation": "Revisions plus local persistence survive crashes and disconnects."
+    }
+  ]
+}

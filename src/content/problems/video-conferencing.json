@@ -1,0 +1,344 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "video-conferencing",
+  "category": "Common Problems",
+  "title": "Video Conferencing",
+  "seoTitle": "Design a Video Conferencing System Like Zoom",
+  "description": "Design video calls — signaling, WebRTC media, peer-to-peer vs. SFU architectures, simulcast and adaptive bitrate, and scaling large meetings.",
+  "tags": [
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🎥",
+      "title": "What is Video Conferencing?",
+      "text": "Video conferencing systems like Zoom and Google Meet let groups of people join a meeting and exchange live audio, video and screen shares with sub-second delay."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to create a meeting and join it via a link.",
+        "Participants should send and receive live audio and video.",
+        "Participants should be able to share their screen.",
+        "Meetings should support up to ~100 participants with video and larger audiences in view-only mode."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Recording and transcription.",
+        "Chat and reactions."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Very low latency: < 200ms mouth-to-ear for natural conversation.",
+        "Adapt to varying network quality — degrade video before audio.",
+        "Highly available; a server failure shouldn't drop entire meetings.",
+        "Scale to millions of concurrent participants globally."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "End-to-end encryption details."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- create + join meetings",
+        "- live audio / video",
+        "- screen share",
+        "- ~100 video participants",
+        "",
+        "Non-functional",
+        "- < 200ms latency",
+        "- adapt to bad networks",
+        "- survive server failures",
+        "- millions concurrent"
+      ],
+      "caption": "Video Conferencing Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Meeting**: ID, host, settings, assigned media server(s).",
+        "**Participant**: user in a meeting with connection state.",
+        "**Media stream / track**: audio, video or screen track published by a participant."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /meetings -> { meetingId, joinUrl }\nPOST /meetings/:id/join -> { mediaServer, token, iceServers }\n\n// Signaling over WebSocket\n-> offer / answer (SDP), ICE candidates, mute/unmute\n// Media over WebRTC (SRTP over UDP)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-create-and-join-meetings",
+      "text": "1) Create and join meetings"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **Meeting Service** stores meeting metadata and, on join, assigns the meeting to a **media server** in a region near most participants, returning connection details and a short-lived token."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-send-and-receive-audio-and-video",
+      "text": "2) Send and receive audio and video"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **signaling service** (WebSocket) lets clients exchange session descriptions and network candidates to set up **WebRTC** connections. Media flows over UDP for low latency; STUN/TURN servers help clients behind NATs connect."
+    },
+    {
+      "type": "diagram",
+      "file": "01-sfu-architecture.svg",
+      "caption": "SFU architecture"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-share-screens",
+      "text": "3) Share screens"
+    },
+    {
+      "type": "paragraph",
+      "text": "A screen share is just another video track, typically encoded for sharp text at a low frame rate, and given priority in bandwidth allocation."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-support-larger-meetings",
+      "text": "4) Support larger meetings"
+    },
+    {
+      "type": "paragraph",
+      "text": "Media servers forward streams instead of mixing them; for very large meetings, cascade multiple servers and switch view-only attendees to a broadcast path."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-peer-to-peer-mcu-or-sfu",
+      "text": "1) Peer-to-peer, MCU or SFU?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Full-mesh peer-to-peer",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Every participant sends their stream directly to every other participant."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Upload bandwidth and CPU grow with N−1 encodes/sends per person — it falls apart beyond 3-4 people."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "MCU (mixing server)",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "A server decodes all streams, composites them into one video, re-encodes and sends a single stream to each participant."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Very expensive server CPU, added latency from transcoding, and inflexible layouts."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "SFU (selective forwarding unit) with simulcast",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Each participant uploads one stream (in several quality layers via **simulcast**); the SFU forwards packets without decoding, choosing per receiver which layer to send based on their bandwidth and layout (high quality for the active speaker, thumbnails for others). Server cost is mostly bandwidth, and latency stays low."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Downstream bandwidth grows with visible participants, so clients only subscribe to the streams they display."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-handle-poor-networks",
+      "text": "2) How do we handle poor networks?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Use congestion control feedback to estimate available bandwidth per receiver; the SFU drops to lower simulcast layers or pauses video for that receiver, while audio always gets priority. Forward error correction and packet retransmission handle loss; jitter buffers smooth timing. If UDP is blocked, fall back to TURN over TCP/TLS."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-scale-and-stay-available",
+      "text": "3) How do we scale and stay available?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Place media servers in many regions and route each meeting to one near its participants. For globally spread meetings, **cascade** SFUs across regions — each participant connects locally and SFUs exchange streams over the backbone. Monitor server health; on failure, clients rejoin a new SFU through signaling within seconds."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why does full-mesh P2P fail for larger meetings?",
+      "options": [
+        "Browsers ban it",
+        "Each participant must upload a separate stream to every other participant",
+        "It has high server cost",
+        "It requires TURN"
+      ],
+      "answer": 1,
+      "explanation": "Upload bandwidth grows linearly with participants."
+    },
+    {
+      "question": "What does an SFU do?",
+      "options": [
+        "Mixes video into one stream",
+        "Forwards streams without decoding, choosing quality per receiver",
+        "Records meetings",
+        "Handles login"
+      ],
+      "answer": 1,
+      "explanation": "Forwarding keeps latency and server CPU low."
+    },
+    {
+      "question": "What is simulcast?",
+      "options": [
+        "Broadcasting to TV",
+        "Sending the same video at several quality layers so receivers can get the one they can handle",
+        "Recording",
+        "Audio only"
+      ],
+      "answer": 1,
+      "explanation": "The SFU picks a layer per receiver."
+    },
+    {
+      "question": "When network quality drops, what should be preserved first?",
+      "options": [
+        "Video resolution",
+        "Audio",
+        "Screen share frame rate",
+        "Thumbnails"
+      ],
+      "answer": 1,
+      "explanation": "Conversation survives without video, not without audio."
+    }
+  ]
+}

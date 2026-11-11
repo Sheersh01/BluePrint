@@ -1,0 +1,376 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "key-value-store",
+  "category": "Common Problems",
+  "title": "Key-Value Store",
+  "seoTitle": "Design a Distributed Key-Value Store Like DynamoDB",
+  "description": "Design a durable distributed key-value store — partitioning with consistent hashing, replication, tunable quorums, conflict resolution, and failure handling.",
+  "tags": [
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Apple",
+      "Google",
+      "Canva",
+      "Avalara"
+    ],
+    "more": 2
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🗝️",
+      "title": "What is a Key-Value Store?",
+      "text": "A distributed key-value store saves values under keys across many machines — `put(key, value)` and `get(key)` — and keeps working when machines fail. Amazon's Dynamo, Cassandra and Riak are classic examples."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Clients should be able to `put(key, value)` and `get(key)`.",
+        "Clients should be able to `delete(key)`.",
+        "Data must persist durably across restarts."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Range queries and secondary indexes.",
+        "Transactions across multiple keys."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Highly available — reads and writes keep working when nodes or a data center fail.",
+        "Low latency (single-digit milliseconds at p99) for values up to ~1MB.",
+        "Horizontally scalable to petabytes and millions of requests per second.",
+        "Tunable consistency: callers can choose stronger or faster per request."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Multi-tenant isolation."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- put / get / delete",
+        "- durable storage",
+        "",
+        "Non-functional",
+        "- highly available",
+        "- ms latency",
+        "- petabytes, millions of ops/s",
+        "- tunable consistency"
+      ],
+      "caption": "Key-Value Store Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Key / Value**: the data, plus a version (vector clock or timestamp).",
+        "**Node**: a storage server owning parts of the key space.",
+        "**Partition**: a range of the hash ring with its replicas."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "PUT    /kv/:key   { \"value\": \"...\", \"consistency\": \"QUORUM\" }\nGET    /kv/:key?consistency=ONE -> { \"value\", \"version\" }\nDELETE /kv/:key"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-clients-should-be-able-to-put-and-get-keys",
+      "text": "1) Clients should be able to put and get keys"
+    },
+    {
+      "type": "paragraph",
+      "text": "Keys are hashed onto a **consistent hash ring**. Each key is stored on the first N nodes clockwise from its position (N = replication factor, typically 3). Any node can act as **coordinator**: it receives the request, forwards it to the key's replicas, and waits for enough acknowledgements."
+    },
+    {
+      "type": "diagram",
+      "file": "01-replicated-writes-on-a-hash-ring.svg",
+      "caption": "Replicated writes on a hash ring"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-data-must-be-durable",
+      "text": "2) Data must be durable"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each node writes to an append-only **commit log** first, then into an in-memory table (memtable) that is periodically flushed to immutable sorted files (SSTables) — an LSM tree. Background compaction merges files and drops deleted (tombstoned) keys."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-clients-should-be-able-to-delete-keys",
+      "text": "3) Clients should be able to delete keys"
+    },
+    {
+      "type": "paragraph",
+      "text": "Deletes write a **tombstone** with a version rather than removing data immediately, so replicas that missed the delete don't resurrect the old value during repair."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-choose-between-consistency-and-availability",
+      "text": "1) How do we choose between consistency and availability?"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Leader-based replication",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "One replica per partition is the leader and orders all writes; followers copy them."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Strong consistency per key, but writes stall during leader failover."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Leaderless quorums (Dynamo-style)",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Write to all N replicas and wait for W acks; read from R replicas and return the newest version. If **R + W > N**, every read overlaps at least one replica with the latest write. Callers tune per request: `W=1` for fast writes, `R=W=QUORUM` for stronger reads."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Concurrent writes to the same key can conflict; we need versioning and conflict resolution (below)."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-resolve-conflicting-writes",
+      "text": "2) How do we resolve conflicting writes?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Wall-clock last-write-wins",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Keep the value with the latest timestamp."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Clock skew can silently drop a newer write."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Hybrid logical clocks with last-write-wins",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Use hybrid logical timestamps so ordering respects causality within bounded skew. Simple and good enough for most data."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Truly concurrent writes still lose one side."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Vector clocks with application merge",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Each value carries a vector clock. If one version descends from another, keep the newer; if they're concurrent, return both \"siblings\" to the client to merge (e.g. union of shopping-cart items)."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Pushes merge logic to clients and clocks must be pruned."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-handle-node-failures",
+      "text": "3) How do we handle node failures?"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "**Hinted handoff**: if a replica is down, another node accepts the write with a \"hint\" and forwards it when the replica returns.",
+        "**Read repair**: when a read sees stale replicas, the coordinator writes the newest version back to them.",
+        "**Anti-entropy**: replicas periodically compare **Merkle trees** of their key ranges and sync only the branches that differ.",
+        "**Gossip**: nodes exchange membership and health state so everyone learns about failures."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "With N=3 replicas, which setting guarantees reads see the latest acknowledged write?",
+      "options": [
+        "R=1, W=1",
+        "R=2, W=2",
+        "R=1, W=2",
+        "R=3, W=0"
+      ],
+      "answer": 1,
+      "explanation": "R + W > N ensures read and write sets overlap."
+    },
+    {
+      "question": "Why are deletes written as tombstones?",
+      "options": [
+        "To save space",
+        "So replicas that missed the delete don't resurrect old data",
+        "For encryption",
+        "To speed up reads"
+      ],
+      "answer": 1,
+      "explanation": "Tombstones carry a version that wins over the stale value during repair."
+    },
+    {
+      "question": "What is hinted handoff?",
+      "options": [
+        "Moving leaders",
+        "Another node temporarily accepts writes for a down replica and forwards them later",
+        "A compaction strategy",
+        "A client SDK feature"
+      ],
+      "answer": 1,
+      "explanation": "It keeps writes available during short outages."
+    },
+    {
+      "question": "What do Merkle trees enable between replicas?",
+      "options": [
+        "Encryption",
+        "Efficiently finding and syncing only the key ranges that differ",
+        "Leader election",
+        "Compression"
+      ],
+      "answer": 1,
+      "explanation": "Comparing hashes top-down avoids transferring the whole dataset."
+    }
+  ]
+}

@@ -1,0 +1,363 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "real-time-bidding",
+  "category": "Common Problems",
+  "title": "Real-Time Bidding",
+  "seoTitle": "Design a Real-Time Bidding (RTB) Ad Exchange",
+  "description": "Design a real-time bidding ad exchange — fanning bid requests out to many bidders under a 100 ms deadline, running auctions, budget pacing for bidders, and logging billions of events.",
+  "tags": [
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    },
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "⚡",
+      "title": "What is Real-Time Bidding?",
+      "text": "When a web page or app has an ad slot, an **ad exchange** auctions it in real time: it sends a **bid request** describing the slot and user to many **bidders** (demand-side platforms acting for advertisers), collects their bids within about 100 milliseconds, picks the winner and returns the ad — all while the page loads. This happens millions of times per second across the internet. Unlike serving ads inside one app, the exchange depends on many external bidders it doesn't control."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Publishers' ad slots should send ad requests to the exchange.",
+        "The exchange should send bid requests to eligible bidders and collect bids before a deadline.",
+        "The exchange should run an auction (with floor prices) and return the winning ad.",
+        "Impressions, clicks and auction outcomes should be logged for billing and reporting.",
+        "(Bidder side) A bidder should decide whether and how much to bid within its time budget while pacing advertiser budgets."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Ad creative review.",
+        "User identity syncing details.",
+        "Advertiser campaign UIs."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Hard latency limit: the whole auction completes within ~100 ms; bidders get ~50-80 ms.",
+        "Scale to ~5M ad requests per second at peak, each fanned out to many bidders.",
+        "Billing accuracy: impressions and prices must be counted exactly once.",
+        "Graceful degradation: slow bidders must not slow down the auction."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Strong consistency of budget spend (small overspend is tolerated and reconciled)."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- receive ad requests",
+        "- fan out bid requests",
+        "- auction + floors",
+        "- log impressions + clicks",
+        "- bidder: bid + pace budgets",
+        "",
+        "Non-functional",
+        "- ~100ms end to end",
+        "- 5M req/s, fanned out",
+        "- exact billing",
+        "- slow bidders can't slow auctions"
+      ],
+      "caption": "RTB Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Ad request**: slot size, publisher, page context, device, location, user ID (if consented), floor price.",
+        "**Bid request / bid**: OpenRTB messages; a bid has price, creative and campaign.",
+        "**Auction**: request, bids received, winner, clearing price.",
+        "**Impression**: the ad actually rendered (confirmed by a tracking pixel), with the price charged.",
+        "**Campaign (bidder side)**: targeting, bid strategy, daily budget, spend so far."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /ad?slot=&pub=&ctx=...                 (from publisher page / SDK)\nPOST {bidder}/bid  OpenRTB BidRequest -> BidResponse { price, adm, nurl }  (timeout ~80ms)\nGET  /win?auction=&price=                    (win notice to bidder)\nGET  /imp?auction=&sig=                      (impression pixel)\nGET  /click?auction=&sig="
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-receiving-ad-requests",
+      "text": "1) Receiving ad requests"
+    },
+    {
+      "type": "paragraph",
+      "text": "Publisher pages and app SDKs call the exchange's nearest **edge region** (anycast + load balancers). The **auction service** enriches the request with publisher settings (floors, blocked categories) and user data from a low-latency store."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-fanning-out-to-bidders",
+      "text": "2) Fanning out to bidders"
+    },
+    {
+      "type": "paragraph",
+      "text": "The auction service picks **eligible bidders** for the request (by geography, format and each bidder's request quota), sends bid requests in parallel over **persistent HTTP/2 connections**, and waits until the deadline. Late responses are discarded."
+    },
+    {
+      "type": "diagram",
+      "file": "01-auction.svg",
+      "caption": "Auction"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-running-the-auction",
+      "text": "3) Running the auction"
+    },
+    {
+      "type": "paragraph",
+      "text": "Valid bids above the floor are ranked; the winner pays the clearing price (first-price is now standard in display ads; second-price historically). The exchange returns the winning creative and sends a **win notice** to the winning bidder."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-logging-and-billing",
+      "text": "4) Logging and billing"
+    },
+    {
+      "type": "paragraph",
+      "text": "Every auction outcome is logged. Billing is based on **impressions** — the pixel fired when the ad actually renders — not wins, since many won ads never display. Events flow through **Kafka** into deduplicated aggregation for billing and reporting."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-meet-the-100-ms-deadline",
+      "text": "1) How do we meet the 100 ms deadline?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Wait for every bidder",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Send to all bidders and wait for all responses."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "One slow bidder makes every auction slow, and pages render without ads."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Hard per-auction timeout",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Wait at most ~80 ms, then run the auction with whatever has arrived."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Bidders that are usually slow still consume resources on every request, and fanning out to everyone wastes bandwidth."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Timeouts plus adaptive traffic shaping",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Use a hard deadline, and **shape traffic** per bidder: track each bidder's latency, timeout rate and bid rate, and send them only the requests they're likely to bid on and can answer in time (bidders also publish targeting preferences). Keep **regional** auction clusters close to both users and bidders' data centres, persistent connections, and compact encodings (protobuf). Slow or failing bidders are throttled automatically."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Traffic shaping must stay fair and transparent to bidders who pay for access."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-does-a-bidder-decide-and-pace-budgets-in-50-ms",
+      "text": "2) How does a bidder decide and pace budgets in ~50 ms?"
+    },
+    {
+      "type": "paragraph",
+      "text": "The bidder keeps campaigns and targeting in an **in-memory index**, matches the request, predicts click/conversion probability with a fast model, and computes a bid. Budgets are stored centrally but **each bidder node gets a slice** of the remaining budget for the next few seconds (pacing tokens), so it can decide locally without a network call. Spend from impressions flows back to reconcile, and the pacing controller adjusts each campaign's bid rate to spread spend over the day."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention that pacing aims to spend evenly over the day — not to run out by 9 a.m. — so the controller throttles bid participation probability, not just price."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-bill-exactly-once-at-millions-of-events-per-second",
+      "text": "3) How do we bill exactly once at millions of events per second?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Impression and click URLs carry a **signed auction ID** so they can't be forged. Pipelines **deduplicate** by auction ID (a pixel can fire twice) in a streaming job, aggregate spend per campaign and publisher, and write results to a store for billing. A daily batch job recomputes totals from the raw logs to reconcile the streaming numbers before invoices go out."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why does the exchange enforce a hard bid deadline?",
+      "options": [
+        "Bidders prefer it",
+        "Ads must be chosen while the page loads, so slow bidders can't delay auctions",
+        "To save storage",
+        "It's required by HTTP"
+      ],
+      "answer": 1,
+      "explanation": "Late bids are discarded."
+    },
+    {
+      "question": "What is traffic shaping in RTB?",
+      "options": [
+        "Compressing images",
+        "Sending each bidder only requests they're likely to bid on and answer in time",
+        "Blocking all bidders",
+        "Rate limiting users"
+      ],
+      "answer": 1,
+      "explanation": "It reduces wasted fan-out and timeouts."
+    },
+    {
+      "question": "Why bill on impressions rather than auction wins?",
+      "options": [
+        "Wins are secret",
+        "Many won ads never render, so impressions reflect actual delivery",
+        "Impressions are cheaper",
+        "Bidders refuse to pay"
+      ],
+      "answer": 1,
+      "explanation": "The impression pixel confirms the ad was shown."
+    },
+    {
+      "question": "How do bidder nodes pace budgets without a network call per request?",
+      "options": [
+        "They ignore budgets",
+        "Each node gets a local slice of remaining budget that is refreshed frequently",
+        "They query a database each time",
+        "Advertisers approve each bid"
+      ],
+      "answer": 1,
+      "explanation": "Local tokens keep decisions within the latency budget."
+    }
+  ]
+}

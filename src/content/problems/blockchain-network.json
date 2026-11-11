@@ -1,0 +1,361 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "blockchain-network",
+  "category": "Common Problems",
+  "title": "Blockchain Network",
+  "seoTitle": "Design a Blockchain Network",
+  "description": "Design a blockchain network — peer-to-peer gossip of transactions and blocks, a mempool, consensus and finality, state storage with Merkle proofs, and light clients.",
+  "tags": [
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "⛓️",
+      "title": "What is a Blockchain Network?",
+      "text": "A blockchain network is a set of independently operated nodes that agree on a single ordered history of transactions without trusting any one party. Transactions are grouped into **blocks**, each linked to the previous one by a cryptographic hash, and a **consensus** protocol decides which block comes next. The interesting design problem is agreement among nodes that may be faulty or malicious."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to submit signed transactions transferring value between accounts.",
+        "Nodes should agree on the order of transactions and on every account's balance.",
+        "Once a transaction is final, it should never be reversed.",
+        "Anyone should be able to run a node, and lightweight clients should be able to verify their balance without downloading everything."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Smart contract execution details (mentioned briefly).",
+        "Token economics and fees policy.",
+        "Wallet user experience."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Safety under Byzantine faults: correct as long as fewer than one third of validators (by stake) are malicious.",
+        "Finality in seconds, not hours.",
+        "Throughput of ~1,000+ transactions per second.",
+        "Open participation across thousands of nodes over the public internet."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Privacy of transaction contents."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- submit signed transactions",
+        "- agree on order + balances",
+        "- irreversible finality",
+        "- open nodes + light clients",
+        "",
+        "Non-functional",
+        "- tolerate < 1/3 malicious",
+        "- finality in seconds",
+        "- 1,000+ TPS",
+        "- thousands of nodes"
+      ],
+      "caption": "Blockchain Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Account**: address (derived from a public key), balance, nonce.",
+        "**Transaction**: from, to, amount, nonce, fee, signature.",
+        "**Block**: header (parent hash, height, state root, transactions root, proposer) and a list of transactions.",
+        "**Validator**: a node with stake that proposes and votes on blocks.",
+        "**State**: the map of all accounts, committed to by a Merkle root."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /tx { signedTx }                  -> txHash   (submitted to any node)\nGET  /tx/:hash -> { status: pending|included|final, blockHeight }\nGET  /accounts/:address?proof=true -> { balance, nonce, merkleProof }\nP2P: gossip(tx), gossip(block), vote(blockHash, round)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-submitting-transactions",
+      "text": "1) Submitting transactions"
+    },
+    {
+      "type": "paragraph",
+      "text": "A user signs a transaction with their private key and sends it to any node. The node checks the signature, the nonce (to prevent replays) and the balance, adds it to its **mempool** (pending transactions), and **gossips** it to peers, so it spreads across the network in seconds."
+    },
+    {
+      "type": "diagram",
+      "file": "01-gossip.svg",
+      "caption": "Gossip"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-proposing-blocks",
+      "text": "2) Proposing blocks"
+    },
+    {
+      "type": "paragraph",
+      "text": "In each slot, one **validator** is chosen (by stake-weighted rotation) as **proposer**. It picks transactions from its mempool (highest fees first), executes them to compute the new **state root**, and broadcasts the block."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-reaching-agreement",
+      "text": "3) Reaching agreement"
+    },
+    {
+      "type": "paragraph",
+      "text": "Validators verify the block (signatures, execution, state root) and **vote**. A BFT-style protocol (like Tendermint or HotStuff) commits the block once validators holding **more than two thirds of the stake** have voted in two rounds (prepare, then commit). Once committed, the block is **final**: no conflicting block can gather the same supermajority without at least a third of validators provably misbehaving."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-storing-state-and-serving-light-clients",
+      "text": "4) Storing state and serving light clients"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each node applies committed blocks to its **state database**, a Merkle tree (e.g. a Patricia trie) over accounts. The state root in each block header lets a **light client**, which only follows block headers, verify any balance with a short **Merkle proof** from a full node."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-which-consensus-approach",
+      "text": "1) Which consensus approach?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Longest-chain with no finality",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Anyone can extend the chain; the longest chain wins."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Forks mean transactions are only probabilistically final — users wait for many confirmations, and finality can take an hour."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Proof of work",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Miners compete to solve a hash puzzle; the chain with the most cumulative work wins. Open participation without identities."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Enormous energy use, low throughput (~7-15 TPS), and still only probabilistic finality."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Proof of stake with BFT finality",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Validators lock up **stake**; proposers rotate, and blocks are finalised by a **two-thirds stake supermajority** of votes. Equivocation (voting for two conflicting blocks) is provable from signed votes and punished by **slashing** stake. This gives deterministic finality in seconds with tolerable energy use."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "BFT voting is O(n²) messages, so the active validator set is limited (hundreds) or votes are aggregated with signature schemes like BLS."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-raise-throughput",
+      "text": "2) How do we raise throughput?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Bigger and faster blocks increase throughput but also the bandwidth and hardware needed to run a node, which hurts decentralisation. Common techniques: **pipelining** consensus rounds, **parallel execution** of non-conflicting transactions, and moving most activity to **layer-2 rollups** that batch thousands of transactions and post compressed data plus proofs to the main chain."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Name the trilemma: security, decentralisation and scalability pull against each other. Every design choice trades one for another."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-new-nodes-join",
+      "text": "3) How do new nodes join?"
+    },
+    {
+      "type": "paragraph",
+      "text": "A new node downloads block headers, verifies the chain of hashes and validator signatures, then **state-syncs**: fetches a recent state snapshot in chunks from peers, verifying each against the state root, and replays only recent blocks. Peer discovery uses a DHT plus seed nodes; nodes limit connections per IP range to resist **eclipse attacks**."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why do transactions carry a nonce?",
+      "options": [
+        "For encryption",
+        "To prevent the same signed transaction being replayed",
+        "To pay fees",
+        "To pick a validator"
+      ],
+      "answer": 1,
+      "explanation": "Each account's nonce must increase, so an old transaction can't be resubmitted."
+    },
+    {
+      "question": "How many validators (by stake) must vote to finalise a block in BFT proof of stake?",
+      "options": [
+        "Any one",
+        "More than two thirds",
+        "Exactly half",
+        "All of them"
+      ],
+      "answer": 1,
+      "explanation": "A two-thirds supermajority tolerates up to one third faulty validators."
+    },
+    {
+      "question": "How does a light client verify its balance?",
+      "options": [
+        "Trust any node",
+        "A Merkle proof checked against the state root in a block header",
+        "Download all blocks",
+        "Ask a validator for a password"
+      ],
+      "answer": 1,
+      "explanation": "Proofs are small and verifiable against headers."
+    },
+    {
+      "question": "What is slashing?",
+      "options": [
+        "Cutting fees",
+        "Destroying stake of validators who provably misbehave",
+        "Removing old blocks",
+        "Splitting the chain"
+      ],
+      "answer": 1,
+      "explanation": "It makes attacks costly and accountable."
+    }
+  ]
+}

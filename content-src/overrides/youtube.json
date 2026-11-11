@@ -1,0 +1,33 @@
+{
+  "quiz": [
+    {
+      "question": "Which is NOT a primary benefit of using CDNs?",
+      "options": ["Reduced load on origin servers", "Reduced latency through geographic distribution", "Improved data consistency across regions", "Better handling of traffic spikes"],
+      "answer": 2,
+      "explanation": "CDNs cache copies near users, which helps latency, load and spikes, but adds staleness rather than improving consistency."
+    },
+    {
+      "question": "What does adaptive bitrate streaming require at upload time?",
+      "options": [
+        "Storing only the original file",
+        "Transcoding the video into multiple resolutions split into short segments with a manifest",
+        "Compressing the video into a ZIP",
+        "Uploading over WebSockets"
+      ],
+      "answer": 1,
+      "explanation": "Players switch between renditions segment by segment, guided by a manifest, as network conditions change."
+    },
+    {
+      "question": "How are very large video uploads made resumable?",
+      "options": ["Chunked/multipart uploads that track completed parts", "Bigger HTTP timeouts", "Uploading to the metadata DB", "Emailing the file"],
+      "answer": 0,
+      "explanation": "Only the missing chunks need to be re-sent after an interruption."
+    },
+    {
+      "question": "Why is transcoding typically split into a DAG of parallel tasks?",
+      "options": ["It reduces end-to-end processing time", "It improves video quality", "It removes the need for storage", "It is required by CDNs"],
+      "answer": 0,
+      "explanation": "Segments and resolutions can be processed in parallel by many workers, then stitched together."
+    }
+  ]
+}

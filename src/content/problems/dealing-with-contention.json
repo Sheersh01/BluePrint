@@ -1,0 +1,254 @@
+{
+  "section": "patterns",
+  "slug": "dealing-with-contention",
+  "category": "Patterns",
+  "title": "Dealing with Contention",
+  "subtitle": "What to do when many users race to change the same thing — locks, atomic updates, optimistic concurrency, and serialising work.",
+  "seoTitle": "Design Dealing with Contention | System Design Interview Breakdown",
+  "description": "What to do when many users race to change the same thing — locks, atomic updates, optimistic concurrency, and serialising work.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "blocks": [
+    {
+      "type": "paragraph",
+      "text": "Two people click \"Book\" on the last concert seat. A thousand bidders hit the same auction in its final second. Ten thousand buyers fight over a flash-sale inventory counter. **Contention** is when concurrent operations compete to modify the same piece of data — and getting it wrong means double bookings, oversold stock and lost updates."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-problem",
+      "text": "The Problem"
+    },
+    {
+      "type": "paragraph",
+      "text": "The classic bug is **read-check-write**:"
+    },
+    {
+      "type": "code",
+      "code": "remaining = SELECT remaining FROM inventory WHERE id = 1   -- both read 1\nif remaining > 0:\n    UPDATE inventory SET remaining = remaining - 1           -- both write 0\n    create_order()                                            -- two orders!"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each request is correct on its own. Interleaved, they both pass the check before either writes. Any time your logic reads a value, decides, and then writes, you have a race unless something makes the sequence atomic."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-solution",
+      "text": "The Solution"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Pessimistic locking",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Lock the row before reading it so others wait: `SELECT ... FOR UPDATE` inside a transaction, then check and write, then commit to release the lock."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Correct and easy to reason about, but contenders queue on the lock. Never hold a database lock across user think-time (like a checkout page) — use a reservation with a TTL instead."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Atomic conditional updates",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Let the database check and write in one statement:"
+        },
+        {
+          "type": "code",
+          "code": "UPDATE inventory SET remaining = remaining - 1\nWHERE id = 1 AND remaining > 0;\n-- 1 row updated = success, 0 rows = sold out"
+        },
+        {
+          "type": "paragraph",
+          "text": "No lock is held across round trips, and losers fail fast."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Only works when the whole decision fits in a single conditional statement."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Optimistic concurrency control (versioning)",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Read the row with a `version` column, compute the change, then `UPDATE ... SET ..., version = version + 1 WHERE id = ? AND version = :readVersion`. If zero rows changed, someone else won — re-read and retry."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Excellent when conflicts are rare. Under heavy contention, retries pile up and waste work."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Distributed locks with a TTL",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "When the contended resource spans systems, or you need to hold it for minutes (a seat during checkout), acquire a lock in Redis with `SET key owner NX EX 600`. The TTL releases it automatically if the user abandons."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Lock-service failover can grant a lock twice; protect critical writes with **fencing tokens** (a monotonically increasing number checked by the database) and keep the database constraint as the final safety net."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Serialise through a single owner",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Route all operations for one entity to one place — a queue partition keyed by entity ID, or an actor/owner process — which handles them one at a time. No concurrent writers means no race."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Throughput per entity is bounded by one consumer, and you need to handle ownership changes safely."
+        }
+      ]
+    },
+    {
+      "type": "diagram",
+      "file": "01-choosing-a-contention-strategy.svg",
+      "caption": "Choosing a contention strategy"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "when-to-use-in-interviews",
+      "text": "When to Use in Interviews"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "[Ticketmaster](/learn/system-design/problem-breakdowns/ticketmaster) — reserving seats without double booking.",
+        "[Online Auction](/learn/system-design/problem-breakdowns/online-auction) — accepting only bids higher than the current max.",
+        "[Flash Sale](/learn/system-design/problem-breakdowns/flash-sale) — never overselling a tiny inventory.",
+        "[Uber](/learn/system-design/problem-breakdowns/uber) — not offering one driver two rides at once.",
+        "[Payment System](/learn/system-design/problem-breakdowns/payment-system) — never charging twice."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "common-deep-dives",
+      "text": "Common Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "how-do-you-handle-extreme-contention-on-one-item",
+      "text": "How do you handle extreme contention on one item?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Filter demand before it reaches the hot row: a waiting room or queue admits requests at a sustainable rate, an in-memory atomic counter (Redis `DECR`) absorbs the burst, and the database records the outcome asynchronously. You can also split the resource into shards (ten counters of 100 units each) to spread the load."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "what-about-contention-across-services",
+      "text": "What about contention across services?"
+    },
+    {
+      "type": "paragraph",
+      "text": "When a single operation spans several databases, there is no shared transaction. Use a saga with compensating actions, or reserve resources with TTLs in each service and confirm them in a final step."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "why-keep-a-database-constraint-if-you-already-lock",
+      "text": "Why keep a database constraint if you already lock?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Locks can fail in subtle ways (expired TTLs, failovers). A unique constraint or a `CHECK (remaining >= 0)` is cheap insurance that turns a silent data bug into a loud error."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "conclusion",
+      "text": "Conclusion"
+    },
+    {
+      "type": "paragraph",
+      "text": "Spot the read-check-write. Prefer making the decision atomic in the database; reach for optimistic concurrency when conflicts are rare, distributed locks with TTLs when holding resources across time or systems, and a single owner when one entity is extremely hot."
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What is the core bug behind most contention problems?",
+      "options": [
+        "Slow networks",
+        "A non-atomic read-check-write sequence",
+        "Too many indexes",
+        "Small caches"
+      ],
+      "answer": 1,
+      "explanation": "Concurrent requests read the same state before any of them writes, so all pass the check."
+    },
+    {
+      "question": "When is optimistic concurrency control a good fit?",
+      "options": [
+        "When conflicts are rare",
+        "When every request conflicts",
+        "Only for caches",
+        "Never"
+      ],
+      "answer": 0,
+      "explanation": "Version checks avoid locks; retries are cheap only if conflicts are uncommon."
+    },
+    {
+      "question": "Why add a TTL to a distributed lock?",
+      "options": [
+        "To make it faster",
+        "So it is released automatically if the holder crashes or abandons",
+        "To encrypt it",
+        "To replicate it"
+      ],
+      "answer": 1,
+      "explanation": "Without a TTL a crashed holder could block the resource forever."
+    },
+    {
+      "question": "What do fencing tokens protect against?",
+      "options": [
+        "Network partitions between clients",
+        "A stale lock holder writing after its lock was granted to someone else",
+        "Slow queries",
+        "Cache misses"
+      ],
+      "answer": 1,
+      "explanation": "The storage layer rejects writes carrying an older token than the latest it has seen."
+    }
+  ]
+}

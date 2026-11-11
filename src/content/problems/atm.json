@@ -1,0 +1,365 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "atm",
+  "category": "Common Problems",
+  "title": "ATM",
+  "seoTitle": "Design an ATM System",
+  "description": "Design an ATM system — card and PIN authentication, the ATM state machine, withdrawals with authorisation holds, cash dispensing and reconciliation, handling network failures mid-transaction, and security.",
+  "tags": [
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "label": "Multi-step Processes",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🏧",
+      "title": "What is an ATM System?",
+      "text": "An ATM lets bank customers withdraw cash, check balances and deposit money with a card and PIN. Two systems cooperate: the **ATM machine** (card reader, keypad, cash dispenser, running a state machine) and the bank's **back end** (authentication, accounts, authorisation). The interesting problems are what happens when the network fails mid-withdrawal, or the dispenser jams after the account was already debited. It's often asked as object-oriented design and as a distributed transaction problem."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Customers insert a card and enter a PIN to authenticate.",
+        "Customers can check their balance and withdraw cash (within limits).",
+        "Customers can deposit cash or cheques.",
+        "The machine prints or displays a receipt.",
+        "The bank reconciles each machine's cash and transactions."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Cards from other banks via card networks (mentioned briefly).",
+        "Bill payments and transfers."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Correctness: the account is debited exactly once if and only if cash is dispensed.",
+        "Security: PINs never travel or are stored in plain text; machines resist tampering.",
+        "Availability: each ATM responds within a few seconds; the bank back end is highly available.",
+        "Auditability: every step is logged on the machine and at the bank."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "High throughput (an ATM handles one customer at a time)."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- card + PIN",
+        "- balance + withdraw",
+        "- deposit",
+        "- receipt",
+        "- reconciliation",
+        "",
+        "Non-functional",
+        "- debit iff cash dispensed",
+        "- PIN never in plain text",
+        "- responsive, highly available back end",
+        "- fully auditable"
+      ],
+      "caption": "ATM Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**ATM**: ID, location, cash cassettes (denominations and counts), state.",
+        "**Card**: number, linked account(s), status.",
+        "**Account**: balance, daily withdrawal limit, holds.",
+        "**Transaction**: ATM, card, type, amount, status (`authorised`, `dispensed`, `completed`, `reversed`), timestamps."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "In object-oriented terms: `ATM` has a `CardReader`, `Keypad`, `Screen`, `CashDispenser`, `ReceiptPrinter`, and an `ATMState` (state pattern: `Idle`, `CardInserted`, `Authenticated`, `Dispensing`…); a `BankClient` talks to the back end."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "(ATM -> bank) authenticate { cardNumber, encryptedPinBlock } -> sessionToken\n(ATM -> bank) authorise { txnId, account, amount } -> approved | declined\n(ATM -> bank) complete { txnId, dispensedAmount }\n(ATM -> bank) reverse { txnId, reason }\n(ATM -> bank) balance { account }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-authentication",
+      "text": "1) Authentication"
+    },
+    {
+      "type": "paragraph",
+      "text": "The card is read; the PIN is entered on an **encrypting PIN pad** that encrypts it immediately into a PIN block using keys inside tamper-resistant hardware. The bank's **hardware security module (HSM)** verifies the PIN without it ever existing in plain text in software. Three wrong attempts retain or block the card."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-withdrawal-as-a-two-step-transaction",
+      "text": "2) Withdrawal as a two-step transaction"
+    },
+    {
+      "type": "paragraph",
+      "text": "The ATM sends **authorise** with a unique transaction ID. The bank checks balance and limits and places a **hold** for the amount. Only after approval does the ATM dispense; it then sends **complete** with the amount actually dispensed, turning the hold into a debit. If dispensing fails, the ATM sends **reverse**, releasing the hold."
+    },
+    {
+      "type": "diagram",
+      "file": "01-withdrawal.svg",
+      "caption": "Withdrawal"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-the-atm-state-machine",
+      "text": "3) The ATM state machine"
+    },
+    {
+      "type": "paragraph",
+      "text": "The machine moves through `Idle → CardInserted → PinEntry → Authenticated → SelectingTransaction → Dispensing → PrintingReceipt → EjectingCard → Idle`. Each state accepts only valid inputs, and every transition is written to the machine's **local journal** (also printed on a journal roll in older ATMs)."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-reconciliation",
+      "text": "4) Reconciliation"
+    },
+    {
+      "type": "paragraph",
+      "text": "When cash is replenished, the cassettes are counted. The bank compares the machine's journal and cassette counts with its own transaction records; discrepancies (jams, retracted notes) are investigated with the journal."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-what-if-the-network-fails-mid-withdrawal",
+      "text": "1) What if the network fails mid-withdrawal?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Debit first, dispense later",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Debit the account immediately on request, then dispense."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "If the dispenser jams or the machine crashes, the customer is debited with no cash."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Hold, then complete or reverse",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Authorise places a hold; complete or reverse finalises it."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "If the network fails after authorisation, the bank doesn't know whether cash was dispensed."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Idempotent messages + journal + automatic reversal",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Every message carries the **transaction ID**, so retries are idempotent. If the ATM doesn't receive the authorisation response in time, it **doesn't dispense** and sends a reversal (store-and-forward until delivered). If it dispensed but couldn't send completion, it retries completion from its **durable journal** after reconnecting. On the bank side, holds without a completion within a timeout are flagged and matched against the machine's journal during reconciliation, and are reversed if the journal shows no dispense."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "The dispenser's sensors (notes presented, taken, retracted) must be reliable, as they decide what was actually dispensed."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-secure-the-atm",
+      "text": "2) How do we secure the ATM?"
+    },
+    {
+      "type": "paragraph",
+      "text": "PINs are encrypted in the PIN pad and verified only in HSMs; keys are rotated using the bank's key hierarchy. Communication uses mutually authenticated TLS over a private network or VPN. The ATM software is **locked down** (allow-listed processes, signed updates, disabled USB), and the safe and dispenser detect tampering. Fraud monitoring watches for skimming patterns (many cards used once at one machine, then elsewhere)."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention cards from other banks: the ATM sends the request to the card network, which routes it to the issuing bank — the same authorise/complete/reverse pattern applies across organisations."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-should-the-object-oriented-design-look",
+      "text": "3) How should the object-oriented design look?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Use the **state pattern** for the ATM so each state class handles only its valid actions; a **chain of responsibility** for the dispenser to pick notes from denominations (e.g. greedy by largest note, falling back if a cassette is empty); interfaces for hardware (`CashDispenser`, `CardReader`) so they can be mocked in tests and swapped across manufacturers; and a `TransactionManager` that owns the authorise-dispense-complete flow."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why authorise a hold before dispensing instead of debiting immediately?",
+      "options": [
+        "Holds are free",
+        "If dispensing fails, the hold can be released without a debit",
+        "Banks prefer holds",
+        "Faster"
+      ],
+      "answer": 1,
+      "explanation": "The account is debited only after cash is dispensed."
+    },
+    {
+      "question": "What should the ATM do if it gets no authorisation response?",
+      "options": [
+        "Dispense anyway",
+        "Not dispense, and send a reversal until delivered",
+        "Keep the card",
+        "Restart"
+      ],
+      "answer": 1,
+      "explanation": "Unknown outcomes are resolved safely with idempotent reversals."
+    },
+    {
+      "question": "Where is the PIN verified?",
+      "options": [
+        "In the ATM software in plain text",
+        "Inside a hardware security module, from an encrypted PIN block",
+        "On the receipt",
+        "By the card network in plain text"
+      ],
+      "answer": 1,
+      "explanation": "The PIN never exists unencrypted outside secure hardware."
+    },
+    {
+      "question": "Which design pattern fits the ATM's flow?",
+      "options": [
+        "Singleton",
+        "State pattern",
+        "Observer only",
+        "Decorator"
+      ],
+      "answer": 1,
+      "explanation": "Each state handles only the actions valid in that state."
+    }
+  ]
+}

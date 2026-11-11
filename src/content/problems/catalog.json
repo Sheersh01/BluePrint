@@ -1,0 +1,646 @@
+[
+  {
+    "section": "problem-breakdowns",
+    "slug": "ab-testing"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "ad-click-aggregator"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "ads-management"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "ai-model-api"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "amazon-pickup-lockers"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "amazon-warehouse"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "anomaly-detection"
+  },
+  {
+    "section": "tips",
+    "slug": "api-design-cheat-sheet"
+  },
+  {
+    "section": "deep-dives",
+    "slug": "api-gateway"
+  },
+  {
+    "section": "questions",
+    "slug": "apis"
+  },
+  {
+    "section": "questions",
+    "slug": "architecture"
+  },
+  {
+    "section": "real-life",
+    "slug": "asset-monitoring-platform"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "atm"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "authentication-system"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "autonomous-vehicle-platform"
+  },
+  {
+    "section": "tips",
+    "slug": "back-of-the-envelope"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "bigtable"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "blockchain-network"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "blogging-platform"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "bluesky"
+  },
+  {
+    "section": "questions",
+    "slug": "caching"
+  },
+  {
+    "section": "tips",
+    "slug": "caching-failure-scenarios"
+  },
+  {
+    "section": "deep-dives",
+    "slug": "cassandra"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "cdn"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "chatgpt"
+  },
+  {
+    "section": "tips",
+    "slug": "choosing-a-database"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "cloud-data-migration"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "code-deployment"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "concurrent-stream-limit"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "content-moderation"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "crowdfunding"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "data-warehouse"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "database-control-plane"
+  },
+  {
+    "section": "questions",
+    "slug": "databases"
+  },
+  {
+    "section": "patterns",
+    "slug": "dealing-with-contention"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "dependency-injection"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "digital-wallet"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "distributed-cache"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "distributed-file-system"
+  },
+  {
+    "section": "questions",
+    "slug": "distributed-systems"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "distributed-tracing"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "doordash"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "dropbox"
+  },
+  {
+    "section": "deep-dives",
+    "slug": "dynamodb"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "ecommerce-checkout"
+  },
+  {
+    "section": "deep-dives",
+    "slug": "elasticsearch"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "elevator-system"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "enterprise-llm-search"
+  },
+  {
+    "section": "code-review",
+    "slug": "external-api-retry-code"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "facebook-marketplace"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "fb-live-comments"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "fb-news-feed"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "fb-post-search"
+  },
+  {
+    "section": "code-review",
+    "slug": "feed-endpoint-code"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "file-downloader"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "flash-sale"
+  },
+  {
+    "section": "deep-dives",
+    "slug": "flink"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "fraud-detection"
+  },
+  {
+    "section": "questions",
+    "slug": "fundamentals"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "gaming-leaderboard"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "github-actions"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "goodreads"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "google-analytics"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "google-calendar"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "google-docs"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "google-maps"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "gpu-job-manager"
+  },
+  {
+    "section": "patterns",
+    "slug": "handling-large-blobs"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "hotel-booking"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "instagram"
+  },
+  {
+    "section": "tips",
+    "slug": "interview-game-plan"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "interview-platform"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "inventory-system"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "iot-platform"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "job-scheduler"
+  },
+  {
+    "section": "deep-dives",
+    "slug": "kafka"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "key-value-store"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "large-scale-sorting"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "leetcode"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "like-counter"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "live-video-streaming"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "live-viewer-count"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "local-delivery-service"
+  },
+  {
+    "section": "code-review",
+    "slug": "login-endpoint-code"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "loyalty-rewards"
+  },
+  {
+    "section": "patterns",
+    "slug": "managing-long-running-tasks"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "message-queue"
+  },
+  {
+    "section": "questions",
+    "slug": "messaging"
+  },
+  {
+    "section": "tips",
+    "slug": "messaging-failure-scenarios"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "metrics-monitoring"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "ml-platform"
+  },
+  {
+    "section": "code-review",
+    "slug": "money-transfer"
+  },
+  {
+    "section": "patterns",
+    "slug": "multi-step-processes"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "multiplayer-game"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "nearby-friends"
+  },
+  {
+    "section": "questions",
+    "slug": "networking"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "news-aggregator"
+  },
+  {
+    "section": "tips",
+    "slug": "non-functional-requirements"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "notification-system"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "on-call-escalation"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "online-auction"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "online-chess"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "online-poker"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "order-event-processing"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "p2p-file-transfer"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "parking-lot"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "parking-payment"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "parts-compatibility"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "pastebin"
+  },
+  {
+    "section": "tips",
+    "slug": "payment-failure-scenarios"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "payment-system"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "podcast-platform"
+  },
+  {
+    "section": "deep-dives",
+    "slug": "postgresql"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "price-tracking-service"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "prime-video-home"
+  },
+  {
+    "section": "code-review",
+    "slug": "product-cache-code"
+  },
+  {
+    "section": "code-review",
+    "slug": "queue-consumer-code"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "rate-limiter"
+  },
+  {
+    "section": "code-review",
+    "slug": "rate-limiter-code"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "real-time-bidding"
+  },
+  {
+    "section": "patterns",
+    "slug": "real-time-updates"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "recommendation-engine"
+  },
+  {
+    "section": "tips",
+    "slug": "red-flags"
+  },
+  {
+    "section": "deep-dives",
+    "slug": "redis"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "restaurant-booking"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "robinhood"
+  },
+  {
+    "section": "patterns",
+    "slug": "scaling-reads"
+  },
+  {
+    "section": "patterns",
+    "slug": "scaling-writes"
+  },
+  {
+    "section": "questions",
+    "slug": "scenarios"
+  },
+  {
+    "section": "questions",
+    "slug": "search-and-recommendations"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "search-engine"
+  },
+  {
+    "section": "code-review",
+    "slug": "seat-booking-code"
+  },
+  {
+    "section": "questions",
+    "slug": "security"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "slack"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "spotify"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "stack-overflow"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "stock-exchange"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "strava"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "subscription-management"
+  },
+  {
+    "section": "real-life",
+    "slug": "subscription-payment-plans"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "surge-pricing"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "tax-calculation"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "telemedicine"
+  },
+  {
+    "section": "deep-dives",
+    "slug": "temporal"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "ticketmaster"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "tinder"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "twitter"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "typeahead"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "uber"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "user-feedback-system"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "user-preferences-service"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "video-conferencing"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "voting-system"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "weather-app"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "web-crawler"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "webhook-system"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "whatsapp"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "yelp"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "youtube"
+  },
+  {
+    "section": "problem-breakdowns",
+    "slug": "youtube-top-k"
+  },
+  {
+    "section": "deep-dives",
+    "slug": "zookeeper"
+  }
+]

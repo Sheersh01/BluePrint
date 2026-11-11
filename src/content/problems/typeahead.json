@@ -1,0 +1,359 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "typeahead",
+  "category": "Common Problems",
+  "title": "Typeahead Suggestions",
+  "seoTitle": "Design Typeahead Search Suggestions (Autocomplete)",
+  "description": "Design search autocomplete — returning the top suggestions for a prefix in milliseconds using tries or prefix indexes, precomputed rankings, and edge caching.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Facebook",
+      "Google",
+      "Expedia",
+      "Bloomberg"
+    ],
+    "more": 2
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "⌨️",
+      "title": "What is Typeahead?",
+      "text": "Typeahead (autocomplete) suggests completions as a user types into a search box — type \"sys\" and see \"system design\", \"systemctl\", \"sysadmin jobs\"."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "As a user types, return the top 10 suggestions that start with the current prefix.",
+        "Suggestions should be ranked by popularity (how often they're searched).",
+        "Popularity should reflect recent searches, updated at least daily."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Personalised suggestions and spelling correction.",
+        "Multi-language support."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Very low latency: suggestions must appear in < 100ms, ideally < 50ms server time — one request per keystroke.",
+        "Highly available; slightly stale rankings are fine.",
+        "Scale to 100k+ suggestion requests per second at peak."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Filtering offensive suggestions."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- top 10 suggestions for a prefix",
+        "- ranked by popularity",
+        "- refreshed at least daily",
+        "",
+        "Non-functional",
+        "- < 100ms per keystroke",
+        "- available, staleness ok",
+        "- 100k+ req/s"
+      ],
+      "caption": "Typeahead Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Query term**: a search phrase and its popularity score.",
+        "**Prefix**: a string the user has typed so far.",
+        "**Search log**: raw records of completed searches, used to compute popularity."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET /suggestions?prefix=sys&limit=10 -> [\"system design\", \"systemctl\", ...]"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-return-the-top-suggestions-for-a-prefix",
+      "text": "1) Return the top suggestions for a prefix"
+    },
+    {
+      "type": "paragraph",
+      "text": "The core data structure is a **trie**: each node represents a prefix, and we store at every node the **precomputed top-10 completions** for that prefix. A lookup walks down `s → sy → sys` and returns the list stored there — O(length of prefix), no searching through descendants at query time."
+    },
+    {
+      "type": "diagram",
+      "file": "01-serving-suggestions.svg",
+      "caption": "Serving suggestions"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-rank-suggestions-by-popularity",
+      "text": "2) Rank suggestions by popularity"
+    },
+    {
+      "type": "paragraph",
+      "text": "Search logs flow into a data pipeline. A daily (or hourly) batch job counts queries, optionally weighting recent searches more, and keeps the top terms. It then builds a new trie with top-10 lists at every node and writes it as a snapshot."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-keep-rankings-fresh",
+      "text": "3) Keep rankings fresh"
+    },
+    {
+      "type": "paragraph",
+      "text": "Suggestion servers load the new snapshot and swap it in atomically. Readers never see a half-built trie, and rollbacks are just \"load the previous snapshot\"."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-answer-each-keystroke-within-50ms",
+      "text": "1) How do we answer each keystroke within 50ms?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Query the database with LIKE 'prefix%'",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Store terms in a table and run `SELECT ... WHERE term LIKE 'sys%' ORDER BY count DESC LIMIT 10`."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Short prefixes match millions of rows; sorting them per keystroke is far too slow."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Trie in memory, computing top-K at query time",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Walk to the prefix node, then traverse its subtree to find the 10 most popular terms."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Fine for long prefixes, but the subtree under \"s\" is enormous."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Trie with precomputed top-K per node + caching",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Store the top 10 at each node during the offline build, so lookups are a single walk. Shard the trie by prefix range if it doesn't fit on one machine, and cache popular prefixes at the CDN/edge with short TTLs — the first one or two characters are requested constantly. Clients debounce keystrokes and cache recent responses locally."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Storing lists at every node costs memory; cap list size and prune rare terms."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-update-popularity-without-rebuilding-everything-constantly",
+      "text": "2) How do we update popularity without rebuilding everything constantly?"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Rebuild the whole trie daily",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "A batch job recomputes counts and publishes a full snapshot."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Simple and robust; trending topics take up to a day to appear."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Batch baseline + streaming trending layer",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Keep the daily batch trie as the baseline, and add a small streaming layer (e.g. Flink counting the last hour of searches) that boosts sharply trending terms. The service merges trending candidates into the baseline top-10 at query time."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Two systems to operate; the trending layer must be protected against manipulation."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why store the top-K completions at every trie node?",
+      "options": [
+        "To save memory",
+        "So a lookup is a single walk with no subtree search at query time",
+        "Because tries require it",
+        "To support spelling correction"
+      ],
+      "answer": 1,
+      "explanation": "Precomputation moves the expensive ranking work offline."
+    },
+    {
+      "question": "Why is LIKE 'prefix%' a poor fit for typeahead?",
+      "options": [
+        "SQL doesn't support it",
+        "Short prefixes match huge numbers of rows that must be sorted per keystroke",
+        "It returns suffixes",
+        "It can't use strings"
+      ],
+      "answer": 1,
+      "explanation": "The cost explodes for the most common, shortest prefixes."
+    },
+    {
+      "question": "What does client-side debouncing achieve?",
+      "options": [
+        "Better rankings",
+        "Fewer requests by waiting until the user pauses typing",
+        "Encryption",
+        "Personalisation"
+      ],
+      "answer": 1,
+      "explanation": "Skipping intermediate keystrokes cuts load substantially."
+    },
+    {
+      "question": "How can trending terms appear faster than the daily rebuild?",
+      "options": [
+        "Rebuild every second",
+        "A streaming counter that boosts recent popular terms at query time",
+        "Ask users",
+        "Disable caching"
+      ],
+      "answer": 1,
+      "explanation": "A small real-time layer complements the stable batch baseline."
+    }
+  ]
+}

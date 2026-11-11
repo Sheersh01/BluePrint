@@ -1,0 +1,48 @@
+{
+  "quiz": [
+    {
+      "question": "What does it mean that DynamoDB is a 'fully-managed' service?",
+      "options": [
+        "It automatically writes application code for you",
+        "AWS handles provisioning, configuration, and scaling",
+        "It requires no configuration or setup",
+        "It only works with other AWS services"
+      ],
+      "answer": 1,
+      "explanation": "AWS operates the hardware, replication, patching and scaling — you define tables and access patterns."
+    },
+    {
+      "question": "What is the role of the sort key in a composite primary key?",
+      "options": [
+        "It chooses the partition",
+        "It orders items within a partition and enables range queries",
+        "It encrypts items",
+        "It sets TTL"
+      ],
+      "answer": 1,
+      "explanation": "Items sharing a partition key are stored sorted by the sort key."
+    },
+    {
+      "question": "When would you add a Global Secondary Index?",
+      "options": [
+        "To query by an attribute other than the primary key",
+        "To speed up writes",
+        "To enable transactions",
+        "To reduce storage"
+      ],
+      "answer": 0,
+      "explanation": "A GSI provides a different partition/sort key so new access patterns can be queried efficiently."
+    },
+    {
+      "question": "What does a strongly consistent read in DynamoDB guarantee?",
+      "options": [
+        "It's cheaper",
+        "It reflects all writes acknowledged before the read",
+        "It works across regions",
+        "It never fails"
+      ],
+      "answer": 1,
+      "explanation": "Strong reads return the latest committed value, at higher cost."
+    }
+  ]
+}

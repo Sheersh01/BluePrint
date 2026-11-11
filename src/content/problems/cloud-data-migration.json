@@ -1,0 +1,329 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "cloud-data-migration",
+  "category": "Common Problems",
+  "title": "Cloud Data Migration",
+  "seoTitle": "Design a System to Migrate Petabytes of Data to the Cloud",
+  "description": "Design a large-scale data migration service — parallel chunked transfers, checksums and verification, resumability, bandwidth control, and live cutover with change sync.",
+  "tags": [
+    {
+      "label": "Handling Large Blobs",
+      "href": "/learn/system-design/patterns/handling-large-blobs"
+    },
+    {
+      "label": "Managing Long Running Tasks",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Google",
+      "OCI"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "☁️",
+      "title": "What is Cloud Data Migration?",
+      "text": "Migration services move large datasets — petabytes of files from an on-premises data centre or another cloud — into cloud object storage, verifying every byte and keeping the copy in sync until applications switch over."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to create a migration job from a source (on-prem file servers, another bucket) to a destination bucket.",
+        "The system should copy all objects, preserving metadata, and verify integrity.",
+        "Jobs should show progress and per-object errors, and be resumable.",
+        "The system should support incremental syncs so changes made during migration are copied before cutover."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Database schema migration.",
+        "Physical transfer appliances (shipping disks)."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Throughput: saturate available bandwidth (e.g. 10-100 Gbps) using many parallel workers.",
+        "Correctness: no silent corruption or missed files; every object verified.",
+        "Fault tolerant: worker or network failures resume without recopying completed data.",
+        "Controllable: bandwidth limits so production traffic on the source isn't harmed."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Real-time replication forever."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- create job: source -> destination",
+        "- copy + preserve metadata",
+        "- progress, errors, resume",
+        "- incremental syncs before cutover",
+        "",
+        "Non-functional",
+        "- saturate bandwidth",
+        "- verify every object",
+        "- resume after failures",
+        "- bandwidth throttling"
+      ],
+      "caption": "Migration Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Job**: source, destination, filters, schedule, bandwidth limit, status.",
+        "**Manifest entry**: one object to copy — path, size, mtime, checksum, state.",
+        "**Task**: a batch of manifest entries (or chunks of a large file) assigned to a worker.",
+        "**Agent**: a worker running near the source with network access to both ends."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /migrations { \"source\": \"nfs://dc1/share\", \"destination\": \"gs://bucket/prefix\", \"bandwidthLimitGbps\": 5 } -> Job\nGET  /migrations/:id -> { status, bytesCopied, objectsCopied, errors }\nPOST /migrations/:id/sync     (incremental pass)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-create-a-job-and-build-a-manifest",
+      "text": "1) Create a job and build a manifest"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **Coordinator** lists the source (in parallel, by directory) and writes a **manifest** of objects to copy into a database. Listing billions of files is itself a big job, so it is split across workers too."
+    },
+    {
+      "type": "diagram",
+      "file": "01-migration-architecture.svg",
+      "caption": "Migration architecture"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-copy-and-verify-objects",
+      "text": "2) Copy and verify objects"
+    },
+    {
+      "type": "paragraph",
+      "text": "Agents lease tasks from the coordinator, read objects from the source and upload them with **multipart uploads** (large files split into chunks uploaded in parallel). Each chunk's checksum is sent with the upload so the destination rejects corrupted parts; after completion the agent compares the whole-object checksum, then marks the manifest entry done."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-progress-errors-and-resumability",
+      "text": "3) Progress, errors and resumability"
+    },
+    {
+      "type": "paragraph",
+      "text": "The manifest is the source of truth: entries move from `PENDING → IN_PROGRESS → VERIFIED` (or `FAILED` with an error). If an agent dies, its task leases expire and are reassigned; completed parts of multipart uploads are reused rather than resent."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-incremental-sync-before-cutover",
+      "text": "4) Incremental sync before cutover"
+    },
+    {
+      "type": "paragraph",
+      "text": "Later passes re-list the source and copy only objects whose size, mtime or checksum changed since the last pass. Each pass gets smaller; at cutover, writes to the source are frozen briefly, a final sync runs, and applications switch to the cloud."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-maximise-throughput",
+      "text": "1) How do we maximise throughput?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "A single copy process",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Run one `cp -r` from a single machine."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Limited by one machine's network and disk; one failure restarts everything."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Many agents, parallel chunks, small-file batching",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Scale out agents near the source. Large files go as parallel multipart chunks; millions of tiny files are batched per task (and optionally packed) to amortise per-request overhead. A token-bucket limiter per agent enforces the bandwidth cap and can follow a schedule (faster at night)."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Per-object API overhead dominates for small files, and destination rate limits per prefix may require spreading key names."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-guarantee-nothing-is-lost-or-corrupted",
+      "text": "2) How do we guarantee nothing is lost or corrupted?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Verify end to end: checksum at the source, per-chunk checksums during upload, and a whole-object checksum comparison at the destination. After the copy, run a **reconciliation**: compare source and destination listings (count, sizes, checksums) and report any differences. Never mark a job complete on \"no errors seen\" alone."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What is the manifest used for?",
+      "options": [
+        "Billing",
+        "Tracking every object to copy and its state, enabling progress and resume",
+        "Encrypting data",
+        "DNS"
+      ],
+      "answer": 1,
+      "explanation": "It's the source of truth for what's done and what remains."
+    },
+    {
+      "question": "How do you reduce downtime at cutover?",
+      "options": [
+        "Copy everything during a long outage",
+        "Run incremental syncs until the delta is tiny, then freeze writes for a final pass",
+        "Skip verification",
+        "Copy only new files"
+      ],
+      "answer": 1,
+      "explanation": "Each pass shrinks; the final freeze is short."
+    },
+    {
+      "question": "Why batch many small files per task?",
+      "options": [
+        "Small files are corrupt",
+        "Per-object overhead dominates throughput for tiny files",
+        "For encryption",
+        "Destinations reject them"
+      ],
+      "answer": 1,
+      "explanation": "Batching amortises request overhead."
+    },
+    {
+      "question": "What proves the migration is complete?",
+      "options": [
+        "No errors logged",
+        "A reconciliation comparing source and destination counts, sizes and checksums",
+        "Time elapsed",
+        "User confirmation"
+      ],
+      "answer": 1,
+      "explanation": "Positive verification catches silently missed objects."
+    }
+  ]
+}

@@ -1,0 +1,225 @@
+{
+  "section": "deep-dives",
+  "slug": "zookeeper",
+  "category": "Key Technologies",
+  "title": "ZooKeeper",
+  "subtitle": "How to use ZooKeeper in system design interviews — coordination, leader election, service discovery, configuration, and distributed locks.",
+  "seoTitle": "Design ZooKeeper | System Design Interview Breakdown",
+  "description": "How to use ZooKeeper in system design interviews — coordination, leader election, service discovery, configuration, and distributed locks.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "blocks": [
+    {
+      "type": "paragraph",
+      "text": "Apache ZooKeeper is a coordination service for distributed systems. It doesn't store your application data; it stores small pieces of critical **metadata** — who the leader is, which servers are alive, which shard lives where — and gives every node a consistent view of it. Systems like Kafka (historically), HBase and many in-house platforms rely on it, and etcd and Consul fill the same role."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-basics",
+      "text": "The Basics"
+    },
+    {
+      "type": "paragraph",
+      "text": "ZooKeeper runs as an **ensemble** of servers (usually 3 or 5). One is elected leader; writes go through the leader and are committed once a **majority quorum** acknowledges them (the ZAB protocol). Reads can be served by any server. With 5 servers, the ensemble survives 2 failures."
+    },
+    {
+      "type": "paragraph",
+      "text": "Data is organised as a tree of **znodes**, like a filesystem: `/app/leader`, `/app/servers/server-1`. Each znode holds a small amount of data (kilobytes, not megabytes)."
+    },
+    {
+      "type": "diagram",
+      "file": "01-a-zookeeper-ensemble.svg",
+      "caption": "A ZooKeeper ensemble"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "key-concepts",
+      "text": "Key Concepts"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "ephemeral-and-sequential-znodes",
+      "text": "Ephemeral and sequential znodes"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "**Ephemeral znodes** exist only while the client session that created them is alive. If a server crashes and its session times out, its ephemeral nodes disappear — perfect for tracking liveness.",
+        "**Sequential znodes** get a monotonically increasing suffix (`lock-0000000042`), giving a global ordering."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "watches",
+      "text": "Watches"
+    },
+    {
+      "type": "paragraph",
+      "text": "Clients can set a **watch** on a znode and get notified when it changes or is deleted. Instead of polling \"is the leader still alive?\", a node waits for a notification."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "consistency-guarantees",
+      "text": "Consistency guarantees"
+    },
+    {
+      "type": "paragraph",
+      "text": "All writes are linearizable and applied in the same order everywhere. Reads may be slightly behind on a follower, but a client calling `sync` first reads the latest committed state."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "common-uses",
+      "text": "Common Uses"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "leader-election",
+      "text": "Leader election"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each candidate creates an ephemeral sequential znode under `/election`. The one with the lowest sequence number is leader. Every other candidate watches the node just before its own; when that node disappears, it checks whether it's now the lowest. Watching only your predecessor avoids a **herd effect** where every node wakes up on each change."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "service-discovery-and-membership",
+      "text": "Service discovery and membership"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each server registers an ephemeral znode under `/services/api/`. Clients list the children (and watch them) to find live servers; crashed servers vanish automatically when their sessions expire."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "configuration-and-shard-maps",
+      "text": "Configuration and shard maps"
+    },
+    {
+      "type": "paragraph",
+      "text": "Store small, critical config — feature flags, the mapping of shards to servers — in znodes. Watches push changes to every node within milliseconds."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "distributed-locks",
+      "text": "Distributed locks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Same recipe as leader election: the lowest sequential ephemeral node holds the lock. Because session expiry can release a lock while the old holder still thinks it owns it (e.g. after a long GC pause), pair locks with **fencing tokens** — use the znode's sequence number as a token that downstream storage checks."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "when-to-use-it-in-an-interview",
+      "text": "When to Use It in an Interview"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Choosing a single leader or coordinator (a scheduler, a partition owner).",
+        "Tracking which servers are alive and which data they own — e.g. the hash ring in a [Distributed Cache](/learn/system-design/problem-breakdowns/distributed-cache) or document ownership in [Google Docs](/learn/system-design/problem-breakdowns/google-docs).",
+        "Sharding coordination for watchers in a [Job Scheduler](/learn/system-design/problem-breakdowns/job-scheduler)."
+      ]
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "In many modern designs you can name **etcd** instead — it offers the same primitives (leases, watches, linearizable writes) with a simpler API and is what Kubernetes uses. Kafka has also replaced ZooKeeper with its built-in KRaft quorum."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "limitations",
+      "text": "Limitations"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "**Not a database** — small data only; heavy read/write traffic will overwhelm it.",
+        "**Write throughput** is limited by quorum replication through a single leader.",
+        "**Operational care** — ensembles need odd sizes, low-latency disks for the transaction log, and careful session timeout tuning.",
+        "**Majority required** — losing quorum makes the ensemble unavailable for writes (it chooses consistency over availability)."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "summary",
+      "text": "Summary"
+    },
+    {
+      "type": "paragraph",
+      "text": "ZooKeeper provides consistent, highly available coordination primitives: znodes, ephemeral nodes for liveness, sequential nodes for ordering, and watches for notifications. Use it (or etcd) for leader election, membership, configuration and locks — and keep application data elsewhere."
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What happens to an ephemeral znode when its client's session expires?",
+      "options": [
+        "It becomes permanent",
+        "It is deleted automatically",
+        "It is replicated",
+        "It is locked"
+      ],
+      "answer": 1,
+      "explanation": "Ephemeral znodes are tied to the session, making them ideal for liveness tracking."
+    },
+    {
+      "question": "How many server failures can a 5-node ZooKeeper ensemble tolerate?",
+      "options": [
+        "1",
+        "2",
+        "3",
+        "4"
+      ],
+      "answer": 1,
+      "explanation": "A majority (3 of 5) must remain to commit writes."
+    },
+    {
+      "question": "In leader election, why does each node watch only its predecessor?",
+      "options": [
+        "To save disk",
+        "To avoid a herd effect where every node wakes up on every change",
+        "Because watches are expensive to create",
+        "To elect multiple leaders"
+      ],
+      "answer": 1,
+      "explanation": "Only the next-in-line node is notified when the node ahead of it disappears."
+    },
+    {
+      "question": "What kind of data belongs in ZooKeeper?",
+      "options": [
+        "User-uploaded files",
+        "Small, critical coordination metadata like leaders and shard maps",
+        "Analytics events",
+        "Full database tables"
+      ],
+      "answer": 1,
+      "explanation": "ZooKeeper is for coordination, not bulk data storage."
+    }
+  ]
+}

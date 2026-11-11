@@ -1,0 +1,369 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "on-call-escalation",
+  "category": "Common Problems",
+  "title": "On-Call Escalation",
+  "seoTitle": "Design an On-Call Escalation System Like PagerDuty",
+  "description": "Design an on-call paging system — ingesting alerts, deduplicating into incidents, rotating schedules, escalation policies with timers, and reliable multi-channel notifications.",
+  "tags": [
+    {
+      "label": "Multi-step Processes",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    },
+    {
+      "label": "Managing Long Running Tasks",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Uber"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📟",
+      "title": "What is an On-Call Escalation System?",
+      "text": "An on-call system (like PagerDuty or Opsgenie) receives alerts from monitoring tools, works out who is on call, pages them, and escalates to the next person if nobody acknowledges in time."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Monitoring systems should be able to send alerts to a service.",
+        "Duplicate alerts should be grouped into a single incident.",
+        "Teams should define on-call schedules (rotations) and escalation policies (e.g. page primary, after 5 minutes page secondary, after 10 page the manager).",
+        "Responders should be notified by push, SMS and phone call, and be able to acknowledge or resolve incidents."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Post-incident reports and analytics.",
+        "Chat-ops integrations."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Extreme reliability: a page must never be silently lost — this system is used when everything else is broken.",
+        "Low latency: notifications sent within seconds of an alert.",
+        "Escalation timers fire on time.",
+        "Must keep working during regional cloud outages (which is exactly when alerts spike)."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Billing and user management."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- ingest alerts",
+        "- dedupe into incidents",
+        "- schedules + escalation policies",
+        "- notify; ack / resolve",
+        "",
+        "Non-functional",
+        "- never lose a page",
+        "- notify in seconds",
+        "- timers on time",
+        "- survive regional outages"
+      ],
+      "caption": "On-Call Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Alert**: an event from a monitoring source with a dedup key.",
+        "**Incident**: grouped alerts with status (TRIGGERED → ACKNOWLEDGED → RESOLVED).",
+        "**Schedule**: rotation of users over time, with overrides.",
+        "**Escalation policy**: ordered levels, each with targets and a timeout.",
+        "**Notification**: a delivery attempt to a user on a channel."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /v1/alerts { \"serviceKey\", \"dedupKey\": \"db-cpu-high\", \"severity\": \"critical\", \"summary\" }\nPOST /incidents/:id/acknowledge\nPOST /incidents/:id/resolve\nGET  /schedules/:id/oncall?at=2026-11-10T03:00Z -> User"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-ingest-alerts",
+      "text": "1) Ingest alerts"
+    },
+    {
+      "type": "paragraph",
+      "text": "An **Ingestion API** accepts alerts, writes them durably (replicated log), and acknowledges the sender. It must be the most available part of the system — senders retry, so idempotency by `(serviceKey, dedupKey)` prevents duplicates."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-group-into-incidents",
+      "text": "2) Group into incidents"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Incident Service** looks up an open incident for the dedup key; if found, it appends the alert, otherwise it creates a new incident in `TRIGGERED` state and starts the escalation workflow."
+    },
+    {
+      "type": "diagram",
+      "file": "01-alert-to-page.svg",
+      "caption": "Alert to page"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-schedules-and-escalation",
+      "text": "3) Schedules and escalation"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Escalation Engine** resolves level 1 targets — computing who's on call from the schedule's rotation rules and overrides at that moment — notifies them, and sets a timer for the level's timeout. If the incident is still unacknowledged when the timer fires, it moves to the next level."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-notify-acknowledge-resolve",
+      "text": "4) Notify, acknowledge, resolve"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Notifier** sends push, SMS and voice calls via multiple providers. Acknowledging cancels pending escalation timers; resolving closes the incident."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-guarantee-pages-are-never-lost",
+      "text": "1) How do we guarantee pages are never lost?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Fire-and-forget notifications",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Call the SMS provider once when the incident triggers."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Provider outages, rejected numbers or a crash mid-send mean nobody is woken up."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Durable escalation workflow with multi-provider delivery",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Model each incident's escalation as a durable workflow (state persisted after every step). Notifications go through a queue with retries; each channel has **multiple providers** with automatic failover (if Twilio fails, try another SMS provider). Track delivery receipts, and escalate faster if a notification can't be delivered at all."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Must dedupe so failover doesn't spam responders with duplicates — idempotency keys per notification attempt."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-escalation-timers-fire-reliably",
+      "text": "2) How do escalation timers fire reliably?"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Poll the database for due escalations",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "A worker queries `WHERE next_escalation_at <= now()` every few seconds."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Simple and robust at moderate scale; polling delay adds a few seconds."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Durable timers in a workflow engine or delayed queue",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Schedule a durable timer per escalation level (e.g. a delayed message or Temporal timer). Acknowledgement cancels it; firing re-checks incident state before escalating (so a late timer after ack is a no-op)."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Timers must be checked against current state to stay idempotent."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-stay-up-during-cloud-outages",
+      "text": "3) How do we stay up during cloud outages?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Run active-active across multiple regions (and ideally multiple cloud providers) with replicated state, use DNS failover for the ingestion endpoint, and avoid depending on the same infrastructure your customers are alerting about. Practise failover regularly — this system can't be the thing that breaks during an incident."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why deduplicate alerts by a dedup key?",
+      "options": [
+        "To save storage only",
+        "So a flapping alert creates one incident instead of hundreds of pages",
+        "For billing",
+        "To encrypt alerts"
+      ],
+      "answer": 1,
+      "explanation": "Grouping prevents paging storms."
+    },
+    {
+      "question": "What happens if a durable escalation timer fires after the incident was acknowledged?",
+      "options": [
+        "It pages anyway",
+        "It re-checks state and does nothing",
+        "It resolves the incident",
+        "It crashes"
+      ],
+      "answer": 1,
+      "explanation": "Checking current state keeps timers idempotent."
+    },
+    {
+      "question": "Why use multiple SMS/voice providers?",
+      "options": [
+        "Cheaper messages",
+        "Failover so a provider outage doesn't drop pages",
+        "Faster typing",
+        "Legal requirement"
+      ],
+      "answer": 1,
+      "explanation": "Delivery must survive third-party failures."
+    },
+    {
+      "question": "Why must the system be independent of the infrastructure it monitors?",
+      "options": [
+        "It's cheaper",
+        "Alerts spike exactly when that infrastructure is failing",
+        "For privacy",
+        "It isn't important"
+      ],
+      "answer": 1,
+      "explanation": "A shared failure would silence the pages."
+    }
+  ]
+}

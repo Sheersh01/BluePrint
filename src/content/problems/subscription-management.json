@@ -1,0 +1,362 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "subscription-management",
+  "category": "Common Problems",
+  "title": "Subscription Management",
+  "seoTitle": "Design a Subscription Billing System like Stripe Billing",
+  "description": "Design a subscription management system — plans, recurring billing cycles, proration on upgrades, failed-payment retries (dunning), entitlements and idempotent renewals at scale.",
+  "tags": [
+    {
+      "label": "Multi-step Processes",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    },
+    {
+      "label": "Managing Long Running Tasks",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🔁",
+      "title": "What is a Subscription Management System?",
+      "text": "A subscription system lets customers sign up for a plan (monthly or yearly), charges them automatically each cycle, handles upgrades, downgrades and cancellations, and tells the product what each customer is entitled to use. Netflix, Spotify and SaaS products all rely on one — often Stripe Billing or an in-house equivalent."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Customers should be able to subscribe to a plan with a billing period and price.",
+        "The system should charge customers automatically at each renewal and issue invoices.",
+        "Customers should be able to upgrade, downgrade or cancel, with proration where appropriate.",
+        "Failed payments should be retried, and access suspended if payment never succeeds.",
+        "Products should be able to check a customer's entitlements (what they currently have access to)."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Tax calculation (a separate service).",
+        "Usage-based metering (discussed briefly).",
+        "Revenue recognition accounting."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Never double-charge, and never silently skip a renewal.",
+        "Entitlement checks must be fast (< 10 ms) and highly available — they gate the product.",
+        "Handle ~50M subscriptions, with renewals heavily clustered on the 1st of the month.",
+        "All billing changes must be auditable."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Real-time renewal at the exact second — within a few hours of the due time is fine."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- subscribe to plans",
+        "- automatic renewals + invoices",
+        "- upgrade / downgrade / cancel",
+        "- retry failed payments",
+        "- entitlement checks",
+        "",
+        "Non-functional",
+        "- never double-charge",
+        "- entitlements < 10ms, always up",
+        "- 50M subs, 1st-of-month spikes",
+        "- auditable"
+      ],
+      "caption": "Subscription Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Plan**: product, price, currency, billing interval, features.",
+        "**Subscription**: customer, plan, status (`trialing`, `active`, `past_due`, `cancelled`), current period start/end.",
+        "**Invoice**: line items for one billing period, amount, status, payment attempts.",
+        "**Entitlement**: the features a customer can currently use, derived from active subscriptions."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST  /subscriptions { customerId, planId, paymentMethodId }\nPATCH /subscriptions/:id { planId, prorate: true }\nPOST  /subscriptions/:id/cancel { atPeriodEnd: true }\nGET   /customers/:id/entitlements -> { features[] }\nWebhooks out: invoice.paid, invoice.payment_failed, subscription.updated"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-customers-subscribe",
+      "text": "1) Customers subscribe"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Subscription Service** stores the subscription, generates the first **invoice**, and charges it through the **payment processor**. On success the subscription becomes `active` with `current_period_end` one interval ahead, and entitlements are updated."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-automatic-renewals",
+      "text": "2) Automatic renewals"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **renewal scheduler** finds subscriptions whose `current_period_end` has passed (an index on that column) and enqueues a renewal job for each. A **billing worker** creates the next invoice and charges it. Advancing the period and recording the invoice happen in one transaction, keyed by `(subscriptionId, periodStart)` so the same period can never be billed twice."
+    },
+    {
+      "type": "diagram",
+      "file": "01-renewals.svg",
+      "caption": "Renewals"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-upgrades-downgrades-cancellations",
+      "text": "3) Upgrades, downgrades, cancellations"
+    },
+    {
+      "type": "paragraph",
+      "text": "An **upgrade** mid-cycle is prorated: credit the unused part of the old plan, charge the remaining part of the new one, and switch entitlements immediately. A **downgrade** usually takes effect at period end, so the customer keeps what they paid for. **Cancellation** at period end just stops the next renewal."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-failed-payments-and-entitlements",
+      "text": "4) Failed payments and entitlements"
+    },
+    {
+      "type": "paragraph",
+      "text": "If a charge fails, the subscription moves to `past_due` and enters **dunning** (below). Every status change publishes an event that the **Entitlement Service** consumes to update a fast lookup store."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-renew-50m-subscriptions-without-double-charging",
+      "text": "1) How do we renew 50M subscriptions without double charging?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Cron job loops through subscriptions",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "A nightly cron selects all due subscriptions and charges them one by one."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "On the 1st it takes hours, and if it crashes midway, a rerun may charge some customers twice."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Queue of renewal jobs",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "The scheduler enqueues one job per due subscription; many workers process them in parallel."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Queues deliver at least once, so a job may run twice — still a double-charge risk without more care."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Idempotent invoices and charges",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Each renewal creates an invoice with a unique key `(subscriptionId, periodStart)`; a duplicate job finds the existing invoice and does nothing. The charge uses the invoice ID as the payment processor's **idempotency key**, so even a retried charge call can't double-bill. To spread the 1st-of-month spike, renewals are processed over a few hours, and new subscriptions anchor billing to their own signup date."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "If the charge outcome is unknown (timeout), the invoice stays `pending` and is reconciled by querying the processor, never by charging again blindly."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-does-dunning-work",
+      "text": "2) How does dunning work?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Dunning is a **long-running workflow** per failed invoice: retry the card on a schedule (e.g. after 1, 3, 5 and 7 days), email the customer to update their card, and finally cancel or suspend. Many failures are temporary (insufficient funds, expired card refreshed by card-network updater services), so smart retry timing recovers a lot of revenue. Run it in a durable workflow engine (Temporal) or as scheduled jobs with state stored on the invoice."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention the grace period: keeping access during the first few days of `past_due` avoids punishing customers for a bank hiccup."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-make-entitlement-checks-fast-and-reliable",
+      "text": "3) How do we make entitlement checks fast and reliable?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Products call entitlements on nearly every request, so it can't depend on the billing database. The Entitlement Service keeps a **denormalised record per customer** (features, limits, expiry) in Redis or DynamoDB, updated from subscription events. Clients cache it for a short time. If the service is unreachable, products **fail open** using the cached value rather than locking customers out."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "How do we prevent a renewal job that runs twice from charging twice?",
+      "options": [
+        "Run jobs only once a month",
+        "A unique invoice per subscription and period, used as the payment idempotency key",
+        "Lock the whole table",
+        "Ask the customer"
+      ],
+      "answer": 1,
+      "explanation": "Idempotent invoices and charges make duplicate jobs harmless."
+    },
+    {
+      "question": "What is dunning?",
+      "options": [
+        "Sending invoices",
+        "Retrying failed payments and notifying customers before suspending",
+        "Calculating tax",
+        "Upgrading plans"
+      ],
+      "answer": 1,
+      "explanation": "It's a long-running recovery workflow for failed payments."
+    },
+    {
+      "question": "Why serve entitlements from a separate store?",
+      "options": [
+        "It's cheaper",
+        "Products check them constantly, so they need to be fast and independent of billing",
+        "Billing has no data",
+        "Regulations require it"
+      ],
+      "answer": 1,
+      "explanation": "A denormalised, cached store keeps the product fast even if billing is busy."
+    },
+    {
+      "question": "When does a downgrade usually take effect?",
+      "options": [
+        "Immediately with a refund",
+        "At the end of the current period",
+        "Never",
+        "After a week"
+      ],
+      "answer": 1,
+      "explanation": "Customers keep what they've already paid for."
+    }
+  ]
+}

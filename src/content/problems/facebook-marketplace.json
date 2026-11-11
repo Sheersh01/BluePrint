@@ -1,0 +1,345 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "facebook-marketplace",
+  "category": "Common Problems",
+  "title": "Facebook Marketplace",
+  "seoTitle": "Design a Local Marketplace Like Facebook Marketplace",
+  "description": "Design a peer-to-peer marketplace — creating listings with photos, searching nearby listings with filters, messaging sellers, and marking items sold.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    },
+    {
+      "label": "Handling Large Blobs",
+      "href": "/learn/system-design/patterns/handling-large-blobs"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "easy",
+  "askedAt": {
+    "companies": [
+      "Facebook",
+      "Roblox"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🛍️",
+      "title": "What is Facebook Marketplace?",
+      "text": "Facebook Marketplace lets people list items for sale — a used bike, a sofa — and lets buyers nearby browse, search, and message sellers to arrange a deal."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Sellers should be able to create a listing with title, description, price, category, location and photos.",
+        "Buyers should be able to browse and search listings near them, with filters (category, price range, distance).",
+        "Buyers should be able to message a seller about a listing.",
+        "Sellers should be able to mark a listing as sold or delete it."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Payments and shipping.",
+        "Personalised recommendations."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Search results in < 500ms.",
+        "New listings searchable within a minute; sold items disappear quickly.",
+        "Highly available browsing; eventual consistency is acceptable.",
+        "Scale to hundreds of millions of listings and 100M+ daily browsers."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Fraud and prohibited-item detection."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- create listing + photos",
+        "- search nearby w/ filters",
+        "- message seller",
+        "- mark sold / delete",
+        "",
+        "Non-functional",
+        "- search < 500ms",
+        "- searchable within ~1 min",
+        "- available, eventual consistency",
+        "- 100s of millions of listings"
+      ],
+      "caption": "Marketplace Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Listing**: seller, title, description, price, category, location, status, photo references.",
+        "**Photo**: image objects in blob storage with resized variants.",
+        "**Conversation / Message**: buyer ↔ seller messages tied to a listing."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST  /listings { title, description, price, category, lat, lng, photoIds[] } -> Listing\nGET   /listings/search?q&category&minPrice&maxPrice&lat&lng&radiusKm&cursor -> Listing[]\nPATCH /listings/:id { status: \"SOLD\" }\nPOST  /listings/:id/conversations { message } -> Conversation"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-sellers-create-listings",
+      "text": "1) Sellers create listings"
+    },
+    {
+      "type": "paragraph",
+      "text": "Photos upload directly to blob storage via presigned URLs; a worker creates thumbnails. The **Listing Service** writes the listing to the primary database and emits a change event."
+    },
+    {
+      "type": "diagram",
+      "file": "01-listings-and-search.svg",
+      "caption": "Listings and search"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-buyers-search-nearby-listings",
+      "text": "2) Buyers search nearby listings"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **search index** (Elasticsearch/OpenSearch) holds listings with a `geo_point`, category, price and text fields. A single query combines a distance filter, category and price filters, full-text match, and ranking by recency and distance."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-buyers-message-sellers",
+      "text": "3) Buyers message sellers"
+    },
+    {
+      "type": "paragraph",
+      "text": "Messaging reuses a chat system (see [WhatsApp](/learn/system-design/problem-breakdowns/whatsapp)); each conversation is linked to a listing ID so sellers can see who's interested in what."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-sellers-mark-items-sold",
+      "text": "4) Sellers mark items sold"
+    },
+    {
+      "type": "paragraph",
+      "text": "The status change writes to the database and propagates to the index, which filters out non-active listings."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-make-location-filter-search-fast",
+      "text": "1) How do we make location + filter search fast?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "SQL with distance math",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "`SELECT ... WHERE category = ? AND price BETWEEN ? AND ?` and compute distance for every row."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Full scans over hundreds of millions of rows; no relevance ranking."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Geospatial index in the database",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Use PostGIS or a geohash index so the database can find listings within a radius."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Combining geo, text search, filters and ranking at high QPS stresses the primary database."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Dedicated search index fed by CDC",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Index listings into a search engine with geo, text and filter fields, partitioned by region so queries only touch nearby shards. Keep it in sync with change data capture from the database. Cache popular browse queries (e.g. \"Furniture near Austin\", first page) for a short TTL."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Eventual consistency between DB and index; a listing may take seconds to appear or disappear."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-keep-sold-items-out-of-results",
+      "text": "2) How do we keep sold items out of results?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Index updates for status changes are prioritised, and the search service double-checks status for the page of results it returns (a cheap batch lookup in a cache), filtering anything marked sold since indexing. This avoids buyers messaging about items that are already gone."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What's the best way to support 'bikes under $200 within 10 km'?",
+      "options": [
+        "SQL distance math on every row",
+        "A search index with geo, text and filter fields",
+        "Client-side filtering",
+        "Caching every listing"
+      ],
+      "answer": 1,
+      "explanation": "Search engines combine geo filters, filters and text ranking efficiently."
+    },
+    {
+      "question": "How does the search index stay in sync with the database?",
+      "options": [
+        "Manual exports",
+        "Change data capture",
+        "Clients write to both",
+        "It doesn't"
+      ],
+      "answer": 1,
+      "explanation": "CDC streams every change into the index."
+    },
+    {
+      "question": "How can you avoid showing just-sold items?",
+      "options": [
+        "Never cache",
+        "Prioritise status updates and recheck status for returned results",
+        "Delete listings immediately from S3",
+        "Disable search"
+      ],
+      "answer": 1,
+      "explanation": "A cheap status recheck covers indexing lag."
+    },
+    {
+      "question": "Where should listing photos be stored?",
+      "options": [
+        "In the listings table",
+        "Blob storage served via CDN",
+        "In the search index",
+        "In Redis"
+      ],
+      "answer": 1,
+      "explanation": "Large binary files belong in object storage."
+    }
+  ]
+}

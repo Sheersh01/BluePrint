@@ -1,0 +1,82 @@
+{
+  "tags": [
+    "Dealing with Contention",
+    "Scaling Reads"
+  ],
+  "solutions": [
+    {
+      "verdict": "bad",
+      "title": "Database Polling for Matches"
+    },
+    {
+      "verdict": "good",
+      "title": "Transactions"
+    },
+    {
+      "verdict": "good",
+      "title": "Sharded Cassandra with Single-Partition Transactions"
+    },
+    {
+      "verdict": "great",
+      "title": "Redis for Atomic Operations"
+    },
+    {
+      "verdict": "bad",
+      "title": "DB Query + Contains Check"
+    },
+    {
+      "verdict": "good",
+      "title": "Cache + DB Query + Contains Check"
+    },
+    {
+      "verdict": "great",
+      "title": "Cache + Contains Check + Bloom Filter"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Which data structure efficiently handles 2D proximity searches for location-based queries?",
+      "options": [
+        "Geospatial Index",
+        "Binary Tree",
+        "Linked List",
+        "Hash Table with composite keys derived from latitude and longitude pairs"
+      ],
+      "answer": 0,
+      "explanation": "Geospatial indexes (geohashes, quadtrees, R-trees) organise points by location so nearby users can be found without a full scan."
+    },
+    {
+      "question": "Why must recording a swipe and checking for a reciprocal swipe be atomic?",
+      "options": [
+        "To save storage",
+        "Otherwise two simultaneous right-swipes could both miss each other and the match is never created",
+        "To make the feed load faster",
+        "Because swipes are encrypted"
+      ],
+      "answer": 1,
+      "explanation": "Without atomicity, each request can check before the other's write lands, so neither sees the match."
+    },
+    {
+      "question": "What is the main trade-off of using a Bloom filter to avoid showing repeat profiles?",
+      "options": [
+        "False negatives",
+        "Occasional false positives (a profile is wrongly hidden)",
+        "It needs a full table scan",
+        "It can't be stored in memory"
+      ],
+      "answer": 1,
+      "explanation": "Bloom filters never miss a seen profile but may occasionally report an unseen one as seen — usually acceptable here."
+    },
+    {
+      "question": "Why is Redis a good fit for swipe matching?",
+      "options": [
+        "It is a relational database",
+        "Its atomic operations make check-and-set on swipes consistent and fast",
+        "It stores data only on disk",
+        "It supports full-text search"
+      ],
+      "answer": 1,
+      "explanation": "Keeping both users' swipes under one key lets a single atomic operation record a swipe and detect the match."
+    }
+  ]
+}

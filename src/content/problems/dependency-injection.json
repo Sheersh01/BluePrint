@@ -1,0 +1,373 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "dependency-injection",
+  "category": "Common Problems",
+  "title": "Dependency Injection Framework",
+  "seoTitle": "Design an IoC / Dependency Injection Framework",
+  "description": "Design an inversion-of-control container — registering bindings, resolving dependency graphs, lifetimes and scopes, cycle detection, and fast resolution.",
+  "tags": [
+    {
+      "label": "Multi-step Processes",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "ADP"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🧩",
+      "title": "What is a Dependency Injection Framework?",
+      "text": "A dependency injection (DI) container builds objects for you. Instead of classes creating their own dependencies, they declare what they need, and the container constructs and wires them — think Spring, Guice, or .NET's built-in container."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Developers should be able to register bindings: an interface → an implementation (or a factory, or an instance).",
+        "The container should resolve an object by constructing it and all its dependencies recursively.",
+        "Bindings should support lifetimes: transient (new each time), singleton (one per container), and scoped (one per request/scope).",
+        "The container should report clear errors for missing bindings and circular dependencies."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Aspect-oriented proxies and interceptors.",
+        "Configuration file formats."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this framework?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Resolution must be fast — it may run on every request in a web server.",
+        "Thread-safe: concurrent resolution must never create two singletons.",
+        "Fail fast: configuration errors should surface at startup, not in production traffic.",
+        "Small, predictable API that's easy to test with."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Hot-reloading bindings at runtime."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- register bindings",
+        "- resolve recursively",
+        "- transient / singleton / scoped",
+        "- errors: missing, cycles",
+        "",
+        "Non-functional",
+        "- fast resolution",
+        "- thread-safe singletons",
+        "- fail fast at startup",
+        "- small API"
+      ],
+      "caption": "DI Framework Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Binding**: service key (type/token) → provider (class, factory, or instance) + lifetime.",
+        "**Container**: holds bindings and singleton instances; builds objects.",
+        "**Scope**: a child container holding scoped instances (e.g. per HTTP request).",
+        "**Resolution plan**: a precompiled recipe for constructing a type."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "const c = new Container();\nc.bind(Logger).to(ConsoleLogger).singleton();\nc.bind(UserRepo).to(SqlUserRepo).scoped();\nc.bind(Config).toInstance(loadConfig());\nc.bind(Clock).toFactory(() => new SystemClock());\n\nc.validate();                     // fail fast at startup\nconst scope = c.createScope();    // per request\nconst svc = scope.resolve(UserService);\nscope.dispose();                  // disposes scoped instances"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-register-bindings",
+      "text": "1) Register bindings"
+    },
+    {
+      "type": "paragraph",
+      "text": "`bind()` records a Binding in a map keyed by the service token. Dependencies of each implementation are discovered from constructor metadata (type annotations / decorators, or an explicit `inject` list), so the container knows what each class needs."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-resolve-objects-recursively",
+      "text": "2) Resolve objects recursively"
+    },
+    {
+      "type": "diagram",
+      "file": "01-resolving-a-dependency-graph.svg",
+      "caption": "Resolving a dependency graph"
+    },
+    {
+      "type": "paragraph",
+      "text": "`resolve(T)` looks up T's binding, resolves each constructor dependency first (depth-first), then constructs T. The result is a directed acyclic graph of objects."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-lifetimes",
+      "text": "3) Lifetimes"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "**Transient**: construct a new instance every time.",
+        "**Singleton**: construct once, cache in the root container, reuse forever.",
+        "**Scoped**: construct once per scope (stored in the scope's cache), disposed when the scope ends."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "A scope delegates singleton lookups to its root, so singletons are shared while scoped instances stay per-request."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-report-errors",
+      "text": "4) Report errors"
+    },
+    {
+      "type": "paragraph",
+      "text": "Missing bindings throw with the full resolution path (\"UserService → UserRepo → DbPool: no binding for Config\"). Cycles are detected by tracking the stack of types currently being resolved."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-detect-configuration-errors-early",
+      "text": "1) How do we detect configuration errors early?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Discover errors at first resolve",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Only fail when a request happens to need a broken binding."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Errors appear in production, possibly hours after deploy."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Validate the whole graph at startup",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "`validate()` walks every registered binding's dependency graph without constructing objects, checking that every dependency has a binding, detecting cycles (DFS with a \"visiting\" set), and flagging **captive dependencies** — a singleton depending on a scoped service, which would leak one request's object into all requests."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Factories are opaque; require them to declare their dependencies so they can be validated too."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-make-resolution-fast",
+      "text": "2) How do we make resolution fast?"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Reflect on every resolve",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Inspect constructor metadata each time an object is built."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Reflection is slow when repeated on hot paths."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Compile resolution plans",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "On first use (or at validation), compile each binding into a **resolution plan** — effectively a generated factory function that calls dependency factories directly. Cache plans by type; subsequent resolves are just function calls and cache lookups."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Plans must be invalidated if bindings change, which is why bindings are frozen after startup."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-keep-singletons-thread-safe",
+      "text": "3) How do we keep singletons thread-safe?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Use double-checked locking (or a per-binding lazy initializer) so only one thread constructs a singleton and others wait for it. Avoid holding a global lock during construction — a singleton's constructor might resolve other singletons, and a global lock would deadlock or serialise everything."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What is a captive dependency?",
+      "options": [
+        "A missing binding",
+        "A longer-lived service (singleton) holding a shorter-lived one (scoped)",
+        "A cycle",
+        "A private constructor"
+      ],
+      "answer": 1,
+      "explanation": "The scoped object would leak across requests."
+    },
+    {
+      "question": "How are circular dependencies detected?",
+      "options": [
+        "They can't be",
+        "Tracking types currently being resolved and erroring if one repeats",
+        "Timeouts",
+        "Random sampling"
+      ],
+      "answer": 1,
+      "explanation": "A type appearing twice on the resolution stack means a cycle."
+    },
+    {
+      "question": "Why validate the container at startup?",
+      "options": [
+        "To warm caches only",
+        "So configuration errors fail the deploy instead of production requests",
+        "It's required by the language",
+        "To speed up builds"
+      ],
+      "answer": 1,
+      "explanation": "Fail fast before taking traffic."
+    },
+    {
+      "question": "What makes repeated resolution fast?",
+      "options": [
+        "More reflection",
+        "Compiled, cached resolution plans",
+        "Bigger heaps",
+        "Disabling singletons"
+      ],
+      "answer": 1,
+      "explanation": "Plans turn resolution into direct function calls."
+    }
+  ]
+}

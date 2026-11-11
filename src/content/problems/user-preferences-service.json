@@ -1,0 +1,356 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "user-preferences-service",
+  "category": "Common Problems",
+  "title": "User Preferences Service",
+  "seoTitle": "Design the Server-Side System Behind a User Preferences UI",
+  "description": "Design the backend for a user settings page — a typed preference schema with defaults, per-user overrides, fast reads by every service, cross-device sync, conflict handling, and safe schema evolution.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "easy",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🎛️",
+      "title": "What is a User Preferences Service?",
+      "text": "Every product has a settings page: theme, language, notification choices, privacy options, default playback quality. Behind it sits a preferences service that stores each user's choices and answers \"what is this user's setting for X?\" for every other service — often on every request. The UI is simple; the backend has to be fast, consistent across devices, and easy for many teams to extend."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to view and change their preferences in a settings UI on any device.",
+        "Each preference has a type, allowed values and a default; users only store overrides.",
+        "Other services (notifications, feed, emails) should read a user's preferences quickly.",
+        "Changes should apply across all the user's devices within seconds.",
+        "Product teams should be able to add new preferences without database migrations."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Organisation-level policies that override users (mentioned briefly).",
+        "Feature flags and experiments (a related but separate system)."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Reads are extremely frequent (~1M/s across services) and must take < 5 ms.",
+        "A user's own change is visible to them immediately (read-your-writes).",
+        "Highly available: if the service is down, callers fall back to defaults rather than failing.",
+        "Some preferences are legally significant (marketing consent), so changes are audited."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Strong global consistency for other users' views of a preference."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- view + change settings anywhere",
+        "- typed schema with defaults",
+        "- fast reads for other services",
+        "- sync across devices",
+        "- new prefs without migrations",
+        "",
+        "Non-functional",
+        "- ~1M reads/s, < 5ms",
+        "- read-your-writes",
+        "- fall back to defaults",
+        "- audited consent changes"
+      ],
+      "caption": "Preferences Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Preference definition**: key (`notifications.email.marketing`), type, allowed values, default, owner team, sensitivity.",
+        "**User preferences**: user ID → map of overridden keys and values, plus a version number.",
+        "**Change record**: who changed what, from and to, when, from which device."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET   /me/preferences -> { values (defaults merged), version }\nPATCH /me/preferences { changes: { key: value }, baseVersion }\n(internal) GET /users/:id/preferences?keys=a,b,c        (low latency)\n(internal) event: preferences.changed { userId, keys, version }\nGET   /preference-schema -> definitions for building the settings UI"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-a-schema-registry-for-preferences",
+      "text": "1) A schema registry for preferences"
+    },
+    {
+      "type": "paragraph",
+      "text": "Teams register preference **definitions** in a schema registry (in code or config, reviewed like code). The settings UI is rendered from the schema, so a new preference appears without frontend work, and the API validates every write against it."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-storing-only-overrides",
+      "text": "2) Storing only overrides"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each user's record is a small document of **overrides** keyed by user ID in a key-value store (DynamoDB/Cassandra). Reading merges overrides over defaults. Storing only overrides means changing a default applies to everyone who hasn't chosen otherwise, and new preferences need no data migration."
+    },
+    {
+      "type": "diagram",
+      "file": "01-read-path.svg",
+      "caption": "Read path"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-fast-reads-for-other-services",
+      "text": "3) Fast reads for other services"
+    },
+    {
+      "type": "paragraph",
+      "text": "Services read through a **client library** that caches each user's merged preferences in memory for a short TTL and listens for `preferences.changed` events to invalidate. If the service can't be reached, the library returns the **defaults** from a bundled copy of the schema."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-cross-device-sync",
+      "text": "4) Cross-device sync"
+    },
+    {
+      "type": "paragraph",
+      "text": "A write increments the record's **version** and publishes a change event. The user's other devices receive a push (or refetch on focus) and update. The writing device applies the change immediately and reads back from the primary, giving read-your-writes."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-handle-two-devices-changing-settings-at-once",
+      "text": "1) How do we handle two devices changing settings at once?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Overwrite the whole document",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Each device sends its full preference set; the latest write replaces the record."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Changing the theme on a phone while a laptop changes the language loses one of the changes."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Per-key patches",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Send only the changed keys and merge them into the stored document."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Two devices changing the *same* key race silently."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Per-key patches with versions",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Patches include the client's **base version**; the server applies non-conflicting keys and, for the same key changed since that version, uses **last-writer-wins per key** with server timestamps (fine for settings) and returns the new full state so the client refreshes. For a few keys where conflicts matter, reject with `409` and let the UI ask the user."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Keep the policy simple — for settings, per-key LWW is almost always what users expect."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-handle-1m-reads-per-second",
+      "text": "2) How do we handle ~1M reads per second?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Most reads come from backend services, not the settings UI. In-process caching in the client library absorbs most traffic, a distributed cache absorbs the rest, and the key-value store handles misses with single-key lookups. Change events invalidate caches promptly, so TTLs can be long-ish (minutes) without serving stale values for long."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention the safe-default rule: when in doubt (service down, unknown key), behave as the privacy-safe default — for example, treat marketing consent as \"no\"."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-evolve-preferences-safely",
+      "text": "3) How do we evolve preferences safely?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Definitions are **versioned**: renaming a key is done by adding a new key with a migration that reads the old value on access, then retiring the old one. Removing a preference stops it showing in the UI while ignoring stored values. Sensitive preferences (consent, privacy) record every change in an **audit log** with timestamp and source, which is needed for regulations like GDPR."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why store only overrides rather than every preference per user?",
+      "options": [
+        "It's harder",
+        "Changing a default applies to everyone and new preferences need no migration",
+        "Overrides are encrypted",
+        "Databases require it"
+      ],
+      "answer": 1,
+      "explanation": "Defaults live in the schema; users store only their choices."
+    },
+    {
+      "question": "What should a service do if the preferences service is down?",
+      "options": [
+        "Fail the request",
+        "Use defaults from the bundled schema",
+        "Retry forever",
+        "Use another user's settings"
+      ],
+      "answer": 1,
+      "explanation": "Preferences must never become a single point of failure."
+    },
+    {
+      "question": "How do we avoid losing one of two concurrent changes to different settings?",
+      "options": [
+        "Overwrite the document",
+        "Send per-key patches that merge",
+        "Lock the user account",
+        "Ignore the second change"
+      ],
+      "answer": 1,
+      "explanation": "Only changed keys are applied."
+    },
+    {
+      "question": "Why audit consent preferences?",
+      "options": [
+        "For speed",
+        "Regulations require proof of when and how consent was given or withdrawn",
+        "To show in the UI",
+        "It's free"
+      ],
+      "answer": 1,
+      "explanation": "Consent changes have legal significance."
+    }
+  ]
+}

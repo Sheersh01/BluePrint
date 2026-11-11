@@ -1,0 +1,341 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "parts-compatibility",
+  "category": "Common Problems",
+  "title": "Parts Compatibility",
+  "seoTitle": "Design a Parts Compatibility Feature for an E-commerce Site",
+  "description": "Design \"Does this fit my car?\" — modelling vehicle fitment data, ingesting supplier catalogs, fast compatibility checks and filtered search by vehicle.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Some FAANG"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🔧",
+      "title": "What is a Parts Compatibility Feature?",
+      "text": "Auto-parts and electronics stores let shoppers pick their vehicle (year, make, model, engine) or device and then show only parts that fit, with a \"Fits your 2019 Honda Civic\" badge on product pages."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to select and save a vehicle (year → make → model → trim/engine).",
+        "Product pages should show whether a part fits the selected vehicle.",
+        "Search and category pages should filter to parts that fit the selected vehicle.",
+        "Catalog teams should be able to import fitment data from suppliers."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Installation guides.",
+        "Recommending complementary parts."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Compatibility checks on product pages in < 50ms.",
+        "Filtered search in < 300ms over tens of millions of parts.",
+        "Fitment data must be accurate — wrong answers cause returns and lost trust.",
+        "Catalog imports of millions of fitment rows shouldn't affect shopper traffic."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Real-time inventory."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- select + save vehicle",
+        "- \"fits your car\" on product page",
+        "- filter search by vehicle",
+        "- import supplier fitment",
+        "",
+        "Non-functional",
+        "- check < 50ms",
+        "- search < 300ms",
+        "- accurate data",
+        "- imports don't hurt shoppers"
+      ],
+      "caption": "Compatibility Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Vehicle**: a normalised configuration (year, make, model, submodel, engine) with an ID — industry standards like ACES provide these.",
+        "**Part**: a product with SKU and attributes.",
+        "**Fitment**: a (partId, vehicleId) pair, optionally with qualifiers (\"front axle only\", \"with sunroof\").",
+        "**Garage**: a user's saved vehicles."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /vehicles/makes?year=2019 ; /vehicles/models?year&make ; /vehicles?year&make&model -> Vehicle[]\nGET  /parts/:sku/fitment?vehicleId=123 -> { fits: true, notes: \"Front only\" }\nGET  /search?q=brake+pads&vehicleId=123 -> Part[]\nPOST /fitment/imports (catalog teams, file upload)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-select-a-vehicle",
+      "text": "1) Users select a vehicle"
+    },
+    {
+      "type": "paragraph",
+      "text": "The vehicle catalog is small (hundreds of thousands of configurations) and changes rarely, so the cascading dropdown APIs are served from an in-memory cache or CDN. The chosen vehicle ID is stored in the user's garage (and a cookie for anonymous users)."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-product-pages-show-fit",
+      "text": "2) Product pages show fit"
+    },
+    {
+      "type": "diagram",
+      "file": "01-fitment-checks-and-search.svg",
+      "caption": "Fitment checks and search"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Fitment Service** answers \"does part X fit vehicle Y?\" with a lookup on the fitment table keyed by `(partId, vehicleId)`, cached in Redis — e.g. a set of vehicle IDs per part."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-search-filters-by-vehicle",
+      "text": "3) Search filters by vehicle"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each part document in the search index carries the list of vehicle IDs it fits. A search with a selected vehicle adds a filter `vehicleIds: 123`, which search engines evaluate efficiently with an inverted index."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-import-supplier-fitment",
+      "text": "4) Import supplier fitment"
+    },
+    {
+      "type": "paragraph",
+      "text": "Supplier files are uploaded, validated and normalised against the vehicle catalog in a batch pipeline, written to the fitment database, and then pushed to the search index incrementally."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-model-fitment-compactly",
+      "text": "1) How do we model fitment compactly?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Free-text compatibility notes",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Store \"Fits 2016-2020 Civic\" as text on the product."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Can't be filtered or verified, and spelling variations break matching."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "One row per (part, vehicle) pair",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Explicit pairs keyed by normalised vehicle IDs — simple and precise."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A universal part can fit tens of thousands of vehicles, so the table reaches billions of rows."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Normalised pairs + range expansion at import",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Suppliers describe fitment as ranges (\"2016-2020 Civic, all trims\"). Store the compact rule, expand it into vehicle IDs at import time, and index the expanded IDs (compressed integer lists are cheap in search engines). Keep qualifiers as structured attributes so the UI can say \"fits with conditions\"."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Expansion must re-run when the vehicle catalog adds new trims."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-keep-data-accurate",
+      "text": "2) How do we keep data accurate?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Validate imports against the vehicle catalog (reject unknown vehicles), diff each import against the previous version and flag large changes for review, track return reasons like \"doesn't fit\" to find bad fitment, and let catalog staff correct data with an audit trail."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why normalise vehicles to IDs?",
+      "options": [
+        "Shorter URLs",
+        "Free-text descriptions can't be reliably matched or filtered",
+        "Privacy",
+        "For search ranking"
+      ],
+      "answer": 1,
+      "explanation": "IDs make fitment precise and filterable."
+    },
+    {
+      "question": "How does search filter to parts that fit a vehicle?",
+      "options": [
+        "Scan every part",
+        "Index each part's list of vehicle IDs and filter on the selected ID",
+        "Ask the supplier",
+        "Client-side filtering"
+      ],
+      "answer": 1,
+      "explanation": "Inverted indexes make ID filters fast."
+    },
+    {
+      "question": "Why expand fitment ranges at import time?",
+      "options": [
+        "To save storage",
+        "So queries become simple ID lookups at read time",
+        "Ranges are illegal",
+        "For encryption"
+      ],
+      "answer": 1,
+      "explanation": "Expensive expansion moves offline; reads stay fast."
+    },
+    {
+      "question": "What signal helps find inaccurate fitment data?",
+      "options": [
+        "Page views",
+        "Returns with reason 'doesn't fit'",
+        "Cart size",
+        "Ad clicks"
+      ],
+      "answer": 1,
+      "explanation": "Real-world returns point to bad data."
+    }
+  ]
+}

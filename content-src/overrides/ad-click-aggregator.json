@@ -1,0 +1,28 @@
+{
+  "quiz": [
+    {
+      "question": "Which processing model provides the lowest latency for real-time analytics?",
+      "options": ["Batch processing with periodic scheduled jobs", "Stream processing", "Hybrid processing", "Manual processing"],
+      "answer": 1,
+      "explanation": "Stream processors (e.g. Flink) aggregate events continuously as they arrive instead of waiting for a batch window."
+    },
+    {
+      "question": "Why redirect the user to the advertiser through our own click endpoint?",
+      "options": ["To compress the page", "So every click is recorded before the redirect", "To bypass the advertiser's CDN", "To cache the ad image"],
+      "answer": 1,
+      "explanation": "A server-side redirect guarantees the click is captured — client-side tracking can be blocked or lost."
+    },
+    {
+      "question": "What does a periodic batch reconciliation job protect against?",
+      "options": ["Slow page loads", "Inaccuracies in the real-time stream aggregates", "Too many advertisers", "Expired TLS certificates"],
+      "answer": 1,
+      "explanation": "Re-computing from raw events catches anything the streaming path dropped or double-counted, since clicks are billed."
+    },
+    {
+      "question": "How do you prevent the same user's click from being counted twice?",
+      "options": ["Rate limit the advertiser", "Deduplicate using a unique impression/click ID", "Store clicks in a CDN", "Use a bigger Kafka cluster"],
+      "answer": 1,
+      "explanation": "Tagging each ad impression with a unique ID lets the system drop repeated clicks for the same impression."
+    }
+  ]
+}

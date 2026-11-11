@@ -1,0 +1,343 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "pastebin",
+  "category": "Common Problems",
+  "title": "Pastebin",
+  "seoTitle": "Design a Text Sharing Service Like Pastebin",
+  "description": "Design Pastebin — storing text snippets, generating short shareable links, expiring pastes, and serving reads cheaply from blob storage and a CDN.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    },
+    {
+      "label": "Handling Large Blobs",
+      "href": "/learn/system-design/patterns/handling-large-blobs"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "easy",
+  "askedAt": {
+    "companies": [
+      "Amazon",
+      "Vanta",
+      "Nutanix"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📋",
+      "title": "What is Pastebin?",
+      "text": "Pastebin lets anyone paste a block of text — code, logs, notes — and get back a short link they can share. Anyone with the link can read it until it expires."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to create a paste (up to 10MB of text) and receive a unique short URL.",
+        "Users should be able to read a paste by visiting its URL.",
+        "Users should be able to set an optional expiration time."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "User accounts, editing and syntax highlighting.",
+        "Private pastes with passwords."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Reads should be fast (< 200ms) and highly available.",
+        "Paste URLs must be unique and hard to guess.",
+        "Storage must be durable — a paste never disappears before it expires.",
+        "Scale to 10M new pastes per day and a 10:1 read-to-write ratio."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Abuse and spam detection."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- create paste (<= 10MB) -> short URL",
+        "- read paste by URL",
+        "- optional expiration",
+        "",
+        "Non-functional",
+        "- fast, available reads",
+        "- unique, unguessable IDs",
+        "- durable until expiry",
+        "- 10M pastes/day"
+      ],
+      "caption": "Pastebin Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Paste**: an ID, the content (or a pointer to it), size, created and expiry times.",
+        "**User**: optional creator (anonymous by default)."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /pastes\n{ \"content\": \"...\", \"expiresIn\": \"1d\" } -> { \"id\": \"x7Kp2q\", \"url\": \"https://paste.example/x7Kp2q\" }\n\nGET /pastes/:id -> { \"content\": \"...\", \"createdAt\": \"...\", \"expiresAt\": \"...\" }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-should-be-able-to-create-a-paste",
+      "text": "1) Users should be able to create a paste"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Paste Service** generates an ID, writes the content to **blob storage** (S3) keyed by that ID, and stores small metadata (ID, size, expiry, S3 key) in a database. Content can be up to 10MB, so it doesn't belong in a database row."
+    },
+    {
+      "type": "diagram",
+      "file": "01-create-and-read-a-paste.svg",
+      "caption": "Create and read a paste"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-should-be-able-to-read-a-paste",
+      "text": "2) Users should be able to read a paste"
+    },
+    {
+      "type": "paragraph",
+      "text": "Reads look up the metadata (to check expiry) and return the content. Because pastes never change after creation, they are perfect for caching: serve them through a **CDN** with a TTL that never exceeds the paste's remaining lifetime."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-pastes-should-expire",
+      "text": "3) Pastes should expire"
+    },
+    {
+      "type": "paragraph",
+      "text": "Store `expiresAt` and check it on every read (return `404`/`410` once passed). Use S3 lifecycle rules or a periodic cleanup job to delete expired content so storage doesn't grow forever."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-generate-unique-unguessable-ids",
+      "text": "1) How do we generate unique, unguessable IDs?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Auto-increment IDs",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Use the database's sequence and encode it in base62."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "IDs are sequential, so anyone can enumerate every paste — a real problem when people paste secrets by accident."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Random IDs with collision checks",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Generate 8 random base62 characters (62^8 ≈ 218 trillion possibilities) and insert with a uniqueness constraint; retry on the rare collision."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Very low collision probability at this scale; the retry path is simple. A cryptographically secure RNG makes IDs hard to guess."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Pre-generated key service",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "A background **Key Generation Service** fills a table with unused random IDs. Writers claim a batch of keys and use them locally, so the write path never waits on collision checks."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "More moving parts; keys claimed by a crashed server are simply lost, which is harmless."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-keep-reads-fast-and-cheap",
+      "text": "2) How do we keep reads fast and cheap?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Pastes are immutable, so cache aggressively. The CDN serves popular pastes from the edge; behind it, an in-memory cache holds hot metadata. Small pastes (under a few KB) can be inlined in the metadata row to avoid a second fetch from S3, while large ones stream straight from blob storage."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Compress content before storing it. Plain text compresses 5-10×, which cuts storage and transfer costs dramatically."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why store paste content in blob storage instead of the database?",
+      "options": [
+        "Databases can't store text",
+        "Pastes can be up to 10MB, which bloats rows and is cheaper in object storage",
+        "For strong consistency",
+        "To make IDs shorter"
+      ],
+      "answer": 1,
+      "explanation": "Large immutable blobs belong in object storage; the database keeps small metadata."
+    },
+    {
+      "question": "What is the risk of sequential paste IDs?",
+      "options": [
+        "They are too long",
+        "Anyone can enumerate every paste",
+        "They collide often",
+        "They break CDNs"
+      ],
+      "answer": 1,
+      "explanation": "Random IDs prevent people from iterating through other users' pastes."
+    },
+    {
+      "question": "Why are pastes ideal for CDN caching?",
+      "options": [
+        "They are encrypted",
+        "They never change after creation",
+        "They are small",
+        "They have no expiry"
+      ],
+      "answer": 1,
+      "explanation": "Immutable content can be cached safely; just cap the TTL at the remaining lifetime."
+    },
+    {
+      "question": "How should expired pastes be handled?",
+      "options": [
+        "Never delete them",
+        "Check expiresAt on read and clean up storage periodically",
+        "Delete the whole database daily",
+        "Rely on the browser"
+      ],
+      "answer": 1,
+      "explanation": "Read-time checks enforce expiry immediately; lifecycle jobs reclaim storage."
+    }
+  ]
+}

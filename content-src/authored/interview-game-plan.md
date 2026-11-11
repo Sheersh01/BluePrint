@@ -1,0 +1,97 @@
+---
+title: The 45-Minute Game Plan
+subtitle: What to do in each part of the interview, how long to spend there, and the phrases that keep you in control.
+section: tips
+category: Tips & Tricks
+seoTitle: How to Structure a 45-Minute System Design Interview
+description: A minute-by-minute plan for a system design interview — requirements, entities, API, high-level design, deep dives — with phrases to use and traps to avoid.
+author: Editorial Team
+published: Nov 11, 2026
+---
+
+Most candidates who fail a system design round don't lack knowledge — they run out of time, wander, or never get to the part that shows depth. A fixed plan fixes that. Practise it until the structure is automatic, so all your attention goes to the problem.
+
+## The Clock
+
+| Phase | Time | You walk out with | Biggest mistake |
+|---|---|---|---|
+| Functional requirements | ~3 min | 3–4 core features, out-of-scope list | Listing 10 features |
+| Non-functional requirements | ~3 min | 3–5 specific, quantified qualities | "Scalable, available, fast" |
+| Core entities | ~2 min | The main nouns | Designing full schemas now |
+| API | ~5 min | One endpoint per feature | Debating REST vs GraphQL for 5 minutes |
+| High-level design | ~10–15 min | A working end-to-end design | Optimizing before it works |
+| Deep dives | ~10–15 min | 2–3 non-functional requirements solved | Never getting here |
+| Wrap-up | ~2 min | Summary + what you'd do next | Silence |
+
+:::tip
+If you're 20 minutes in and still on the API, say so: "I'm going to move faster through the high-level design so we have time for the interesting parts." Interviewers reward time awareness.
+:::
+
+## Phase by Phase
+
+### 1. Requirements (~6 min)
+
+**Do:** Ask 2–3 questions that change the design (scale, read/write mix, which features matter most). Then *state* the requirements rather than asking for permission on each one.
+
+**Say:** "I'll focus on posting, following and the home feed. I'll leave out DMs and ads unless you'd like them in."
+
+**Then:** non-functional requirements, with numbers. See [Non-Functional Requirements](/learn/system-design/tips/non-functional-requirements) for how to phrase them.
+
+### 2. Core Entities (~2 min)
+
+**Do:** List the nouns the API will move around: `User`, `Post`, `Follow`. Add fields later, when a decision needs them.
+
+**Say:** "I'll flesh these out as we go — for now these are the things we store."
+
+### 3. API (~5 min)
+
+**Do:** One endpoint per functional requirement, with method, path, body and response. Identity comes from the auth token.
+
+```
+POST /posts            { content }        → Post
+POST /follows          { followeeId }     → 200
+GET  /feed?cursor=…                       → { posts: Post[], nextCursor }
+```
+
+### 4. High-Level Design (~10–15 min)
+
+**Do:** Go requirement by requirement. For each one, draw the boxes it needs and walk a request through them. Reuse what you've drawn.
+
+**Say:** "Let me trace a post being created… now a user loading their feed."
+
+**Don't:** add Kafka, sharding and three caches before the basic flow works. Simple first, then evolve.
+
+### 5. Deep Dives (~10–15 min)
+
+**Do:** Return to your non-functional requirements and pick the ones that are hard *here*. For each: what breaks in the current design, two options, the trade-off, your choice.
+
+**Say:** "Our feed reads are 100× writes and need to be under 200 ms. With the current design, every read fans out to every followee — let's fix that."
+
+If you're senior, *you* drive this. If the interviewer redirects you, follow — they're telling you what they want to see.
+
+### 6. Wrap-up (~2 min)
+
+Summarize the design in three sentences, then name what you'd do with more time: monitoring, failure testing, a feature you scoped out.
+
+## Phrases That Help
+
+| Situation | Say |
+|---|---|
+| Starting | "Let me confirm what we're building before I design anything." |
+| Making an assumption | "I'll assume ~10M daily users — tell me if that's off." |
+| Choosing between options | "Two options: A is simpler, B scales better. Given our read-heavy load I'd pick B." |
+| You don't know something | "I haven't used X in production, but I'd expect it to work like… — here's how I'd verify." |
+| The interviewer hints | "Good point — that would break when… Let me adjust." |
+| Running long | "I'll keep this part brief so we can get to the deep dives." |
+| Checking in | "Does this level of detail work, or should I go deeper anywhere?" |
+
+## Drawing Tips
+
+- Lay out left to right: clients → gateway → services → data stores.
+- Label every arrow with what it carries (`POST /posts`, `PostCreated` event).
+- Keep the requirements, entities and API visible in a corner — you'll point back at them.
+- Update the same diagram during deep dives instead of starting a new one.
+
+## Practise the Plan
+
+The [Practice area](/practice) walks you through exactly these phases on a whiteboard, with a timer per step and feedback after each one.

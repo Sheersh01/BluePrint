@@ -1,0 +1,453 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "payment-system",
+  "category": "Common Problems",
+  "title": "Payment System",
+  "seoTitle": "Design a Payment System Like Stripe",
+  "description": "Design a payment system — accepting card payments through processors, idempotent charges, a double-entry ledger, webhooks and reconciliation.",
+  "tags": [
+    {
+      "label": "Multi-step Processes",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    },
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Stripe",
+      "PayPal",
+      "Amazon"
+    ],
+    "more": 15
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "💳",
+      "title": "What is a Payment System?",
+      "text": "A payment system (like Stripe) lets merchants accept payments from customers. It collects card details securely, charges them through card networks and banks, records every movement of money, and tells merchants what happened."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Merchants should be able to create a payment (charge a customer's card for an amount).",
+        "Merchants should be able to check the status of a payment.",
+        "Merchants should be notified (via webhook) when a payment succeeds or fails.",
+        "Merchants should be able to refund a payment."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Payouts to merchant bank accounts.",
+        "Subscriptions and invoicing.",
+        "Fraud detection models."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Correctness above all**: a customer must never be charged twice, and money must never be lost or created.",
+        "The system must be highly durable and auditable — every state change is recorded.",
+        "Payment requests should complete in a few seconds and be highly available.",
+        "Card data must be handled securely (PCI DSS).",
+        "Scale to 10,000 payments per second at peak."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Multi-currency conversion."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- create payment (charge card)",
+        "- check status",
+        "- webhooks on success / failure",
+        "- refunds",
+        "",
+        "Non-functional",
+        "- never double charge, never lose money",
+        "- durable + auditable",
+        "- seconds latency, highly available",
+        "- PCI compliant",
+        "- 10k payments / sec"
+      ],
+      "caption": "Payment System Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "Payments cross systems we don't control — card networks, banks, processors — any of which can time out. Our design is about making a **multi-step, partially failing process** correct: idempotency, a durable state machine, a ledger, and reconciliation."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Merchant**: the business accepting payments.",
+        "**Payment**: amount, currency, merchant, status, processor reference, idempotency key.",
+        "**Ledger Entry**: an immutable debit or credit to an account.",
+        "**Refund**: a reversal linked to a payment.",
+        "**Webhook Event**: a notification to deliver to a merchant."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Core Entities",
+        "- Merchant",
+        "- Payment",
+        "- Ledger Entry",
+        "- Refund",
+        "- Webhook Event"
+      ],
+      "caption": "Payment Entities"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /payments\nIdempotency-Key: 6f1c...\n{ \"amount\": 4999, \"currency\": \"usd\", \"paymentMethod\": \"pm_tok_123\" } -> Payment\n\nGET  /payments/:paymentId -> Payment\nPOST /payments/:paymentId/refunds { \"amount\": 4999 } -> Refund"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Amounts are integers in the smallest currency unit (cents). Never use floating point for money."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-merchants-should-be-able-to-create-a-payment",
+      "text": "1) Merchants should be able to create a payment"
+    },
+    {
+      "type": "paragraph",
+      "text": "Card details are collected by our hosted form/SDK and exchanged for a **token** by a separate, PCI-scoped **Tokenization Vault**, so raw card numbers never touch the merchant's servers or the rest of our system. The merchant calls `POST /payments` with the token."
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Payment Service** records the payment as `PENDING`, then calls an external **processor** (or card network) to authorise and capture the charge."
+    },
+    {
+      "type": "diagram",
+      "file": "01-create-a-payment.svg",
+      "caption": "Create a payment"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-merchants-should-be-able-to-check-payment-status",
+      "text": "2) Merchants should be able to check payment status"
+    },
+    {
+      "type": "paragraph",
+      "text": "Status is read from the Payments DB. Payments follow a state machine: `PENDING → PROCESSING → SUCCEEDED | FAILED`, and `SUCCEEDED → REFUNDED` (or partially refunded)."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-merchants-should-be-notified-via-webhooks",
+      "text": "3) Merchants should be notified via webhooks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Every state change writes a Webhook Event. A **Webhook Dispatcher** delivers events to the merchant's endpoint, signing each payload, and retries with backoff until it gets a `2xx`."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-merchants-should-be-able-to-refund-payments",
+      "text": "4) Merchants should be able to refund payments"
+    },
+    {
+      "type": "paragraph",
+      "text": "The Refund flow mirrors payments: record a `PENDING` refund, call the processor, update state on the response, write ledger entries, and emit a webhook."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-guarantee-a-customer-is-never-charged-twice",
+      "text": "1) How do we guarantee a customer is never charged twice?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Trust the client not to retry",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Process each `POST /payments` as a new charge."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Networks time out. A merchant who retries after a timeout — the right thing to do — creates a second charge."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Idempotency keys end to end",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Merchants send an `Idempotency-Key` header. We store it with a unique constraint alongside the request hash and the final response. A repeat request with the same key returns the stored response (or waits if the first is still in progress) instead of charging again. We pass our own idempotency key (the payment ID) to the processor too, so our retries to them are also safe."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Keys must be scoped per merchant and kept long enough (e.g. 24h+). A reused key with a different body should be rejected with an error rather than silently replaying."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-what-happens-when-the-processor-times-out",
+      "text": "2) What happens when the processor times out?"
+    },
+    {
+      "type": "paragraph",
+      "text": "A timeout doesn't mean failure — the charge may have gone through. We must not mark the payment failed, and must not blindly retry with a new request."
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Retry with the same idempotency key",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Leave the payment in `PROCESSING` and retry the processor call using the same idempotency key until we get a definitive answer."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Works when the processor supports idempotency, but extended outages leave payments stuck in limbo."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "State machine + status queries + reconciliation",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Payments in `PROCESSING` are picked up by a worker that queries the processor for the transaction status and drives the state machine forward. A daily **reconciliation** job compares our records against the processor's settlement files and flags any mismatch (charged but marked failed, or vice versa) for automated correction or human review."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Reconciliation is batch and delayed, but it's the final safety net that catches every class of bug."
+        }
+      ]
+    },
+    {
+      "type": "pattern",
+      "title": "Pattern: Multi-step Processes",
+      "text": "A payment spans our database, a vault and an external processor. Durable states, idempotent steps and a reconciliation backstop make it safe.",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-record-money-movements-correctly",
+      "text": "3) How do we record money movements correctly?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Update a balance column",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Increment the merchant's `balance` column on each successful payment."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "No history, no audit trail, and a bug or race silently corrupts the balance with no way to explain or repair it."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Immutable double-entry ledger",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Every movement is recorded as a set of ledger entries that **sum to zero** — e.g. debit \"customer funds receivable\" 49.99, credit \"merchant balance\" 48.54, credit \"fees revenue\" 1.45. Entries are append-only; corrections are new entries, never edits. Balances are derived by summing entries (with cached aggregates for speed). The ledger write happens in the same transaction as the payment's state change."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Higher write volume and modelling effort, but it's the standard that makes the books auditable and invariants checkable."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What prevents a merchant's retried request from charging the customer twice?",
+      "options": [
+        "Rate limiting",
+        "An idempotency key stored with the original response",
+        "A faster database",
+        "Shorter timeouts"
+      ],
+      "answer": 1,
+      "explanation": "A repeat key returns the original result instead of creating a new charge.",
+      "section": "1-how-do-we-guarantee-a-customer-is-never-charged-twice"
+    },
+    {
+      "question": "A call to the processor times out. What should happen?",
+      "options": [
+        "Mark the payment failed",
+        "Charge again with a new request",
+        "Keep it PROCESSING and resolve via status queries / idempotent retry",
+        "Refund it"
+      ],
+      "answer": 2,
+      "explanation": "A timeout is ambiguous — the charge may have succeeded — so the state must be resolved, not guessed.",
+      "section": "2-what-happens-when-the-processor-times-out"
+    },
+    {
+      "question": "What is the defining property of a double-entry ledger?",
+      "options": [
+        "Entries can be edited",
+        "Each transaction's entries sum to zero",
+        "It stores only balances",
+        "It lives in the cache"
+      ],
+      "answer": 1,
+      "explanation": "Balanced, immutable entries make money movements auditable and invariants checkable.",
+      "section": "3-how-do-we-record-money-movements-correctly"
+    },
+    {
+      "question": "Why should money be stored as integers in minor units?",
+      "options": [
+        "Integers are shorter",
+        "Floating point can't represent many decimal amounts exactly",
+        "Card networks only accept integers",
+        "For encryption"
+      ],
+      "answer": 1,
+      "explanation": "Rounding errors from floats accumulate; cents as integers are exact."
+    }
+  ]
+}

@@ -1,0 +1,347 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "google-analytics",
+  "category": "Common Problems",
+  "title": "Google Analytics",
+  "seoTitle": "Design a Web Analytics Pipeline Like Google Analytics",
+  "description": "Design Google Analytics — collecting billions of page-view events, a streaming and batch pipeline, pre-aggregated rollups, and fast dashboard queries.",
+  "tags": [
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    },
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Microsoft",
+      "Facebook",
+      "Qualtrics",
+      "Google"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📈",
+      "title": "What is Google Analytics?",
+      "text": "Google Analytics collects events from websites — page views, clicks, sessions — and shows site owners dashboards of traffic, top pages, referrers and user behaviour over time."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Websites should be able to send events (page views, custom events) via a tracking script.",
+        "Site owners should see dashboards: visitors, page views and top pages over a time range.",
+        "Dashboards should support filtering by dimensions (country, device, referrer).",
+        "A real-time view should show active users in the last few minutes."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Funnel and cohort analysis.",
+        "Ad attribution."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Ingest ~1M events per second at peak without losing data.",
+        "Dashboards load in < 2 seconds over months of data.",
+        "Real-time view is fresh within ~30 seconds; historical reports may lag by minutes to hours.",
+        "Ingestion endpoint must be highly available — the tracking script can't slow down sites."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "GDPR deletion workflows."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- collect events from sites",
+        "- dashboards over time ranges",
+        "- filter by dimensions",
+        "- real-time active users",
+        "",
+        "Non-functional",
+        "- 1M events/s, no loss",
+        "- dashboards < 2s",
+        "- real-time ~30s fresh",
+        "- ingestion always available"
+      ],
+      "caption": "Analytics Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Event**: siteId, eventType, URL, timestamp, visitor ID, dimensions (country, device, referrer).",
+        "**Session**: a visitor's events grouped by inactivity gaps.",
+        "**Rollup**: pre-aggregated counts per site, time bucket and dimension."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /collect   (batched events from the tracking script, returns 204 immediately)\n\nGET /sites/:siteId/report?metric=pageviews&from&to&groupBy=country&interval=day\nGET /sites/:siteId/realtime -> { activeUsers, topPages }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-websites-send-events",
+      "text": "1) Websites send events"
+    },
+    {
+      "type": "paragraph",
+      "text": "The tracking script batches events and sends them to a lightweight **Collector** fleet behind a load balancer. Collectors validate, enrich (geo from IP, device from user agent), and append to **Kafka**, returning `204` immediately. They hold no state, so they scale horizontally and stay fast."
+    },
+    {
+      "type": "diagram",
+      "file": "01-ingestion-pipeline.svg",
+      "caption": "Ingestion pipeline"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-site-owners-view-dashboards",
+      "text": "2) Site owners view dashboards"
+    },
+    {
+      "type": "paragraph",
+      "text": "Scanning raw events for every dashboard load would be far too slow. Instead, a stream processor builds **rollups** — counts per site, per minute/hour/day, per dimension — and writes them to a columnar OLAP store (ClickHouse, Druid, Pinot). Dashboards query rollups, which are orders of magnitude smaller than raw events."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-real-time-active-users",
+      "text": "3) Real-time active users"
+    },
+    {
+      "type": "paragraph",
+      "text": "The stream processor also maintains a sliding 5-minute window of distinct visitors per site (approximate counting with HyperLogLog), stored in Redis and read by the real-time view."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-make-dashboard-queries-fast",
+      "text": "1) How do we make dashboard queries fast?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Query raw events",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Store every event in a database and aggregate at query time."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A busy site produces billions of events a month; every dashboard load becomes a huge scan."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Pre-aggregated rollups",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Maintain counts at minute, hour and day granularity for common dimensions. Long ranges read daily rollups; recent ranges read finer ones."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Only precomputed dimension combinations are fast; arbitrary filters may need a slower path."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Columnar OLAP store with rollups and raw fallback",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Store rollups in a columnar OLAP database partitioned by site and time, which aggregates millions of rows per second. Keep raw events in a data lake for ad-hoc queries and for recomputing rollups if logic changes."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "More infrastructure, but it's the standard architecture for analytics at this scale."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-count-unique-visitors-efficiently",
+      "text": "2) How do we count unique visitors efficiently?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Exact distinct counts require storing every visitor ID per bucket. **HyperLogLog** sketches estimate cardinality within ~1% error in a few kilobytes, and sketches for different hours can be **merged** to get daily or weekly uniques. Use them for dashboards; keep exact counts only where billing requires them."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-avoid-losing-or-double-counting-events",
+      "text": "3) How do we avoid losing or double-counting events?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Kafka provides durable buffering when downstream systems are slow. The stream processor checkpoints its state and offsets for exactly-once aggregation, and a daily **batch job** recomputes rollups from the raw data lake to correct anything the streaming path got wrong (late events, bugs)."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why do dashboards read rollups instead of raw events?",
+      "options": [
+        "Raw events are encrypted",
+        "Rollups are orders of magnitude smaller, so queries are fast",
+        "Rollups are more accurate",
+        "Raw events can't be stored"
+      ],
+      "answer": 1,
+      "explanation": "Pre-aggregated counts turn huge scans into small lookups."
+    },
+    {
+      "question": "What does HyperLogLog provide?",
+      "options": [
+        "Exact unique counts",
+        "Approximate unique counts in tiny, mergeable sketches",
+        "Encryption",
+        "Sorting"
+      ],
+      "answer": 1,
+      "explanation": "HLL estimates cardinality within about 1% using kilobytes of memory."
+    },
+    {
+      "question": "Why should collectors write to Kafka and return immediately?",
+      "options": [
+        "To render pages",
+        "So ingestion stays fast and available even if downstream processing is slow",
+        "Kafka is a dashboard",
+        "To deduplicate"
+      ],
+      "answer": 1,
+      "explanation": "The log buffers events durably; processing happens asynchronously."
+    },
+    {
+      "question": "What is the daily batch recompute for?",
+      "options": [
+        "Deleting data",
+        "Correcting streaming results using the complete raw data",
+        "Encrypting events",
+        "Sending reports"
+      ],
+      "answer": 1,
+      "explanation": "It fixes late events and processing bugs from the stream path."
+    }
+  ]
+}

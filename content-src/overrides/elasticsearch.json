@@ -1,0 +1,48 @@
+{
+  "quiz": [
+    {
+      "question": "What is the fundamental relationship between Elasticsearch and Apache Lucene?",
+      "options": [
+        "Lucene is a distributed wrapper around Elasticsearch",
+        "Elasticsearch and Lucene are competing search engines",
+        "Elasticsearch is a distributed layer built on top of Lucene",
+        "Elasticsearch replaced Lucene and shares no code with it"
+      ],
+      "answer": 2,
+      "explanation": "Each Elasticsearch shard is a Lucene index; Elasticsearch adds distribution, replication and APIs."
+    },
+    {
+      "question": "Which data structure makes full-text search fast?",
+      "options": [
+        "B-tree",
+        "Inverted index",
+        "Linked list",
+        "Heap"
+      ],
+      "answer": 1,
+      "explanation": "An inverted index maps each term to the documents that contain it."
+    },
+    {
+      "question": "Why shouldn't Elasticsearch usually be your primary database?",
+      "options": [
+        "It can't store JSON",
+        "It is eventually consistent and not designed as a durable source of truth",
+        "It has no query language",
+        "It only runs in memory"
+      ],
+      "answer": 1,
+      "explanation": "Keep the source of truth in a database and sync to Elasticsearch (e.g. via CDC)."
+    },
+    {
+      "question": "What does 'near real-time' mean in Elasticsearch?",
+      "options": [
+        "Writes are visible after a refresh, typically about a second",
+        "Queries take a second",
+        "Writes are synchronous everywhere",
+        "Data is cached forever"
+      ],
+      "answer": 0,
+      "explanation": "New documents become searchable after the next refresh creates a new segment."
+    }
+  ]
+}

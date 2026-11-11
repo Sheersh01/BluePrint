@@ -1,0 +1,432 @@
+{
+  "section": "code-review",
+  "slug": "seat-booking-code",
+  "category": "Code Review",
+  "title": "Seat Booking",
+  "subtitle": "A booking function that checks a seat, charges the card, then marks it booked. Two people can pay for the same seat — find out why and fix it.",
+  "seoTitle": "Code Review Interview — Fix a Double-Booking Seat Reservation Function",
+  "description": "A code-review interview question — a seat booking function with a check-then-act race, payment before reservation, and long locks, and how to fix it with conditional updates and holds.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Check-then-act races, conditional updates, temporary holds with expiry, never holding a lock across a network call, idempotent payments."
+        }
+      ],
+      "title": "Core focus"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "quick-reference-learn-this-first",
+      "text": "Quick Reference (Learn This First)"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Problem",
+          "Wrong Instinct",
+          "Correct Solution"
+        ],
+        [
+          "Two users book the same seat",
+          "Check status again right before saving",
+          "**Conditional update: `WHERE status = 'AVAILABLE'`**"
+        ],
+        [
+          "User pays, then the seat turns out to be taken",
+          "Refund later",
+          "**Reserve (hold) first, pay second**"
+        ],
+        [
+          "Holding a DB lock while the card is charged",
+          "`SELECT … FOR UPDATE` around everything",
+          "**Short transaction for the hold; payment outside it**"
+        ],
+        [
+          "User abandons checkout",
+          "Seat stays blocked forever",
+          "**Hold with `expires_at`; expired holds count as free**"
+        ],
+        [
+          "Payment retried after a timeout",
+          "Charge again",
+          "**Idempotency key = booking id**"
+        ]
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Mental model (decision tree)"
+    },
+    {
+      "type": "code",
+      "code": "Many users want the same row?\n        ↓\n  Conditional update (compare-and-set)\n\nSlow external step in the middle?\n        ↓\n  Hold → external call → confirm  (no lock across the call)\n\nUser might never come back?\n        ↓\n  Hold expires automatically\n\nMoney call might be retried?\n        ↓\n  Idempotency key"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "1-the-starting-point",
+      "text": "1. The Starting Point"
+    },
+    {
+      "type": "code",
+      "code": "def book_seat(user_id, show_id, seat_id):\n    seat = db.query_one(\n        \"SELECT * FROM seats WHERE show_id = %s AND seat_id = %s\", show_id, seat_id)\n\n    if seat.status != \"AVAILABLE\":\n        return {\"error\": \"Seat already taken\"}\n\n    charge = payment_gateway.charge(user_id, seat.price)    # ~2 seconds\n    if not charge.success:\n        return {\"error\": \"Payment failed\"}\n\n    db.execute(\n        \"UPDATE seats SET status = 'BOOKED', user_id = %s \"\n        \"WHERE show_id = %s AND seat_id = %s\",\n        user_id, show_id, seat_id)\n\n    send_ticket_email(user_id, show_id, seat_id)\n    return {\"status\": \"booked\"}"
+    },
+    {
+      "type": "label",
+      "text": "Flow"
+    },
+    {
+      "type": "code",
+      "code": "read seat → is it AVAILABLE?\n        ↓\ncharge card (2 s)\n        ↓\nmark BOOKED\n        ↓\nsend email"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "2-what-most-candidates-catch",
+      "text": "2. What Most Candidates Catch ✅"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-1-the-seat-might-not-exist",
+      "text": "2.1 The Seat Might Not Exist"
+    },
+    {
+      "type": "paragraph",
+      "text": "`seat` can be `None` for a bad `seat_id`, and `seat.status` then crashes. Validate it and return a 404."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-2-the-email-shouldn-t-block-the-response",
+      "text": "2.2 The Email Shouldn't Block the Response"
+    },
+    {
+      "type": "paragraph",
+      "text": "Sending the email inline makes booking slower and can fail a booking that already succeeded. Send it asynchronously after the booking is confirmed."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "3-what-most-candidates-miss",
+      "text": "3. What Most Candidates Miss ⚠️"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-1-check-then-act-race-double-booking",
+      "text": "3.1 Check-Then-Act Race → Double Booking"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Scenario**: Alice and Bob click seat A7 at the same moment."
+    },
+    {
+      "type": "code",
+      "code": "Alice: SELECT → AVAILABLE ✅          Bob: SELECT → AVAILABLE ✅\nAlice: charge ₹500 ✅                  Bob: charge ₹500 ✅\nAlice: UPDATE → BOOKED (Alice)        Bob: UPDATE → BOOKED (Bob)  ← overwrites Alice"
+    },
+    {
+      "type": "paragraph",
+      "text": "Both paid. Bob owns the seat. Alice has a receipt and no seat."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Make \"is it free?\" and \"take it\" a single atomic statement — a conditional update."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-2-charging-before-reserving",
+      "text": "3.2 Charging Before Reserving"
+    },
+    {
+      "type": "paragraph",
+      "text": "Even without a race, the seat can be taken *during* the 2-second charge. Every lost race becomes a refund, a support ticket and an angry customer."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Reserve first (a short **hold**), then charge, then confirm."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-3-the-obvious-fix-makes-it-worse",
+      "text": "3.3 The \"Obvious\" Fix Makes It Worse"
+    },
+    {
+      "type": "paragraph",
+      "text": "Wrapping everything in one transaction with `SELECT … FOR UPDATE` stops the double booking — but now the seat row is **locked for the whole card charge**. A slow gateway holds locks for seconds; a popular show queues hundreds of requests behind one row; connection pools run dry."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Never hold a database lock across a network call. Keep transactions short."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-4-abandoned-checkouts",
+      "text": "3.4 Abandoned Checkouts"
+    },
+    {
+      "type": "paragraph",
+      "text": "If you add holds, a user who closes the tab leaves the seat held forever."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Holds have an `expires_at` (e.g. 10 minutes). An expired hold is treated as available."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-5-payment-retries",
+      "text": "3.5 Payment Retries"
+    },
+    {
+      "type": "paragraph",
+      "text": "If the charge times out and the code retries, the user can be charged twice."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Pass an idempotency key (the booking/hold id) to the payment gateway."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "4-two-users-one-seat",
+      "text": "4. Two Users, One Seat"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Two users click the same seat at exactly the same time. Walk me through what your code does.\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "common-mistake",
+      "text": "⚠️ Common Mistake"
+    },
+    {
+      "type": "paragraph",
+      "text": "\"I'll check the status again just before the update.\" A second check narrows the window but doesn't close it — the two requests can still interleave between the check and the write."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "correct-answer-compare-and-set-in-the-database",
+      "text": "✅ Correct Answer — Compare-and-Set in the Database"
+    },
+    {
+      "type": "code",
+      "code": "UPDATE seats\nSET status = 'HELD', held_by = %(user)s, hold_expires_at = now() + interval '10 minutes'\nWHERE show_id = %(show)s AND seat_id = %(seat)s\n  AND (status = 'AVAILABLE' OR (status = 'HELD' AND hold_expires_at < now()));"
+    },
+    {
+      "type": "paragraph",
+      "text": "The database evaluates the condition and the write as one step. Exactly one request gets `rowcount = 1`; the other gets `0` and is told the seat is taken — before anyone is charged."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"I'd turn the check and the write into one conditional update, so the database decides who wins. The loser gets zero rows updated and sees 'seat taken' before paying.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "5-why-not-one-big-transaction",
+      "text": "5. Why Not One Big Transaction?"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Why not just put the whole function in a transaction with SELECT FOR UPDATE?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Because the payment call sits in the middle. A row lock held for the length of an external HTTP call means:"
+    },
+    {
+      "type": "code",
+      "code": "lock seat ──── charge card (2 s … or 30 s if the gateway is slow) ──── unlock\n               ↑ every other request for this seat waits here"
+    },
+    {
+      "type": "paragraph",
+      "text": "Throughput on hot seats collapses, and a hung gateway can hold locks until timeouts fire."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"I keep database transactions short and never hold a lock across a network call. The hold is one quick transaction, the payment happens outside any transaction, and confirming is another quick conditional update.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "6-the-hold-expires-while-the-user-is-paying",
+      "text": "6. The Hold Expires While the User Is Paying"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"The user's card was charged successfully, but their 10-minute hold expired a second earlier and someone else grabbed the seat. What now?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Confirm with a condition, and handle the case where it fails:"
+    },
+    {
+      "type": "code",
+      "code": "UPDATE seats SET status = 'BOOKED'\nWHERE show_id = %s AND seat_id = %s AND held_by = %s AND status = 'HELD';"
+    },
+    {
+      "type": "paragraph",
+      "text": "If it updates 0 rows, the hold was lost: **refund the charge** (a compensating action) and tell the user. To make this rare, give the payment page a visible countdown and make the hold slightly longer than the payment page's own timeout."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "7-master-interview-answer",
+      "text": "7. Master Interview Answer"
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"The core bug is check-then-act: two users can both see the seat as available and both pay. I'd make reserving atomic with a conditional update that only succeeds if the seat is still free, and I'd reserve before charging, as a hold with an expiry so abandoned checkouts free the seat. The payment happens outside any database transaction, with the booking id as an idempotency key, and confirming is another conditional update that checks the hold is still ours — if it isn't, we refund. The ticket email goes out asynchronously after confirmation.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "8-the-fixed-code",
+      "text": "8. The Fixed Code"
+    },
+    {
+      "type": "code",
+      "code": "HOLD_MINUTES = 10\n\ndef book_seat(user_id, show_id, seat_id):\n    booking_id = new_id()\n\n    # 1. Hold: one short, atomic statement decides who gets the seat\n    held = db.execute(\n        \"UPDATE seats SET status = 'HELD', held_by = %s, booking_id = %s, \"\n        \"       hold_expires_at = now() + make_interval(mins => %s) \"\n        \"WHERE show_id = %s AND seat_id = %s \"\n        \"  AND (status = 'AVAILABLE' \"\n        \"       OR (status = 'HELD' AND hold_expires_at < now()))\",\n        user_id, booking_id, HOLD_MINUTES, show_id, seat_id)\n    if held.rowcount == 0:\n        return {\"error\": \"Seat is not available\"}\n\n    price = db.query_one(\n        \"SELECT price FROM seats WHERE show_id = %s AND seat_id = %s\",\n        show_id, seat_id).price\n\n    # 2. Pay outside any transaction; the booking id makes retries safe\n    charge = payment_gateway.charge(user_id, price, idempotency_key=booking_id)\n    if not charge.success:\n        release_hold(show_id, seat_id, booking_id)\n        return {\"error\": \"Payment failed\"}\n\n    # 3. Confirm only if the hold is still ours\n    confirmed = db.execute(\n        \"UPDATE seats SET status = 'BOOKED' \"\n        \"WHERE show_id = %s AND seat_id = %s AND booking_id = %s AND status = 'HELD'\",\n        show_id, seat_id, booking_id)\n    if confirmed.rowcount == 0:\n        payment_gateway.refund(charge.id, idempotency_key=f\"refund-{booking_id}\")\n        return {\"error\": \"Your hold expired — you have been refunded\"}\n\n    # 4. Side effects after the booking is safe\n    events.publish(\"BookingConfirmed\", {\"booking_id\": booking_id, \"user_id\": user_id})\n    return {\"status\": \"booked\", \"booking_id\": booking_id}\n\n\ndef release_hold(show_id, seat_id, booking_id):\n    db.execute(\n        \"UPDATE seats SET status = 'AVAILABLE', held_by = NULL, booking_id = NULL \"\n        \"WHERE show_id = %s AND seat_id = %s AND booking_id = %s AND status = 'HELD'\",\n        show_id, seat_id, booking_id)"
+    },
+    {
+      "type": "paragraph",
+      "text": "**What changed:** hold first with a compare-and-set; no lock across the payment; idempotency key on the charge; conditional confirm with a refund path; the email moved to an event."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "9-the-full-learning-escalation",
+      "text": "9. The Full Learning Escalation"
+    },
+    {
+      "type": "code",
+      "code": "Null checks\n    ↓\nCheck-then-act race\n    ↓\nConditional update (compare-and-set)\n    ↓\nHold → pay → confirm\n    ↓\nHold expiry\n    ↓\nIdempotent payments + refunds\n    ↓\nAsync side effects"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "10-next-challenge-hld",
+      "text": "10. Next Challenge — HLD"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Now 1 million people try to buy tickets for a concert the moment sales open. Design it.\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "That's [Ticketmaster](/learn/system-design/problem-breakdowns/ticketmaster) — the same hold-then-confirm idea plus a virtual waiting room and a seat map that updates in real time. See also [Dealing with Contention](/learn/system-design/patterns/dealing-with-contention) and [Flash Sale](/learn/system-design/problem-breakdowns/flash-sale)."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "appendix-problem-solution-cheat-sheet",
+      "text": "Appendix: Problem → Solution Cheat Sheet"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Problem",
+          "Solution"
+        ],
+        [
+          "Two users take the same seat",
+          "Conditional update / compare-and-set"
+        ],
+        [
+          "Paid but seat lost",
+          "Hold before paying"
+        ],
+        [
+          "Locks held during payment",
+          "Short transactions; no lock across network calls"
+        ],
+        [
+          "Abandoned checkout",
+          "Hold with expiry"
+        ],
+        [
+          "Hold expired during payment",
+          "Conditional confirm + refund"
+        ],
+        [
+          "Charge retried",
+          "Idempotency key"
+        ],
+        [
+          "Email failure",
+          "Async event after confirmation"
+        ]
+      ]
+    }
+  ],
+  "quiz": []
+}

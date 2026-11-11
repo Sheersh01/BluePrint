@@ -1,0 +1,456 @@
+{
+  "section": "code-review",
+  "slug": "login-endpoint-code",
+  "category": "Code Review",
+  "title": "Login Endpoint",
+  "subtitle": "A twelve-line login handler with at least six security holes. Find them in the order an attacker would.",
+  "seoTitle": "Code Review Interview — Fix an Insecure Login Endpoint",
+  "description": "A code-review interview question — a Python login handler with SQL injection, MD5 passwords, user enumeration, forgeable tokens and no rate limiting, and how to fix each one.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "easy",
+  "blocks": [
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "SQL injection, password hashing, user enumeration, brute-force protection, session tokens that can't be forged, secure cookies."
+        }
+      ],
+      "title": "Core focus"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "quick-reference-learn-this-first",
+      "text": "Quick Reference (Learn This First)"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Problem",
+          "Wrong Instinct",
+          "Correct Solution"
+        ],
+        [
+          "SQL built with an f-string",
+          "Escape quotes by hand",
+          "**Parameterized queries**"
+        ],
+        [
+          "Passwords stored as MD5",
+          "SHA-256",
+          "**A slow password hash: Argon2id / bcrypt (salted)**"
+        ],
+        [
+          "\"No account\" vs \"Wrong password\"",
+          "Better wording",
+          "**One generic error, same status, similar timing**"
+        ],
+        [
+          "Unlimited attempts",
+          "CAPTCHA only",
+          "**Rate limit per account and per IP + backoff**"
+        ],
+        [
+          "Token = base64(user id)",
+          "Encrypt it",
+          "**Random session id stored server-side, or a signed token with expiry**"
+        ],
+        [
+          "Token in JS-readable storage",
+          "—",
+          "**`HttpOnly`, `Secure`, `SameSite` cookie**"
+        ]
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Mental model (decision tree)"
+    },
+    {
+      "type": "code",
+      "code": "User input in a query?\n        ↓\n  Parameters, never string formatting\n\nStoring a password?\n        ↓\n  Slow, salted hash (Argon2id / bcrypt)\n\nDifferent answers for \"no user\" and \"wrong password\"?\n        ↓\n  One generic response\n\nCan someone try a million passwords?\n        ↓\n  Rate limits + lockout/backoff\n\nCan a client make up its own token?\n        ↓\n  Random or signed, with expiry and revocation"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "1-the-starting-point",
+      "text": "1. The Starting Point"
+    },
+    {
+      "type": "code",
+      "code": "import base64\nimport hashlib\n\n@app.post(\"/login\")\ndef login():\n    email = request.form[\"email\"]\n    password = request.form[\"password\"]\n\n    user = db.query_one(f\"SELECT * FROM users WHERE email = '{email}'\")\n    if user is None:\n        return {\"error\": \"No account with that email\"}, 404\n\n    if user.password != hashlib.md5(password.encode()).hexdigest():\n        return {\"error\": \"Wrong password\"}, 401\n\n    token = base64.b64encode(f\"{user.id}:{user.email}\".encode()).decode()\n    return {\"token\": token}"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "2-what-most-candidates-catch",
+      "text": "2. What Most Candidates Catch ✅"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-1-sql-injection",
+      "text": "2.1 SQL Injection"
+    },
+    {
+      "type": "paragraph",
+      "text": "The email goes straight into the SQL string. An email of `' OR '1'='1' --` logs in as the first user in the table; worse payloads can read or drop data."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Parameterized queries — the driver sends the value separately from the SQL."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-2-md5-for-passwords",
+      "text": "2.2 MD5 for Passwords"
+    },
+    {
+      "type": "paragraph",
+      "text": "MD5 is fast and unsalted, so leaked hashes are cracked with lookup tables and GPUs in minutes."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: A deliberately slow, salted password hash (next section)."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "3-what-most-candidates-miss",
+      "text": "3. What Most Candidates Miss ⚠️"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-1-fast-and-secure-is-the-wrong-goal-for-password-hashes",
+      "text": "3.1 \"Fast and Secure\" Is the Wrong Goal for Password Hashes"
+    },
+    {
+      "type": "paragraph",
+      "text": "Replacing MD5 with SHA-256 still lets an attacker try billions of guesses per second. Password hashing must be **slow and salted** on purpose."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Argon2id (or bcrypt / scrypt) via a library, which also handles the salt and constant-time comparison."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-2-user-enumeration",
+      "text": "3.2 User Enumeration"
+    },
+    {
+      "type": "code",
+      "code": "404 \"No account with that email\"   → this email isn't registered\n401 \"Wrong password\"                → this email IS registered"
+    },
+    {
+      "type": "paragraph",
+      "text": "Attackers use the difference to build a list of real accounts, then target them."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: The same message and status for both cases (\"Invalid email or password\"), and hash a dummy password when the user doesn't exist so the response time doesn't give it away either."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-3-unlimited-attempts",
+      "text": "3.3 Unlimited Attempts"
+    },
+    {
+      "type": "paragraph",
+      "text": "Nothing stops a bot from trying 10,000 passwords against one account, or one common password against 10,000 accounts (credential stuffing)."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Rate limits per account **and** per IP, progressive delays or temporary lockout, and alerts on spikes. Offer MFA."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-4-the-token-can-be-made-up-by-anyone",
+      "text": "3.4 The Token Can Be Made Up by Anyone"
+    },
+    {
+      "type": "paragraph",
+      "text": "`base64(\"42:alice@example.com\")` isn't a secret — it's an encoding. Anyone can create a token for user 43. It also never expires and can't be revoked."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: A random session id (`secrets.token_urlsafe(32)`) stored server-side with an expiry — or a signed token (JWT) with a short expiry plus refresh tokens. Either way the server can verify it and it ends."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-5-how-the-token-reaches-the-browser",
+      "text": "3.5 How the Token Reaches the Browser"
+    },
+    {
+      "type": "paragraph",
+      "text": "Returning the token in JSON usually means it ends up in `localStorage`, readable by any injected script (XSS)."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Set it as a cookie with `HttpOnly` (no JS access), `Secure` (HTTPS only) and `SameSite=Lax` or `Strict` (CSRF protection)."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-6-smaller-things-that-still-matter",
+      "text": "3.6 Smaller Things That Still Matter"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "`request.form[\"email\"]` raises a 500 if the field is missing — validate input and return 400.",
+        "Normalize the email (trim, lowercase) so `Alice@x.com` and `alice@x.com` are the same account.",
+        "Never log the password field.",
+        "`SELECT *` pulls the password hash into memory and maybe into logs; select what you need."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "4-sha-256-is-fine-right",
+      "text": "4. SHA-256 Is Fine, Right?"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"If MD5 is broken, can we just use SHA-256 for passwords?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "common-mistake",
+      "text": "⚠️ Common Mistake"
+    },
+    {
+      "type": "paragraph",
+      "text": "\"SHA-256 is secure, so yes.\" SHA-256 is a fine hash for integrity — and that's the problem: it's designed to be fast."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "correct-answer",
+      "text": "✅ Correct Answer"
+    },
+    {
+      "type": "paragraph",
+      "text": "Use a **password hashing function** built to be slow and memory-hard, with a per-password salt: Argon2id, bcrypt or scrypt. Tune the cost so one hash takes tens of milliseconds — invisible to a user, crippling to an attacker trying billions."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"General-purpose hashes like SHA-256 are designed to be fast, which helps attackers. I'd use Argon2id or bcrypt through a well-known library — it's deliberately slow and salts each password — and rehash old MD5 passwords the next time each user logs in.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "5-migrating-millions-of-md5-passwords",
+      "text": "5. Migrating Millions of MD5 Passwords"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"We already have 5 million users with MD5 hashes. How do we move to Argon2 without forcing everyone to reset?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Two common approaches:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "**Rehash on login:** when a user logs in successfully with their MD5 hash, compute the Argon2 hash from the plain password they just sent and replace the old one. Inactive accounts keep MD5 until they return (or are forced to reset after a deadline).",
+        "**Wrap now:** immediately replace every stored hash with `argon2(md5_hash)`, then verify with `argon2(md5(password))`. Every account is protected today, without waiting for logins."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "6-sessions-or-jwts",
+      "text": "6. Sessions or JWTs?"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Should the login return a JWT or a session id?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "",
+          "Server-side session",
+          "JWT (signed token)"
+        ],
+        [
+          "Verify",
+          "Look up the id (Redis)",
+          "Check the signature, no lookup"
+        ],
+        [
+          "Revoke / log out everywhere",
+          "Delete the session — instant",
+          "Hard; needs short expiry + a denylist"
+        ],
+        [
+          "Size",
+          "Small random string",
+          "Larger; carries claims"
+        ],
+        [
+          "Good for",
+          "Web apps, anything needing instant revocation",
+          "Stateless APIs between services"
+        ]
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Either is fine if it can't be forged, expires, and is stored in a secure cookie. Saying *why* you pick one is the point."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "7-master-interview-answer",
+      "text": "7. Master Interview Answer"
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"The query is built with an f-string, so it's open to SQL injection. Passwords are unsalted MD5, which cracks in minutes. The two different error messages let attackers enumerate accounts, nothing limits login attempts, and the token is just base64 of the user id, so anyone can forge one and it never expires. I'd use parameterized queries, Argon2id or bcrypt with rehash-on-login for old passwords, one generic error with similar timing, rate limits per account and IP, and a random session id stored server-side with an expiry, sent as an HttpOnly, Secure, SameSite cookie.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "8-the-fixed-code",
+      "text": "8. The Fixed Code"
+    },
+    {
+      "type": "code",
+      "code": "import secrets\nfrom argon2 import PasswordHasher\nfrom argon2.exceptions import VerifyMismatchError\n\nph = PasswordHasher()                                 # Argon2id with sane defaults\nDUMMY_HASH = ph.hash(\"not-a-real-password\")   # same timing for unknown emails\nSESSION_TTL_S = 60 * 60 * 24 * 7\nGENERIC_ERROR = ({\"error\": \"Invalid email or password\"}, 401)\n\n@app.post(\"/login\")\n@rate_limit(per_ip=\"20/minute\",\n            per_key=lambda: normalized_email(), key_limit=\"5/minute\")\ndef login():\n    email = normalized_email()\n    password = request.form.get(\"password\", \"\")\n    if not email or not password:\n        return {\"error\": \"Email and password are required\"}, 400\n\n    user = db.query_one(\n        \"SELECT id, password_hash FROM users WHERE email = %s\", email)   # parameterized\n\n    try:\n        ph.verify(user.password_hash if user else DUMMY_HASH, password)\n    except VerifyMismatchError:\n        return GENERIC_ERROR\n    if user is None:\n        return GENERIC_ERROR\n\n    if ph.check_needs_rehash(user.password_hash):     # e.g. after raising the cost\n        db.execute(\"UPDATE users SET password_hash = %s WHERE id = %s\",\n                   ph.hash(password), user.id)\n\n    session_id = secrets.token_urlsafe(32)            # unguessable\n    redis.set(f\"session:{session_id}\", user.id, ex=SESSION_TTL_S)\n\n    resp = make_response({\"status\": \"ok\"})\n    resp.set_cookie(\"session\", session_id, max_age=SESSION_TTL_S,\n                    httponly=True, secure=True, samesite=\"Lax\")\n    return resp\n\n\ndef normalized_email():\n    return request.form.get(\"email\", \"\").strip().lower()"
+    },
+    {
+      "type": "paragraph",
+      "text": "**What changed:** parameterized query; Argon2id with automatic salting and constant-time verify; a dummy hash so unknown emails take the same time; one generic error; rate limits per IP and per account; a random, expiring, revocable session in an `HttpOnly`, `Secure`, `SameSite` cookie; input validation and email normalization."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "9-the-full-learning-escalation",
+      "text": "9. The Full Learning Escalation"
+    },
+    {
+      "type": "code",
+      "code": "SQL injection\n    ↓\nPassword hashing (slow + salted)\n    ↓\nUser enumeration (messages + timing)\n    ↓\nBrute force / credential stuffing\n    ↓\nUnforgeable, expiring tokens\n    ↓\nCookie security (XSS / CSRF)\n    ↓\nMFA, account recovery"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "10-next-challenge-hld",
+      "text": "10. Next Challenge — HLD"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Design the authentication system for the whole company — web, mobile and service-to-service.\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "See [Authentication System](/learn/system-design/problem-breakdowns/authentication-system), and [Q76: OAuth 2.0](/learn/system-design/questions/security#q-76) and [Q79: common web vulnerabilities](/learn/system-design/questions/security#q-79) in the Questions bank."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "appendix-problem-solution-cheat-sheet",
+      "text": "Appendix: Problem → Solution Cheat Sheet"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Problem",
+          "Solution"
+        ],
+        [
+          "SQL injection",
+          "Parameterized queries"
+        ],
+        [
+          "Weak password hashes",
+          "Argon2id / bcrypt, rehash on login"
+        ],
+        [
+          "User enumeration",
+          "Generic error + equal timing"
+        ],
+        [
+          "Brute force",
+          "Rate limits per account and IP, backoff, MFA"
+        ],
+        [
+          "Forgeable token",
+          "Random session id or signed token, with expiry"
+        ],
+        [
+          "Token stolen via XSS",
+          "HttpOnly, Secure, SameSite cookie"
+        ],
+        [
+          "Missing fields → 500",
+          "Validate input → 400"
+        ]
+      ]
+    }
+  ],
+  "quiz": []
+}

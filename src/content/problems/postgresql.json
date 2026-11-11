@@ -1,0 +1,231 @@
+{
+  "section": "deep-dives",
+  "slug": "postgresql",
+  "category": "Key Technologies",
+  "title": "PostgreSQL",
+  "subtitle": "How to use PostgreSQL in system design interviews — ACID transactions, indexing, replication, scaling limits, and when to choose something else.",
+  "seoTitle": "Design PostgreSQL | System Design Interview Breakdown",
+  "description": "How to use PostgreSQL in system design interviews — ACID transactions, indexing, replication, scaling limits, and when to choose something else.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "blocks": [
+    {
+      "type": "paragraph",
+      "text": "PostgreSQL is the default answer for \"which database?\" in most interviews, and for good reason. It's a mature, open-source relational database with strong consistency, rich indexing, JSON support and a huge ecosystem. If you don't have a specific reason to pick something else, Postgres is a safe, defensible choice — and interviewers respect candidates who can explain *why* it fits and *where* it stops fitting."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-basics",
+      "text": "The Basics"
+    },
+    {
+      "type": "paragraph",
+      "text": "Postgres stores data in **tables** with typed columns, linked by foreign keys, and queried with SQL. A few properties matter most in interviews:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**ACID transactions** — multiple statements commit or roll back together, with isolation between concurrent transactions.",
+        "**Strong consistency** on the primary — once a write commits, every subsequent read on the primary sees it.",
+        "**Rich querying** — joins, aggregations, window functions and constraints that keep data valid.",
+        "**Extensibility** — JSONB documents, full-text search, PostGIS for geospatial data, and more."
+      ]
+    },
+    {
+      "type": "diagram",
+      "file": "01-a-typical-postgres-deployment.svg",
+      "caption": "A typical Postgres deployment"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "key-concepts",
+      "text": "Key Concepts"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "transactions-and-isolation",
+      "text": "Transactions and isolation"
+    },
+    {
+      "type": "paragraph",
+      "text": "Postgres uses **MVCC** (multi-version concurrency control): readers see a consistent snapshot without blocking writers. The default isolation level is *Read Committed*; *Repeatable Read* and *Serializable* give stronger guarantees at the cost of more transaction retries."
+    },
+    {
+      "type": "paragraph",
+      "text": "Know the tools for contention:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "`SELECT ... FOR UPDATE` locks rows you intend to change.",
+        "Conditional updates (`UPDATE ... WHERE remaining > 0`) make check-and-set atomic.",
+        "Unique constraints enforce invariants even if application code has bugs."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "indexing",
+      "text": "Indexing"
+    },
+    {
+      "type": "paragraph",
+      "text": "The default **B-tree** index serves equality and range lookups in O(log n). Other index types matter in interviews:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "**GIN** for full-text search (`tsvector`) and JSONB containment.",
+        "**GiST** for geospatial queries with PostGIS.",
+        "**Composite indexes** follow the leftmost-prefix rule — an index on `(user_id, created_at)` serves \"a user's recent items\" efficiently.",
+        "**Partial indexes** (`WHERE status = 'ACTIVE'`) keep indexes small for hot subsets."
+      ]
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "In an interview, name the index you'd add for each core query. \"An index on `(event_id, status)` so we can fetch available tickets quickly\" is far more convincing than \"we'll add indexes\"."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "replication",
+      "text": "Replication"
+    },
+    {
+      "type": "paragraph",
+      "text": "The primary streams its write-ahead log (WAL) to replicas. Replicas serve reads and can be promoted if the primary fails. Replication is asynchronous by default — fast, but a failover can lose the last few transactions and replicas may serve slightly stale reads. Synchronous replication removes that risk at the cost of write latency."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "scaling-postgres",
+      "text": "Scaling Postgres"
+    },
+    {
+      "type": "paragraph",
+      "text": "A single well-provisioned Postgres instance handles a lot: terabytes of data and tens of thousands of transactions per second. Scale in this order:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Indexes and query tuning** — most performance problems are missing indexes.",
+        "**Connection pooling** — Postgres uses a process per connection; PgBouncer lets thousands of app connections share a few hundred database connections.",
+        "**Read replicas** — scale read throughput.",
+        "**Caching** — keep hot reads off the database entirely.",
+        "**Partitioning** — split large tables (e.g. by time) so queries and maintenance touch less data.",
+        "**Sharding** — split data across multiple primaries by a key (manually or with Citus). This is the big step: cross-shard joins and transactions become hard."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "when-to-use-it-in-an-interview",
+      "text": "When to Use It in an Interview"
+    },
+    {
+      "type": "paragraph",
+      "text": "Choose Postgres when you need:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Transactions across multiple rows or tables — bookings, payments, inventory ([Ticketmaster](/learn/system-design/problem-breakdowns/ticketmaster), [Payment System](/learn/system-design/problem-breakdowns/payment-system)).",
+        "Relational data with flexible querying and constraints.",
+        "Moderate write volume with strong consistency.",
+        "Geospatial or full-text features without adding another system ([Yelp](/learn/system-design/problem-breakdowns/yelp))."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "limitations",
+      "text": "Limitations"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "**Write scaling** — a single primary caps write throughput; sharding is operationally heavy. For millions of writes per second, consider Cassandra or DynamoDB.",
+        "**Huge analytical scans** — row storage isn't ideal for scanning billions of rows; use a columnar warehouse.",
+        "**Advanced search** — built-in full-text search is good, but relevance tuning at scale points to Elasticsearch.",
+        "**Global multi-region writes** — single-primary design makes active-active across regions hard."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "summary",
+      "text": "Summary"
+    },
+    {
+      "type": "paragraph",
+      "text": "Postgres gives you transactions, constraints, flexible queries and a strong ecosystem. Start with it by default, index deliberately, scale reads with replicas and caches, and know that sharding — or a different database — is the answer once a single primary can't keep up with writes."
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What does MVCC allow in PostgreSQL?",
+      "options": [
+        "Multiple primaries",
+        "Readers to see a consistent snapshot without blocking writers",
+        "Automatic sharding",
+        "Schema-less storage"
+      ],
+      "answer": 1,
+      "explanation": "Multiple row versions let reads and writes proceed concurrently."
+    },
+    {
+      "question": "Which index type would you use for PostGIS geospatial queries?",
+      "options": [
+        "B-tree",
+        "Hash",
+        "GiST",
+        "None"
+      ],
+      "answer": 2,
+      "explanation": "GiST indexes support spatial operators like distance and containment."
+    },
+    {
+      "question": "What is the main risk of asynchronous replication?",
+      "options": [
+        "Slower writes",
+        "Replica lag and possible loss of recent commits on failover",
+        "Replicas can't serve reads",
+        "It requires sharding"
+      ],
+      "answer": 1,
+      "explanation": "Async replicas may be behind the primary at the moment it fails."
+    },
+    {
+      "question": "Why use a connection pooler like PgBouncer?",
+      "options": [
+        "To encrypt traffic",
+        "Postgres uses a process per connection, so pooling lets many clients share few connections",
+        "To shard data",
+        "To replicate WAL"
+      ],
+      "answer": 1,
+      "explanation": "Thousands of direct connections would exhaust memory and CPU."
+    }
+  ]
+}

@@ -1,0 +1,681 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "web-crawler",
+  "category": "Common Problems",
+  "title": "Web Crawler",
+  "seoTitle": "Design a Web Crawler",
+  "description": "Learn how to design Web Crawler: requirements, core entities, API, high-level design and deep dives.",
+  "tags": [
+    {
+      "label": "Managing Long Running Tasks",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    },
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Evan King",
+  "published": "Jul 8, 2024",
+  "updated": "Feb 15, 2026",
+  "updatedLabel": "Updated",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "ZoomInfo"
+    ],
+    "more": 6
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🕸️",
+      "title": "What is a Web Crawler",
+      "text": "A web crawler is a program that automatically traverses the web by downloading web pages and following links from one page to another. It is used to index the web for search engines, collect data for research, or monitor websites for changes."
+    },
+    {
+      "type": "paragraph",
+      "text": "Depending on the interview, the output of the traversed web pages may be used for different purposes. This can have some consequences on the overall design. For example, a search engine would need to index the data and rank it (using PageRank or other algorithms), while a company like OpenAI would dump the raw text from the pages into a database to be used to train LLMs (Large Language Models). Regardless of the use case, the interview is likely to focus on the crawling task—how can we efficiently crawl the web, extract the necessary data, and store it in a way that is easily accessible?"
+    },
+    {
+      "type": "paragraph",
+      "text": "For our purposes, we'll design a web crawler whose goal is to extract text data from the web to train an LLM. This could be used by a company like OpenAI to train their GPT-4 model, Google to train Gemini, Meta to train LLaMA, etc."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Crawl the web starting from a given set of seed URLs.",
+        "Extract text data from each web page and store the text for later processing."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope)"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "The actual processing of the text data (e.g., training an LLM).",
+        "Handling of non-text data (e.g., images, videos, etc.).",
+        "Handling of dynamic content (e.g., JavaScript-rendered pages).",
+        "Handling of authentication (e.g., login-required pages)."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "It's not possible to scrape the entire internet. Instead, we are going to scrape the vast majority of the web. Many small sites exist in the dark corners of the internet that we will not be able to reach. It may be worth clarifying this with your interviewer, but it's a general assumption of web crawling that you can't reach every page on the web."
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements of the system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "paragraph",
+      "text": "Before we jump into our non-functional requirements, it's important to ask your interviewer about the scale of the system. For this design in particular, the scale will have a large impact on the database design and the overall architecture."
+    },
+    {
+      "type": "paragraph",
+      "text": "We'll assume there are 10B pages on the web, with an average size of 2MB per page (this is the total transfer size including HTML and any inline resources, though the HTML alone is typically much smaller at ~30KB, but 2MB is a reasonable worst-case for planning bandwidth). We are also going to say that the company needs this data to be available for training 5 days after you start crawling."
+    },
+    {
+      "type": "paragraph",
+      "text": "It's commonly advised to start with back-of-the-envelope (BOE) calculations. However, I recommend delaying these calculations until they are necessary for solving a specific problem. This approach avoids unnecessary computations and focuses your efforts on aspects that directly impact your solution. You'll find examples of appropriate moments for estimations in our detailed discussions later. Regardless of what approach you take, just make sure to communicate with your interviewer so that you're on the same page."
+    },
+    {
+      "type": "paragraph",
+      "text": "With that in mind, let's document the non-functional requirements:"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Fault tolerance to handle failures gracefully and resume crawling without losing progress.",
+        "Politeness to adhere to robots.txt and not overload website servers inappropriately.",
+        "Efficiency to crawl the web in under 5 days.",
+        "Scalability to handle 10B pages."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope)"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Security to protect the system from malicious actors.",
+        "Cost to operate the system within budget constraints.",
+        "Compliance to adhere to legal requirements and privacy regulations."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Here's how it might look on your whiteboard:"
+    },
+    {
+      "type": "diagram",
+      "file": "01-requirements.svg",
+      "caption": "Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "Given this system isn't a user-facing system, we'll instead focus on the abstract interface it has with the outside world and break down the data flow before proceeding to the high-level design. This will give us a good high-level picture of how the pieces should fit together which we can use as scaffolding for our design."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "paragraph",
+      "text": "For data processing system design questions like this one, it helps to start by defining the system's interface. This includes clearly outline what data the system receives and what it outputs, establishing a clear boundary of the system's functionality."
+    },
+    {
+      "type": "label",
+      "text": "System Interface"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Input**: Seed URLs to start crawling from.",
+        "**Output**: Text data extracted from web pages."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "data-flow",
+      "text": "Data Flow"
+    },
+    {
+      "type": "paragraph",
+      "text": "The data flow is the sequential series of steps we'll cover in order to get from the inputs to our system to the outputs. Clarifying this flow early will help to align with our interviewer before the high-level design. For our crawler, we need to perform a sequence of steps before the page can be crawled:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Take seed URL from frontier and request IP from DNS",
+        "Fetch HTML from external server using IP",
+        "Extract text data from the HTML.",
+        "Store the text data in a database.",
+        "Extract any linked URLs from the web pages and add them to the list of URLs to crawl.",
+        "Repeat steps 1-5 until all URLs have been crawled."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Note that this is simple, we will improve upon as we go, but it's important to start simple and build up from there."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "paragraph",
+      "text": "For our high-level design, we will focus on getting a simple system up and running that satisfies our core functional requirements by simply following the data flow we outlined above. We will improve upon this design in the next section."
+    },
+    {
+      "type": "paragraph",
+      "text": "High Level Design"
+    },
+    {
+      "type": "paragraph",
+      "text": "The core components of our high-level design are:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Frontier Queue**: The queue of URLs we need to crawl. We will start with a set of seed URLs and add new URLs as we crawl the web. The technology used could be something like Kafka, Redis, or SQS. We'll decide on the technology later.",
+        "**Crawler**: Fetches web pages, extracts text data, and extracts new URLs to add to the frontier queue. In the next section we'll talk about how to scale this component to handle the 10B pages we need to crawl.",
+        "**DNS**: Resolves domain names to IP addresses so that the crawler can fetch the web pages. There are interesting discussions to be had about how to cache DNS lookups, handle DNS failures, and ensure that we are not overloading DNS servers. Again, more on this later.",
+        "**Webpage**: The external server that hosts the web pages we are crawling. We'll fetch the HTML from these servers and extract the text data.",
+        "**S3 Text Data**: This is where we'll store the text data we extract from the web pages. We choose S3 as our blob storage because it is highly scalable and durable. It is designed to store large amounts of data cheaply. Other hosted storage solutions like Google Cloud Storage or Azure Blob Storage could also be used."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "The dotted rectangle represents the boundary of our system. Everything inside the rectangle is part of our system, while everything outside is external to our system, like the web pages we are crawling."
+    },
+    {
+      "type": "paragraph",
+      "text": "It's wise to ask your interviewer about the seed URLs. Are they provided to you, or do you need to come up with them yourself? In almost all cases, the seed URLs will be provided to you. But this question shows that you are thinking holistically about the problem. If they're not, you can discuss a few strategies for coming up with them, like starting with the most popular search engines, news sites, social media platforms, and/or web directories."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "paragraph",
+      "text": "That should have been relatively straightforward so far. Now for the fun part. We are going to go 1-by-1 through our non-functional requirements and discuss how we can improve our design to meet them."
+    },
+    {
+      "type": "paragraph",
+      "text": "This is why defining good non-functional requirements is so important -- especially for more senior candidates! So often I see candidates rush through the requirements and then look at me, the interviewer, wide eyed, unsure of what to do next after they have a simple design. If you've taken your time to define quality non-functional requirements, then you shouldn't run out of things to talk about until your system has met all functional and non-functional requirements, at which point, you've likely passed the interview!"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-can-we-ensure-we-are-fault-tolerant-and-don-t-lose-progress",
+      "text": "1) How can we ensure we are fault tolerant and don't lose progress?"
+    },
+    {
+      "type": "paragraph",
+      "text": "The first thing we should notice is that our crawler service is doing a lot. It's hitting DNS, fetching web pages, extracting text data, and extracting new URLs to add to the frontier queue. When we introduce politeness and efficiency, we'll find that it ends up doing even more. While the server can handle all of these tasks, it's not ideal from a fault tolerance perspective. If there is a failure in any single task, all progress will be lost."
+    },
+    {
+      "type": "paragraph",
+      "text": "Fetching web pages is the most likely task to fail. The internet is a messy place and there are many reasons why a fetch might fail. The server might be down, the connection might be slow, the page might be too large, etc."
+    },
+    {
+      "type": "paragraph",
+      "text": "To handle this, we should break the crawler service into smaller, pipelined stages. This way, if there is a failure in any stage, we can retry that stage without losing progress on the rest of the data. It also allows us to scale each stage independently and optimize each stage for its specific task."
+    },
+    {
+      "type": "paragraph",
+      "text": "Here's how we might break the crawler service into stages:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**URL Fetcher**: This stage fetches the HTML of the web page from the external server. If there is a failure, we can retry the fetch without losing progress on the rest of the data. We will store the raw HTML in blob storage for later processing.",
+        "**Text & URL Extraction**: This stage extracts the text data from the HTML and extracts any linked URLs to add to the frontier queue. There is an argument that text extraction and URL extraction should be separate stages, but these tasks are both simple and can be done in parallel without much overhead so I'd prefer to simplify the design and combine them into a single stage."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "If you get a data processing question like this, your first thought should be to break the system down into smaller, pipelined stages. Pipelining allows you to isolate failures to a single stage and retry that stage without losing progress on the rest of the data. It also allows us to scale each stage independently and optimize each stage for its specific task."
+    },
+    {
+      "type": "diagram",
+      "file": "02-multi-stage-pipeline.svg",
+      "caption": "Multi-Stage Pipeline"
+    },
+    {
+      "type": "paragraph",
+      "text": "In order to make this work, we need to add some additional state. We'll add a Metadata DB (DynamoDB is fine here. PostgreSQL/MySQL could also work) with a table for URLs that have been fetched and processed. As a starting point, this will store the link to the blob storage where the HTML is stored and the link to the blob storage where the text data is stored. This is important because it is an anti-pattern to store the raw HTML in the queue itself. Queues are not optimized for large payloads and it would be expensive to store the HTML in the queue. Instead, the queue message will just be the id of the URL in the Metadata DB."
+    },
+    {
+      "type": "paragraph",
+      "text": "Importantly, this not only helps with fault tolerance but also allows us to be robust to changing requirements. You can imagine that the ML team consuming this data wants to change the text extraction process. A simple example could be including image alt text in the extracted text. If we have a separate stage for text extraction, we can easily swap out the text extraction function without needing to redo the expensive part of fetching the web pages."
+    },
+    {
+      "type": "label",
+      "text": "What about if we fail to fetch a URL?"
+    },
+    {
+      "type": "paragraph",
+      "text": "As mentioned, URL fetching is clearly the most likely task to fail. Many websites may no longer exist, may have moved, or may be down. Others may just be slow or experiencing momentary down time. To confirm, we'll want to retry on failures. Here is how we might handle this:"
+    },
+    {
+      "type": "label",
+      "text": "What happens if a crawler goes down?"
+    },
+    {
+      "type": "paragraph",
+      "text": "The answer is simple: we spin up a new one. We'll just have to make sure that the half-finished URL is not lost."
+    },
+    {
+      "type": "paragraph",
+      "text": "Good news is the URL will stay in the queue until it is confirmed to have been fetched by a crawler and the HTML is stored in blob storage. This way, if a crawler goes down, the URL will be picked up by another crawler and the process will continue. The actual mechanism for accomplishing this is different per technology. I'll outline, at a very high level, how two popular technologies, Kafka and SQS, might handle this:"
+    },
+    {
+      "type": "paragraph",
+      "text": "Apache Kafka:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Kafka retains messages in a log and does not remove them even after they are read. Crawlers track their progress via offsets, which are not updated in Kafka until the URL is successfully fetched and processed. If a crawler fails, the next one picks up right where the last one left off, ensuring no data is lost."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "SQS:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "With SQS, messages remain in the queue until they are explicitly deleted. A visibility timeout hides a message from other crawlers once it's fetched. If the crawler fails before confirming successful processing, the message will automatically become visible again after the timeout expires, allowing another crawler to attempt the fetch. On the other hand, once the HTML is stored in blob storage, the crawler will delete the message from the queue, ensuring it is not processed again."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Of course, the same applies if a parsing worker goes down. The URL will remain in the queue until it is confirmed to have been processed and the text data is stored in blob storage."
+    },
+    {
+      "type": "paragraph",
+      "text": "Given SQS's visibility timeout mechanism (which makes implementing exponential backoff straightforward), automatic dead-letter queue support, and managed scaling, **we'll use SQS for our system**."
+    },
+    {
+      "type": "paragraph",
+      "text": "SQS with Retry and DLQ"
+    },
+    {
+      "type": "paragraph",
+      "text": "When it comes to choosing a technology, there is usually no right or wrong answer. It's all about trade-offs and your ability to justify your decision. Additionally, it's totally reasonable that you would not know the specifics of how Kafka or SQS handle retries. If that's the case, this may not be a place where you choose to go deep."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-can-we-ensure-politeness-and-adhere-to-robots-txt",
+      "text": "2) How can we ensure politeness and adhere to robots.txt?"
+    },
+    {
+      "type": "paragraph",
+      "text": "First thing first, what is politeness and what is a robots.txt file?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Politeness refers to being respectful with the resources of the websites we are crawling. This involves ensuring that our crawling activity does not disrupt the normal function of the site by overloading its servers, respecting the website's bandwidth, and adhering to any specific restrictions or rules set by the site administrators."
+    },
+    {
+      "type": "paragraph",
+      "text": "robots.txt is a file that websites use to communicate with web crawlers. It tells crawlers which pages they are allowed to crawl and which pages they are not. It also tells crawlers how frequently they can crawl the site. An example of a robots.txt file might look like this:"
+    },
+    {
+      "type": "code",
+      "code": "User-agent: *\nDisallow: /private/\nCrawl-delay: 10"
+    },
+    {
+      "type": "paragraph",
+      "text": "The User-agent line specifies which crawler the rules apply to. In this case, * means all crawlers. The Disallow line specifies which pages the crawler is not allowed to crawl. In this case, the crawler is not allowed to crawl any pages in the /private/ directory. The Crawl-delay line specifies how many seconds the crawler should wait between requests. In this case, 10 seconds."
+    },
+    {
+      "type": "paragraph",
+      "text": "Crawl-delay is not part of the official Robots Exclusion Protocol standard and is ignored by some major crawlers (notably Googlebot). However, respecting it demonstrates good crawling etiquette and is appropriate for our use case where we want to be polite to website operators."
+    },
+    {
+      "type": "paragraph",
+      "text": "To ensure politeness and adhere to robots.txt, we will need to do two things:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Respect robots.txt**: Before crawling a page, we will need to check the robots.txt file to see if we are allowed to crawl the page. If we are not allowed to crawl the page, we will need to skip it. We will also need to respect the Crawl-delay directive and wait the specified number of seconds between requests.",
+        "**Rate limiting**: We will want to limit the number of requests we make to any single domain. The industry standard is to limit the number of requests to 1 request per second."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Let's start with the first point: respecting robots.txt."
+    },
+    {
+      "type": "paragraph",
+      "text": "First, we need to save the robots.txt file for each domain we crawl. In the interview, you may have a discussion about how regularly you should check for updates to this file. For simplicity, we'll just assume it's a one-time download."
+    },
+    {
+      "type": "paragraph",
+      "text": "With the robots.txt file saved, we can check it before crawling a page. We need to consider two things:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Is the crawler allowed to crawl the page?** Easy, just check the Disallow directive and confirm that this page is not disallowed. If it is, we can ack the message (remove it from the queue) and move on to the next URL.",
+        "**How long should we wait between requests?** This is a bit more complex. We need to check the Crawl-delay directive and wait the specified number of seconds between requests."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "To handle the crawl delay, we need to introduce some additional state. We can add a Domain table to our Metadata DB that stores the last time we crawled each domain. This way, we can check the Crawl-delay directive and wait the specified number of seconds before crawling the next page. If we pull a URL off the queue for a domain that we have recently crawled, we use SQS's ChangeMessageVisibility API to extend the visibility timeout, deferring when the message becomes available again."
+    },
+    {
+      "type": "paragraph",
+      "text": "Since we have multiple crawlers running in parallel, two crawlers could pull URLs from the same domain simultaneously and both see a stale \"last crawl time.\" To prevent this, we can use an atomic operation (like Redis SET with NX and a TTL matching the crawl delay) to acquire a per-domain lock before crawling. If a crawler can't acquire the lock, it defers the message using ChangeMessageVisibility."
+    },
+    {
+      "type": "paragraph",
+      "text": "DelaySeconds only applies when sending a *new* message. For messages already in-flight (which is our case), use ChangeMessageVisibility to defer reprocessing. Visibility timeout can be extended up to 12 hours per message."
+    },
+    {
+      "type": "paragraph",
+      "text": "To make this clear, the steps would be:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Fetch the robots.txt file for the domain.",
+        "Parse the robots.txt file and store it in the Metadata DB.",
+        "When we pull a URL off the queue, check the rules stored in the Metadata DB for that domain.",
+        "If the URL is disallowed, ack the message and move on to the next URL.",
+        "If the URL is allowed, check the Crawl-delay directive.",
+        "If the Crawl-delay time has not passed since the last crawl, use ChangeMessageVisibility to extend the visibility timeout and defer reprocessing.",
+        "If the Crawl-delay time has passed, crawl the page and update the last crawl time for the domain."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "What about rate limiting?"
+    },
+    {
+      "type": "paragraph",
+      "text": "We also need to respect the rate limit of 1 domain a second. With multiple crawlers, this can get a little trickier since, in theory, all N crawlers could be hitting a single domain at the same time."
+    },
+    {
+      "type": "paragraph",
+      "text": "We can implement a global, domain-specific rate limiting mechanism using a centralized data store (like Redis) to track request counts per domain per second. Each crawler, before making a request, checks this store to ensure the rate limit has not been exceeded. We'll use a sliding window algorithm to track the number of requests per domain per second. If the rate limit has been exceeded, the crawler will wait until the next second to make the request."
+    },
+    {
+      "type": "paragraph",
+      "text": "A potential issue with this method is the risk of synchronized behavior among multiple crawlers. If several crawlers are waiting to make requests and simultaneously retry when the rate limit window resets, they'll all try and only one will succeed and the process will repeat."
+    },
+    {
+      "type": "paragraph",
+      "text": "Fortunately, there is a relatively simple solution to this problem: jitter. By introducing a small amount of randomness to the rate-limiting algorithm, we can prevent synchronized behavior among crawlers. This jitter can be implemented by adding a random delay to each crawler's request, ensuring that they do not all retry at the same time."
+    },
+    {
+      "type": "paragraph",
+      "text": "Robots.txt and Rate Limiting"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-to-scale-to-10b-pages-and-efficiently-crawl-them-in-under-5-days",
+      "text": "3) How to scale to 10B pages and efficiently crawl them in under 5 days?"
+    },
+    {
+      "type": "paragraph",
+      "text": "I generally suggest you save any scaling discussion until the end of the interview. This is because you'll have a clearer picture of the full system and can make more informed decisions about where to scale. For example, had scaling been our first deep dive we would have missed bottlenecks like the parser workers introduced in subsequent deep dives."
+    },
+    {
+      "type": "paragraph",
+      "text": "Since scalability and efficiency go hand in hand, we'll tackle these two requirements together."
+    },
+    {
+      "type": "paragraph",
+      "text": "First, let's talk about how we can scale the crawler to handle 10B pages in under 5 days. Our one lonely machine won't be able to do this alone, so we need to parallelize the crawling process. But, how many crawler machines will we need?"
+    },
+    {
+      "type": "paragraph",
+      "text": "To reason about this, we should recognize that this is an I/O intensive task. If we take our average page size of 2MB which we gathered during our non-functional requirements, we can estimate where our bandwidth will be capped."
+    },
+    {
+      "type": "paragraph",
+      "text": "In the AWS ecosystem, a network-optimized instance (like a c6in.32xlarge or c7gn.16xlarge) can handle up to 200 Gbps. This means that a single instance, from a network perspective, can handle about 200 Gbps / 8 bits/byte / 2MB/page ≈ 12,500 pages/second. That's a ton, but it's likely not actually possible."
+    },
+    {
+      "type": "paragraph",
+      "text": "Now there is no way we can make use of all this bandwidth maximally. There will be practical limitations on the number of requests we can make per second dictated by factors like server response latency, DNS resolution, rate limiting, politeness, retries, etc."
+    },
+    {
+      "type": "paragraph",
+      "text": "We get very hand-wavy here, but let's say that we can utilize 30% of the available bandwidth. This would give us 12,500 pages/second * 30% = 3,750 pages/second."
+    },
+    {
+      "type": "paragraph",
+      "text": "You might wonder how we can achieve thousands of pages per second when we're rate-limited to 1 request/second per domain. The key insight is that we're crawling *millions* of different domains in parallel. Each crawler maintains thousands of concurrent connections to different sites simultaneously, so while any single domain sees at most 1 request/second, the aggregate throughput across all domains is very high."
+    },
+    {
+      "type": "paragraph",
+      "text": "To estimate the total number of high powered machines we need, we can divide the total number of pages by the number of pages we can crawl per second. This gives us 10,000,000,000 pages / 3,750 pages/second ≈ 2,666,667 seconds ≈ 30.9 days for a single machine. This scales linearly, so we can divide this by the number of machines to get the total time: 30.9 days / 8 machines ≈ 3.9 days. This is under our 5-day requirement, so we're good to go."
+    },
+    {
+      "type": "paragraph",
+      "text": "There are a lot of assumptions in these estimations and, in reality, you would need to do load testing to get a more accurate number. But for an interview, it's less about being right and more about showing that you can reason through the problem."
+    },
+    {
+      "type": "label",
+      "text": "What about the parser workers?"
+    },
+    {
+      "type": "paragraph",
+      "text": "This should be easier, as the task is relatively straightforward. They just need to download the HTML from blob storage, extract the text data, and store it back in blob storage. We need to make sure this keeps pace with our crawlers. Rather than estimating how many we need, we can just scale this up and down dynamically based on the number of pages in the Further Processing Queue. This could be via Lambda functions, ECS on Fargate, or other auto-scaling compute options."
+    },
+    {
+      "type": "label",
+      "text": "Don't forget about DNS!"
+    },
+    {
+      "type": "paragraph",
+      "text": "DNS is one potential bottleneck that is often overlooked. You might wonder why we call it out explicitly, since tools like curl handle DNS automatically. The issue is scale. At thousands of requests per second across millions of unique domains, DNS resolution becomes a real bottleneck. Each lookup for a new domain requires multiple network round-trips through the DNS hierarchy, and early web crawler research (like the Mercator crawler paper) found that DNS lookups accounted for up to 70% of each thread's elapsed time before they built a custom resolver."
+    },
+    {
+      "type": "paragraph",
+      "text": "If we're using a 3rd party DNS provider, we'll want to make sure they can handle the load. Most 3rd party providers have rate limits that can be increased by throwing money at them. While this is certainly an option, especially given our time constraints, it's worth considering other optimizations:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**DNS caching**: We can cache DNS lookups in our crawlers to reduce the number of DNS requests we need to make. This way all URLs to the same domain will reuse the same DNS lookup.",
+        "**Multiple DNS providers**: We can use multiple DNS providers and round-robin between them. This can help distribute the load across multiple providers and reduce the risk of hitting rate limits."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "The multiple DNS providers approach was suggested by a Staff candidate in an interview I conducted fairly recently. I really liked this idea. It's simple, but I love how practical it is. It breaks out of the \"academic answer\" and shows that the candidate is thinking about real-world constraints and solutions."
+    },
+    {
+      "type": "label",
+      "text": "Now let's focus more on efficiency."
+    },
+    {
+      "type": "paragraph",
+      "text": "To be as efficient as possible, we will want to ensure we don't waste our time crawling pages that have already been crawled."
+    },
+    {
+      "type": "paragraph",
+      "text": "We can first check if a URL has already been crawled by checking the Metadata DB before putting it on the queue. If the URL already exists in our URL table, we skip it. This is our first line of defense against redundant work: **URL-level deduplication**."
+    },
+    {
+      "type": "paragraph",
+      "text": "But URL-level dedup isn't enough. Different URLs can serve identical content. For example, http://example.com and http://www.example.com might return the same page. It's also common for totally different domains to have exactly the same content (a maybe depressing fact about the internet). For these cases, we can't just compare the URLs. Instead, we need **content-level deduplication**: we hash the page content *after* fetching it and compare that hash to what we've seen before. If we've already stored this exact content, we skip the expensive parsing step. Let's discuss a couple options:"
+    },
+    {
+      "type": "paragraph",
+      "text": "To be honest, I think the bloom filter here is a bit overkill. It's a cool data structure, and it's fun to talk about in an interview, but I think the index approach is more practical. It's simpler, and modern DB indexes are quite efficient. I note this as a solution more because candidates always bring it up. I assume this is because it's a common solution in the literature."
+    },
+    {
+      "type": "label",
+      "text": "Last thing! Watch out for crawler traps"
+    },
+    {
+      "type": "paragraph",
+      "text": "Crawler traps are pages that are designed to keep crawlers on the site indefinitely. They can be created by having a page that links to itself many times or by having a page that links to many other pages on the site. If we're not careful, we could end up crawling the same site over and over again and never finish."
+    },
+    {
+      "type": "paragraph",
+      "text": "Fortunately the solution is pretty straightforward: we can implement a maximum depth for our crawlers. Here, \"depth\" means the number of link hops from a seed URL, not the number of path segments in the URL. A seed URL starts at depth 0, any page linked from the seed is depth 1, pages linked from those are depth 2, and so on. We add a depth field to our URL table in the Metadata DB and increment it each time we follow a link. If the depth exceeds a certain threshold (say 15-20), we stop crawling that branch. This prevents us from getting stuck in a crawler trap."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "paragraph",
+      "text": "Putting it all together, one final design could look like this:"
+    },
+    {
+      "type": "diagram",
+      "file": "03-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "some-additional-deep-dives-you-might-consider",
+      "text": "Some additional deep dives you might consider"
+    },
+    {
+      "type": "paragraph",
+      "text": "Of course, I can't cover everything in this guide. Here are a few additional deep dives you might consider on your own:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**How to handle dynamic content**: Many websites are built with JavaScript frameworks like React or Angular. This means that the content of the page is not in the HTML that is returned by the server, but is instead loaded dynamically by the JavaScript. To handle this, we'll need to use a headless browser like Puppeteer to render the page and extract the content.",
+        "**How to monitor the health of the system**: We'll want to monitor the health of the system to ensure that everything is running smoothly. We can use a monitoring service like Datadog or New Relic to monitor the performance of the crawlers and parser workers and to alert us if anything goes wrong.",
+        "**How to handle large files**: Some websites have very large files that we may not want to download. We can send an HTTP HEAD request first to check the Content-Length header and skip files that exceed a threshold (say 10MB) without downloading the full content.",
+        "**How to handle continual updates**: While our requirements are for a one-time crawl, we may want to consider how we would handle continual updates to the data. This could be that we plan to re-train the model every month or that our crawler is for a search engine that needs to be updated regularly. I'd suggest adding a new component \"URL Scheduler\" that is responsible for scheduling URLs to be crawled. So rather than putting URLs on the queue directly from the parser workers, the parser workers would put URLs in the Metadata DB and the URL Scheduler would be responsible for scheduling URLs to be crawled by using some logic based on last crawl time, popularity, etc.",
+        "**How to implement priority crawling**: If you need to prioritize certain URLs (e.g., popular domains first), you can use multiple SQS queues with different priorities and have crawlers poll the high-priority queue first. Kafka doesn't natively support priority-based consumption, but you can achieve a similar effect with separate topics per priority level."
+      ]
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "A crawler worker crashes while processing a URL. Which message queue feature ensures the URL gets processed by another worker?",
+      "options": [
+        "Connection pooling to the database",
+        "Horizontal scaling of workers to increase total throughput",
+        "Load balancing across workers",
+        "Visibility timeout re-exposes unacknowledged messages"
+      ],
+      "answer": 3,
+      "explanation": "If a worker doesn't acknowledge a message before the visibility timeout, the queue makes it visible to other workers again."
+    },
+    {
+      "question": "Why separate fetching HTML from parsing/extracting text into different stages?",
+      "options": [
+        "So each stage can scale and retry independently",
+        "Because parsing must happen on the client",
+        "To avoid storing HTML",
+        "It is required by robots.txt"
+      ],
+      "answer": 0,
+      "explanation": "Fetching is network-bound and parsing is CPU-bound; separate stages let you scale and recover each on its own."
+    },
+    {
+      "question": "Which file tells a crawler what it may crawl and how often?",
+      "options": [
+        "sitemap.css",
+        "robots.txt",
+        "index.html",
+        "favicon.ico"
+      ],
+      "answer": 1,
+      "explanation": "robots.txt lists disallowed paths and often a crawl delay that a polite crawler must respect."
+    },
+    {
+      "question": "How can the crawler avoid processing the same page content twice?",
+      "options": [
+        "Hash the page content and check it before processing",
+        "Increase the number of workers",
+        "Crawl only HTTPS pages",
+        "Use a bigger DNS cache"
+      ],
+      "answer": 0,
+      "explanation": "Different URLs often serve identical content; a content hash lookup (or Bloom filter) skips duplicates."
+    }
+  ]
+}

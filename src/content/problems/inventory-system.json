@@ -1,0 +1,364 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "inventory-system",
+  "category": "Common Problems",
+  "title": "Inventory System",
+  "seoTitle": "Design an Inventory Management System",
+  "description": "Design an inventory system for a multi-warehouse retailer — stock levels per location, reservations at checkout, an inventory ledger, available-to-promise, syncing with physical counts, and preventing overselling.",
+  "tags": [
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📦",
+      "title": "What is an Inventory System?",
+      "text": "An inventory system tracks how many units of each product (SKU) are in each warehouse or store, how many are promised to orders, and how many can still be sold. It's consulted by product pages (\"In stock\"), checkout (reserve units), warehouses (receive and ship), and planners (reorder). Its central job is to never sell what isn't there, without blocking sales unnecessarily."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Track on-hand quantity per SKU per location.",
+        "Product pages and search should show availability (in stock, low stock, out of stock) and delivery estimates.",
+        "Checkout should reserve units; cancelled or expired reservations release them; shipments decrement on-hand.",
+        "Warehouses should record receipts, transfers, and adjustments from physical counts.",
+        "Low stock should trigger reorder alerts."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Warehouse picking and robotics (see Amazon Warehouse).",
+        "Demand forecasting models.",
+        "Supplier purchase order management."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "No overselling: reservations must never exceed available stock.",
+        "Availability reads are very high volume (~100k/s) and can be slightly stale; reservations must be exact.",
+        "Reservation latency < 100 ms at checkout.",
+        "Every change is auditable (who, why, when).",
+        "Handle flash-sale contention on hot SKUs."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Multi-company tenancy."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- on-hand per SKU per location",
+        "- availability on product pages",
+        "- reserve / release / ship",
+        "- receipts, transfers, counts",
+        "- reorder alerts",
+        "",
+        "Non-functional",
+        "- never oversell",
+        "- 100k/s reads, slightly stale ok",
+        "- reserve < 100ms",
+        "- auditable",
+        "- hot SKU contention"
+      ],
+      "caption": "Inventory Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**SKU**: a sellable product variant.",
+        "**Stock record**: SKU, location, `onHand`, `reserved` (available = onHand − reserved − safety stock).",
+        "**Reservation**: order, SKU, location, quantity, status, expiry.",
+        "**Inventory movement**: an append-only ledger entry — receipt, shipment, transfer, adjustment — with reason and actor."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /availability?skus=&postcode= -> [{ sku, status, earliestDelivery }]\nPOST /reservations { orderId, lines: [{ sku, qty }], shipTo, idempotencyKey } -> { reservationId, allocations }\nPOST /reservations/:id/confirm | release\nPOST /movements { type: receipt|shipment|transfer|adjustment, sku, location, qty, reason }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-stock-per-location-and-the-ledger",
+      "text": "1) Stock per location and the ledger"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each change is written as an **inventory movement** in an append-only ledger, and the **stock record** for that SKU/location is updated in the same transaction. The ledger explains every number; the stock record makes reads fast."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-availability-for-product-pages",
+      "text": "2) Availability for product pages"
+    },
+    {
+      "type": "paragraph",
+      "text": "Product pages need \"is it available near this customer?\" for many SKUs at once. A **projection** of available quantities per SKU per region is maintained from stock changes (via CDC) in a cache, and turned into simple statuses. Reads never hit the transactional database."
+    },
+    {
+      "type": "diagram",
+      "file": "01-availability-reads.svg",
+      "caption": "Availability reads"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-reservations-at-checkout",
+      "text": "3) Reservations at checkout"
+    },
+    {
+      "type": "paragraph",
+      "text": "Checkout calls **reserve** with the order lines and destination. The service picks a location (allocation) that can fulfil, increments `reserved` with a conditional update, and records a reservation with an **expiry** (e.g. 15 minutes). Payment success **confirms** it; failure or timeout **releases** it. When the warehouse ships, `onHand` and `reserved` both decrease."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-receipts-counts-and-reorders",
+      "text": "4) Receipts, counts and reorders"
+    },
+    {
+      "type": "paragraph",
+      "text": "Warehouses post receipts and transfers as movements. **Cycle counts** compare physical counts with the system and post adjustments with a reason. A job compares available quantity with reorder points and raises alerts."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-prevent-overselling",
+      "text": "1) How do we prevent overselling?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Read available, then write",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Read `onHand − reserved`, check it, then increment `reserved`."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Concurrent checkouts both see 1 available and both reserve it."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Conditional update",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "`UPDATE stock SET reserved = reserved + :q WHERE sku = ? AND location = ? AND onHand - reserved - safety >= :q`. Zero rows updated means not enough stock; try another location."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A hot SKU in a flash sale serialises thousands of updates on one row."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Conditional update + bucketed stock for hot SKUs",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Keep the conditional update for normal SKUs. For hot SKUs, split the location's available quantity into **N buckets** (rows) and reserve from a random bucket, rebalancing buckets in the background; or gate reservations with an atomic counter in Redis and write the reservation asynchronously. **Idempotency keys** per order make retries safe, and reservation expiry guarantees abandoned carts release stock."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Bucketing can report \"sold out\" while one bucket still has units; a fallback scan of other buckets fixes this."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-keep-the-system-in-sync-with-reality",
+      "text": "2) How do we keep the system in sync with reality?"
+    },
+    {
+      "type": "paragraph",
+      "text": "The physical world drifts: damaged items, mis-scans, theft. Regular **cycle counts** of a few bins per day, prioritised by value and error history, produce adjustments. **Safety stock** per SKU (held back from availability) absorbs small errors so a count discrepancy rarely causes a cancelled order. Every adjustment is a ledger movement with a reason code, so shrinkage can be analysed."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Separate the two numbers clearly: the ledger records what physically happened; availability is a business decision (on hand minus reservations minus safety stock)."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-choose-the-location-for-a-reservation",
+      "text": "3) How do we choose the location for a reservation?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Allocation considers distance to the customer (delivery promise), stock levels (avoid draining a location), and cost (splitting an order across warehouses is expensive). Start simple — nearest location that can fulfil the whole order — and fall back to splits. The availability projection is per region so product pages can promise realistic delivery dates."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "How do we prevent two checkouts reserving the last unit?",
+      "options": [
+        "Check in the UI",
+        "A conditional update that only reserves when enough stock is available",
+        "Cache the count",
+        "Refund later"
+      ],
+      "answer": 1,
+      "explanation": "The database enforces the stock constraint atomically."
+    },
+    {
+      "question": "Why do reservations have an expiry?",
+      "options": [
+        "For security",
+        "So abandoned checkouts release stock automatically",
+        "To speed up search",
+        "Regulations"
+      ],
+      "answer": 1,
+      "explanation": "A sweeper releases expired holds."
+    },
+    {
+      "question": "Why serve product-page availability from a separate projection?",
+      "options": [
+        "It's more accurate",
+        "Reads are huge in volume and can be slightly stale, so they shouldn't hit the transactional DB",
+        "To hide stock",
+        "It's required by CDC"
+      ],
+      "answer": 1,
+      "explanation": "Reservations stay exact while reads scale independently."
+    },
+    {
+      "question": "What is safety stock for?",
+      "options": [
+        "Marketing",
+        "Absorbing small differences between system and physical counts",
+        "Free samples",
+        "Returns only"
+      ],
+      "answer": 1,
+      "explanation": "Holding a few units back avoids cancelling orders over count errors."
+    }
+  ]
+}

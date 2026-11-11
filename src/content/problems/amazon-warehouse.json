@@ -1,0 +1,369 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "amazon-warehouse",
+  "category": "Common Problems",
+  "title": "Amazon Warehouse",
+  "seoTitle": "Design an Amazon Warehouse (Fulfilment Centre) Management System",
+  "description": "Design the software that runs a fulfilment centre — receiving and stowing inventory, batching orders into pick waves, directing pickers or robots, packing and shipping by cutoff times, and staying correct when scans go wrong.",
+  "tags": [
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "label": "Multi-step Processes",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    },
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🏭",
+      "title": "What is a Warehouse Management System?",
+      "text": "A warehouse management system (WMS) runs a fulfilment centre: it tells workers and robots where to put arriving stock, which items to pick for which orders, in what order, and how to pack and ship them before the carrier truck leaves. Amazon's centres hold millions of items in randomised (\"chaotic\") storage and ship hundreds of thousands of orders a day."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Receive inbound shipments and direct workers to **stow** items into storage bins.",
+        "Accept customer orders and plan **picks**: which bin each item comes from.",
+        "Direct pickers (or robots) along efficient paths and confirm each pick by scanning.",
+        "Pack orders, label them and sort them to the right outbound truck before its cutoff time.",
+        "Keep bin-level inventory accurate."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Network-level decisions about which warehouse fulfils an order.",
+        "Labour scheduling and payroll.",
+        "Robot motion planning internals."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Meet carrier cutoffs: orders must be shipped on time — this drives prioritisation.",
+        "Scan-to-instruction latency < 300 ms on handheld devices, so workers never wait.",
+        "Inventory accuracy: picks must never be sent to an empty bin.",
+        "The warehouse must keep operating if the link to central cloud services fails.",
+        "Scale to ~500k items picked per day per site, thousands of devices."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Cross-warehouse consistency (each site is largely independent)."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- receive + stow",
+        "- plan picks",
+        "- direct pickers / robots",
+        "- pack + ship by cutoff",
+        "- bin-level inventory",
+        "",
+        "Non-functional",
+        "- meet carrier cutoffs",
+        "- scan -> next task < 300ms",
+        "- no picks to empty bins",
+        "- keep running if cloud link fails",
+        "- 500k picks / day per site"
+      ],
+      "caption": "Warehouse Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Bin**: location in the building (zone, aisle, shelf), capacity, contents.",
+        "**Inventory record**: SKU, bin, quantity, and quantity allocated to picks.",
+        "**Order / shipment**: items, ship-by time, carrier, priority.",
+        "**Task**: a unit of work for a worker or robot — stow, pick, pack, count — with status.",
+        "**Wave / batch**: a group of picks released together."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "(handheld) POST /scans { deviceId, barcode, context } -> nextInstruction\nGET  /tasks/next?worker=&zone=\nPOST /tasks/:id/complete { scannedBin, scannedItem, qty }\nPOST /tasks/:id/exception { type: empty_bin|damaged|wrong_item }\n(cloud) orders in; shipment confirmations out"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-receiving-and-stowing",
+      "text": "1) Receiving and stowing"
+    },
+    {
+      "type": "paragraph",
+      "text": "Inbound items are scanned at the dock. The WMS suggests a **bin** for each item using rules: free space, item size, and **chaotic storage** (spreading copies of a SKU across many bins near pickers rather than one big location). The worker scans the bin when stowing, and inventory is updated."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-planning-picks",
+      "text": "2) Planning picks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Orders arrive from the cloud order system. A **wave planner** runs every few minutes: it groups orders by carrier cutoff and zone, chooses a bin for each item (nearest bin with unallocated stock), and creates pick **tasks**, allocating that inventory so two pickers aren't sent for the same unit."
+    },
+    {
+      "type": "diagram",
+      "file": "01-planning-and-picking.svg",
+      "caption": "Planning and picking"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-directing-pickers",
+      "text": "3) Directing pickers"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each picker's handheld asks for the next task; the **Task Service** gives them a pick path through their zone (sorted to minimise walking), and each pick is confirmed by **scanning** the bin and item. In robotic sites, robots bring shelves to stationary pickers instead."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-packing-and-shipping",
+      "text": "4) Packing and shipping"
+    },
+    {
+      "type": "paragraph",
+      "text": "Picked items go to packing, where the system recommends a box size and prints a label. Packages are sorted to the outbound door for their carrier and confirmed when loaded, which sends a **shipment confirmation** to the cloud."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-keep-bin-inventory-accurate",
+      "text": "1) How do we keep bin inventory accurate?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Trust the system count",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Assume quantities are right and send pickers wherever the system says stock exists."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Mis-stows, damage and theft mean pickers regularly find empty bins, delaying orders."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Scan everything",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Require scans of both bin and item at every stow and pick, rejecting mismatches immediately."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Errors still accumulate, and an \"empty bin\" exception blocks the order until someone investigates."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Scans + exception workflows + continuous counting",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Scan-verify every movement, and when a picker reports an **empty or short bin**, immediately **re-allocate** the item to another bin and create a **count task** for the problem bin. Run **cycle counts** continuously, targeting bins with recent exceptions or high value. Inventory changes are written as an **append-only movement log** per bin, so discrepancies can be traced."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Count tasks consume labour, so prioritise them by expected impact."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-prioritise-work-to-meet-cutoffs",
+      "text": "2) How do we prioritise work to meet cutoffs?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each order has a **ship-by time** derived from its carrier truck's departure. The wave planner releases work in priority order (earliest cutoff first), balancing zones so no area is overloaded. A dashboard tracks **at-risk orders**: work remaining versus time to cutoff, and supervisors move labour accordingly. Late-arriving urgent orders can be inserted into active waves."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Point out the trade-off between big waves (efficient walking routes) and small, continuous releases (faster reaction to new orders and cutoffs)."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-keep-working-when-the-cloud-link-drops",
+      "text": "3) How do we keep working when the cloud link drops?"
+    },
+    {
+      "type": "paragraph",
+      "text": "The WMS runs **on site**: a local cluster with the site's database, task service and device gateway. Orders and inventory needed for the next hours are already local, so picking and packing continue during an outage. Shipment confirmations and inventory events queue locally and sync when the link returns. Handheld devices talk to local servers over Wi-Fi for fast responses."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What is chaotic storage?",
+      "options": [
+        "Random mess",
+        "Spreading copies of a SKU across many bins wherever space allows, tracked precisely by the system",
+        "Storing by colour",
+        "No storage system"
+      ],
+      "answer": 1,
+      "explanation": "It increases space use and puts items near more pickers."
+    },
+    {
+      "question": "Why allocate inventory when creating pick tasks?",
+      "options": [
+        "For billing",
+        "So two pickers aren't sent for the same unit",
+        "To reduce scans",
+        "Regulations"
+      ],
+      "answer": 1,
+      "explanation": "Allocation reserves specific units for specific tasks."
+    },
+    {
+      "question": "What happens when a picker reports an empty bin?",
+      "options": [
+        "The order is cancelled",
+        "The item is re-allocated to another bin and a count task is created",
+        "Nothing",
+        "The picker searches the building"
+      ],
+      "answer": 1,
+      "explanation": "The order keeps moving while the discrepancy is investigated."
+    },
+    {
+      "question": "Why does the WMS run on site?",
+      "options": [
+        "Cheaper licences",
+        "So the warehouse keeps working if the cloud link fails, with fast device responses",
+        "Security theatre",
+        "Robots can't use the internet"
+      ],
+      "answer": 1,
+      "explanation": "Operations can't stop because of a WAN outage."
+    }
+  ]
+}

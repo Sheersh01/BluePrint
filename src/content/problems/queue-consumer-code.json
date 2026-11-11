@@ -1,0 +1,412 @@
+{
+  "section": "code-review",
+  "slug": "queue-consumer-code",
+  "category": "Code Review",
+  "title": "Order Event Consumer",
+  "subtitle": "A queue worker that records orders and awards loyalty points. It loses orders on crashes and double-awards points on retries.",
+  "seoTitle": "Code Review Interview — Fix a Message Queue Consumer",
+  "description": "A code-review interview question — a Python queue consumer that acknowledges too early, isn't idempotent, mixes database writes with an external call and swallows errors, and how to fix it.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "When to acknowledge, at-least-once delivery, idempotent consumers, transactions, side effects outside the transaction, poison messages and dead-letter queues."
+        }
+      ],
+      "title": "Core focus"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "quick-reference-learn-this-first",
+      "text": "Quick Reference (Learn This First)"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Problem",
+          "Wrong Instinct",
+          "Correct Solution"
+        ],
+        [
+          "Message lost if the worker crashes",
+          "Add more replicas",
+          "**Acknowledge after the work is committed**"
+        ],
+        [
+          "Redelivered message processed twice",
+          "Hope it doesn't happen",
+          "**Idempotent consumer: processed-message table, same transaction**"
+        ],
+        [
+          "Order saved but points not",
+          "try/except",
+          "**One DB transaction for both writes**"
+        ],
+        [
+          "Email call fails after DB writes",
+          "Retry the whole handler",
+          "**Outbox / separate consumer for side effects**"
+        ],
+        [
+          "One bad message fails forever",
+          "Infinite retries",
+          "**Retry limit → dead-letter queue**"
+        ],
+        [
+          "Errors printed and forgotten",
+          "`print`",
+          "**Structured logs, metrics, alerts on DLQ size**"
+        ]
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Mental model (decision tree)"
+    },
+    {
+      "type": "code",
+      "code": "When do I ack?\n        ↓\n  After commit (at-least-once)\n\nAt-least-once means duplicates?\n        ↓\n  Idempotent processing (dedupe key in the same transaction)\n\nSeveral writes must agree?\n        ↓\n  One DB transaction\n\nExternal call in the handler?\n        ↓\n  Move it out (outbox / its own consumer)\n\nMessage keeps failing?\n        ↓\n  Retry N times → DLQ"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "1-the-starting-point",
+      "text": "1. The Starting Point"
+    },
+    {
+      "type": "code",
+      "code": "import json\nimport requests\n\ndef handle_message(msg):\n    queue.ack(msg)                                   # done with it\n    order = json.loads(msg.body)\n\n    db.execute(\"INSERT INTO orders (id, user_id, total) VALUES (%s, %s, %s)\",\n               order[\"id\"], order[\"user_id\"], order[\"total\"])\n    db.execute(\"UPDATE users SET points = points + %s WHERE id = %s\",\n               int(order[\"total\"] // 10), order[\"user_id\"])\n\n    requests.post(\"https://email.example.com/send\",\n                  json={\"to\": order[\"email\"], \"template\": \"order_confirmed\"})\n\n\nwhile True:\n    msg = queue.receive()\n    try:\n        handle_message(msg)\n    except Exception as e:\n        print(\"error\", e)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "2-what-most-candidates-catch",
+      "text": "2. What Most Candidates Catch ✅"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-1-errors-are-just-printed",
+      "text": "2.1 Errors Are Just Printed"
+    },
+    {
+      "type": "paragraph",
+      "text": "`print(\"error\", e)` goes nowhere useful in production: no alert, no metric, no message id to trace."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Structured logging with the message id, a failure metric, and alerts."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-2-the-email-call-has-no-timeout",
+      "text": "2.2 The Email Call Has No Timeout"
+    },
+    {
+      "type": "paragraph",
+      "text": "`requests.post` with no timeout can hang the worker forever, which stops the whole consumer."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "3-what-most-candidates-miss",
+      "text": "3. What Most Candidates Miss ⚠️"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-1-acknowledging-first-loses-messages",
+      "text": "3.1 Acknowledging First Loses Messages"
+    },
+    {
+      "type": "code",
+      "code": "ack ✅ → INSERT order → worker crashes ❌\n→ the broker thinks it's done; the order never existed"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Acknowledge only **after** the work is committed. That makes delivery at-least-once: a crash before the ack means the message is redelivered."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-2-at-least-once-means-duplicates",
+      "text": "3.2 At-Least-Once Means Duplicates"
+    },
+    {
+      "type": "paragraph",
+      "text": "Once you ack after the work, a crash between commit and ack redelivers the message:"
+    },
+    {
+      "type": "code",
+      "code": "INSERT order ✅ → UPDATE points ✅ → crash before ack ❌\n→ redelivered → INSERT fails (duplicate id) … or worse, points are added twice"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: An idempotent consumer — record the message (or order) id in a `processed_messages` table with a unique key, in the **same transaction** as the writes. If it's already there, skip."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-3-two-writes-no-transaction",
+      "text": "3.3 Two Writes, No Transaction"
+    },
+    {
+      "type": "paragraph",
+      "text": "If the points update fails after the order insert, you have an order with no points — and a retry will hit the duplicate order id."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Both writes (plus the dedupe record) in one transaction."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-4-an-external-call-inside-the-handler",
+      "text": "3.4 An External Call Inside the Handler"
+    },
+    {
+      "type": "paragraph",
+      "text": "If the email service is down, the handler fails *after* the database writes. On retry, the writes happen again (without idempotency) — so a flaky email provider double-awards points."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Don't make a third party part of the unit of work. Write an outbox row (\"send confirmation email\") in the same transaction; a separate worker sends it, with its own retries."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-5-poison-messages",
+      "text": "3.5 Poison Messages"
+    },
+    {
+      "type": "paragraph",
+      "text": "A malformed message (`json.loads` fails, a missing field) fails every time. Depending on the broker, it's either retried forever — blocking or burning capacity — or (here, because of the early ack) silently dropped."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Validate the payload; after N failed attempts move the message to a **dead-letter queue** and alert."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-6-money-as-a-float",
+      "text": "3.6 Money as a Float"
+    },
+    {
+      "type": "paragraph",
+      "text": "`order[\"total\"]` arrives as a JSON number and is used as a float. `0.1 + 0.2 != 0.3` — fine for points maybe, not for totals."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Send money as a string or integer minor units; use `Decimal`."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "4-when-to-acknowledge",
+      "text": "4. When to Acknowledge"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Your worker crashes halfway through a message. What happens to that order?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "common-mistake",
+      "text": "⚠️ Common Mistake"
+    },
+    {
+      "type": "paragraph",
+      "text": "\"Ack early so the message isn't processed twice.\" That trades duplicates for **data loss** — and losing an order is far worse."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "correct-answer",
+      "text": "✅ Correct Answer"
+    },
+    {
+      "type": "paragraph",
+      "text": "Ack after the database transaction commits. Accept that duplicates will happen and make processing idempotent."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"I'd acknowledge only after the work is committed, which gives at-least-once delivery — nothing is lost if the worker crashes. Then I'd make the handler idempotent by recording the message id in the same transaction, so a redelivered message is skipped.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "5-exactly-once",
+      "text": "5. Exactly-Once?"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Can't we just use exactly-once delivery?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Brokers can't guarantee that your *side effects* happen exactly once — a crash between \"work done\" and \"ack\" always exists somewhere. In practice \"exactly once\" means **at-least-once delivery + idempotent processing**. Kafka's exactly-once transactions cover reads and writes *within Kafka*, not your database or an email API."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "6-the-email-provider-is-down",
+      "text": "6. The Email Provider Is Down"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"The email provider is down for an hour. What happens to orders?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "With the original code, every message fails after its DB writes, and retries repeat them. With the fix, orders and points commit normally; the outbox accumulates email jobs, and the email worker retries them with backoff until the provider is back. Orders never depend on email."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "7-master-interview-answer",
+      "text": "7. Master Interview Answer"
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"It acks before doing the work, so a crash loses the order. Once you ack after the work, delivery is at-least-once, so the handler has to be idempotent — and it isn't: a redelivery double-awards points. The two writes aren't in a transaction, the email call sits inside the unit of work with no timeout, so a flaky provider causes partial failures and duplicate writes on retry, and errors are only printed. I'd ack after commit, put the order insert, the points update and a processed-message record in one transaction, move the email to an outbox handled by its own worker, validate messages and send repeated failures to a dead-letter queue, and use Decimal for money.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "8-the-fixed-code",
+      "text": "8. The Fixed Code"
+    },
+    {
+      "type": "code",
+      "code": "import json\nimport logging\nfrom decimal import Decimal\n\nlog = logging.getLogger(\"order-consumer\")\nMAX_ATTEMPTS = 5\n\ndef handle_message(msg):\n    order = parse_order(msg.body)       # raises InvalidMessage if malformed\n\n    with db.transaction():\n        # Idempotency: the message id is UNIQUE; a duplicate means \"already done\"\n        inserted = db.execute(\n            \"INSERT INTO processed_messages (message_id) VALUES (%s) \"\n            \"ON CONFLICT DO NOTHING\", msg.id)\n        if inserted.rowcount == 0:\n            return                                    # redelivery — nothing to do\n\n        db.execute(\n            \"INSERT INTO orders (id, user_id, total) VALUES (%s, %s, %s)\",\n            order.id, order.user_id, order.total)\n        db.execute(\n            \"UPDATE users SET points = points + %s WHERE id = %s\",\n            int(order.total // 10), order.user_id)\n\n        # Side effect recorded, not performed — a separate worker sends it\n        db.execute(\n            \"INSERT INTO outbox (type, payload) VALUES ('ORDER_CONFIRMED_EMAIL', %s)\",\n            json.dumps({\"order_id\": order.id, \"email\": order.email}))\n\n\ndef parse_order(body):\n    data = json.loads(body)\n    return Order(id=data[\"id\"], user_id=data[\"user_id\"],\n                 total=Decimal(str(data[\"total\"])), email=data[\"email\"])\n\n\ndef run():\n    while True:\n        msg = queue.receive()\n        try:\n            handle_message(msg)\n            queue.ack(msg)                            # only after commit\n        except InvalidMessage:\n            log.error(\"invalid message\", extra={\"message_id\": msg.id})\n            queue.dead_letter(msg)                    # never going to succeed\n        except Exception:\n            log.exception(\"processing failed\", extra={\"message_id\": msg.id})\n            if msg.delivery_count >= MAX_ATTEMPTS:\n                queue.dead_letter(msg)                # alert on DLQ depth\n            else:\n                queue.nack(msg, delay_s=2 ** msg.delivery_count)   # backoff"
+    },
+    {
+      "type": "paragraph",
+      "text": "**What changed:** ack after commit; a processed-messages table for idempotency in the same transaction; both writes in one transaction; the email moved to an outbox; validation, retries with backoff and a dead-letter queue; structured logs; `Decimal` for money."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "9-the-full-learning-escalation",
+      "text": "9. The Full Learning Escalation"
+    },
+    {
+      "type": "code",
+      "code": "Logging\n    ↓\nAck timing (lost vs duplicated)\n    ↓\nIdempotent consumers\n    ↓\nTransactions\n    ↓\nSide effects via outbox\n    ↓\nPoison messages / DLQ\n    ↓\nOrdering & scaling consumers"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "10-next-challenge-hld",
+      "text": "10. Next Challenge — HLD"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Design the pipeline that processes every order event for the whole store — in order per order, without losing or duplicating any.\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "See [Order Event Processing](/learn/system-design/problem-breakdowns/order-event-processing), [Queue & Messaging Failures](/learn/system-design/tips/messaging-failure-scenarios) and [Message Queue](/learn/system-design/problem-breakdowns/message-queue)."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "appendix-problem-solution-cheat-sheet",
+      "text": "Appendix: Problem → Solution Cheat Sheet"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Problem",
+          "Solution"
+        ],
+        [
+          "Lost on crash",
+          "Ack after commit"
+        ],
+        [
+          "Duplicates on redelivery",
+          "Processed-message table (UNIQUE) in the same transaction"
+        ],
+        [
+          "Partial writes",
+          "One DB transaction"
+        ],
+        [
+          "External call in the handler",
+          "Outbox + separate worker"
+        ],
+        [
+          "Poison message",
+          "Validate; retry limit → DLQ"
+        ],
+        [
+          "Silent failures",
+          "Structured logs, metrics, DLQ alerts"
+        ],
+        [
+          "Float money",
+          "Decimal / minor units"
+        ]
+      ]
+    }
+  ],
+  "quiz": []
+}

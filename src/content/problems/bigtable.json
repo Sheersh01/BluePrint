@@ -1,0 +1,359 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "bigtable",
+  "category": "Common Problems",
+  "title": "Bigtable",
+  "seoTitle": "Design a Distributed Wide-Column Store like Bigtable",
+  "description": "Design a distributed wide-column storage system like Bigtable — sorted row keys, range-partitioned tablets, LSM storage, a coordinating master and hot-spot handling.",
+  "tags": [
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    },
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📚",
+      "title": "What is Bigtable?",
+      "text": "Bigtable is a distributed storage system for structured data: a sparse, sorted map from `(row key, column, timestamp)` to a value. Rows are kept in key order and split into ranges spread across many servers, so it can hold petabytes while still supporting fast point lookups and range scans. HBase and Cassandra's storage engine follow similar ideas."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Clients should be able to write and read cells by row key and column.",
+        "Clients should be able to scan a range of rows in key order.",
+        "Each cell should keep multiple timestamped versions, with old versions garbage-collected.",
+        "Single-row operations should be atomic."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Multi-row transactions and secondary indexes.",
+        "SQL queries."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Scale to petabytes and millions of operations per second.",
+        "Low latency: single-digit milliseconds for point reads and writes.",
+        "Strong consistency per row.",
+        "Durable and highly available; servers fail without data loss."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Multi-region active-active writes."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- read / write cells by row + column",
+        "- range scans in key order",
+        "- versioned cells",
+        "- atomic single-row ops",
+        "",
+        "Non-functional",
+        "- petabytes, millions of ops/s",
+        "- ms latency",
+        "- strongly consistent rows",
+        "- durable, survives failures"
+      ],
+      "caption": "Bigtable Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Table**: rows sorted by row key, with column families defined up front.",
+        "**Tablet**: a contiguous range of rows (~100-200 MB to a few GB), the unit of distribution.",
+        "**Tablet server**: serves reads and writes for a set of tablets.",
+        "**SSTable**: an immutable sorted file of key-values stored in a distributed file system."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "put(table, rowKey, {family:qualifier: value}, timestamp?)\nget(table, rowKey, columns?, maxVersions?)\nscan(table, startKey, endKey, filter?)\ncheckAndPut(table, rowKey, condition, mutation)   (atomic per row)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-rows-are-range-partitioned-into-tablets",
+      "text": "1) Rows are range-partitioned into tablets"
+    },
+    {
+      "type": "paragraph",
+      "text": "Because rows are sorted, the table is cut into **tablets** by key range. Each tablet is served by one **tablet server** at a time. Range partitioning keeps scans efficient (a range touches few tablets), unlike hash partitioning. Tablets split when they grow too large and merge when small."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-clients-find-the-right-tablet-through-a-location-hierarchy",
+      "text": "2) Clients find the right tablet through a location hierarchy"
+    },
+    {
+      "type": "paragraph",
+      "text": "A small **metadata table** maps key ranges to tablet servers; its own location is stored in a coordination service (Chubby/ZooKeeper). Clients look up and **cache** tablet locations, so most requests go straight to the right server."
+    },
+    {
+      "type": "diagram",
+      "file": "01-finding-a-tablet.svg",
+      "caption": "Finding a tablet"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-writes-use-an-lsm-tree",
+      "text": "3) Writes use an LSM tree"
+    },
+    {
+      "type": "paragraph",
+      "text": "A write is appended to the tablet server's **commit log** (in the distributed file system) and inserted into an in-memory sorted **memtable**. When the memtable fills, it's flushed as an immutable **SSTable**. Reads merge the memtable with the tablet's SSTables. Background **compaction** merges SSTables, drops deleted cells and expired versions."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-a-master-assigns-tablets",
+      "text": "4) A master assigns tablets"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **master** assigns tablets to servers, balances load, and handles splits. It's not on the data path. Tablet servers hold a lock in ZooKeeper; if a server's lock lapses, the master reassigns its tablets."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-recover-when-a-tablet-server-dies",
+      "text": "1) How do we recover when a tablet server dies?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Data lives in the distributed file system, so nothing on the server's disk is lost — only its memtables. The master reassigns the dead server's tablets; each new server **replays the commit log** from the last flush to rebuild the memtable. Since one server's log covers many tablets, the log is **sorted by tablet first** so each new server reads only its portion in parallel. Recovery takes seconds to a minute."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-make-reads-fast-with-many-sstables",
+      "text": "2) How do we make reads fast with many SSTables?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Check every SSTable",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "On a read, look up the key in every SSTable for the tablet."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Reads slow down as SSTables accumulate, each costing a disk seek."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Compaction plus block index",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Compact regularly to keep SSTable counts low, and keep each SSTable's **block index** in memory so a lookup costs at most one seek per file."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Still one seek per SSTable for keys that don't exist in most files."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Bloom filters and a block cache",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Each SSTable has a **Bloom filter** in memory, so most files that don't contain the key are skipped with no disk I/O. A **block cache** keeps hot blocks in memory, and **locality groups** store column families that are read together in separate files so scans touch less data."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Bloom filters and caches use memory, which must be budgeted per server."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-avoid-hot-spots",
+      "text": "3) How do we avoid hot spots?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Sequential row keys (timestamps, incrementing IDs) send every write to the last tablet. Design keys to spread load: **prefix with a hash or salt**, or reverse domain names and lead with an entity ID (`userId#timestamp`) so a user's data stays together while users spread across tablets. The master also **splits** hot tablets and moves them to idle servers."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Row-key design is the most important choice in a wide-column store. Talk through a concrete key for the use case, like `reverse(url)#timestamp` for a web table."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why does Bigtable use range partitioning rather than hash partitioning?",
+      "options": [
+        "It's simpler",
+        "So range scans in key order touch only a few tablets",
+        "Hashing is slow",
+        "For encryption"
+      ],
+      "answer": 1,
+      "explanation": "Sorted ranges keep adjacent keys together, making scans efficient."
+    },
+    {
+      "question": "What happens to data when a tablet server fails?",
+      "options": [
+        "It's lost",
+        "Another server replays the commit log from the DFS and serves the tablets",
+        "The table is read-only forever",
+        "Clients rewrite it"
+      ],
+      "answer": 1,
+      "explanation": "SSTables and logs live in the distributed file system, so only memtables need rebuilding."
+    },
+    {
+      "question": "What do Bloom filters on SSTables do?",
+      "options": [
+        "Compress data",
+        "Let reads skip files that definitely don't contain the key",
+        "Encrypt rows",
+        "Order writes"
+      ],
+      "answer": 1,
+      "explanation": "They avoid disk seeks for keys that aren't present."
+    },
+    {
+      "question": "Why are timestamp-first row keys a problem?",
+      "options": [
+        "They're too long",
+        "All new writes hit the same tablet, creating a hot spot",
+        "They can't be sorted",
+        "They break versioning"
+      ],
+      "answer": 1,
+      "explanation": "Monotonic keys concentrate writes at the end of the key range."
+    }
+  ]
+}

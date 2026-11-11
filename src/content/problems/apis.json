@@ -1,0 +1,136 @@
+{
+  "section": "questions",
+  "slug": "apis",
+  "category": "Questions",
+  "title": "APIs & Integration",
+  "subtitle": "REST principles, REST vs GraphQL vs gRPC, versioning and webhooks.",
+  "seoTitle": "System Design Interview Questions — APIs & Integration",
+  "description": "REST principles, REST vs GraphQL vs gRPC, versioning and webhooks.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "blocks": [
+    {
+      "type": "qa",
+      "number": 65,
+      "qtype": "Define",
+      "level": "B",
+      "question": "What is RESTful API design and what are its key principles?",
+      "id": "q-65",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "REST models an API as **resources** identified by URLs, manipulated with standard HTTP methods."
+        },
+        {
+          "type": "paragraph",
+          "text": "Key principles:"
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Resource-oriented URLs**: nouns, not verbs (`/users/42/orders`).",
+            "**HTTP methods with meaning**: GET reads (safe), POST creates, PUT replaces (idempotent), PATCH updates, DELETE removes.",
+            "**Statelessness**: each request carries everything needed (auth token); no server-side session state required.",
+            "**Standard status codes**: 200, 201, 400, 401, 404, 409, 429, 500.",
+            "**Cacheability** via `Cache-Control` and ETags.",
+            "Consistent **pagination** (cursor-based), filtering and error formats."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"`POST /bookings` creates a booking, `GET /bookings/:id` reads it, with cursor pagination on list endpoints.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 66,
+      "qtype": "Compare",
+      "level": "I",
+      "question": "REST vs GraphQL vs gRPC.",
+      "id": "q-66",
+      "blocks": [
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**REST**: resources over HTTP/JSON. Universally supported, cache-friendly, easy to debug. Can over-fetch or need multiple round trips for complex screens.",
+            "**GraphQL**: a single endpoint where clients ask for exactly the fields they need. Great for varied front-end needs and aggregating many backends; harder to cache, needs query cost limits and careful N+1 handling.",
+            "**gRPC**: binary Protocol Buffers over HTTP/2 with generated clients, streaming and strict contracts. Very efficient for **service-to-service** calls; less convenient in browsers."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Public API: REST. Mobile app with many screen-specific needs: GraphQL via a BFF. Internal service calls: gRPC.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 67,
+      "qtype": "Define",
+      "level": "I",
+      "question": "What is API versioning and why does it matter for backward compatibility?",
+      "id": "q-67",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "API versioning lets you change an API without breaking existing clients — especially mobile apps and third parties you can't force to upgrade."
+        },
+        {
+          "type": "paragraph",
+          "text": "Approaches: version in the **URL** (`/v2/orders`), in a **header** (`Accept: application/vnd.api+json;version=2`), or **date-based** versions (Stripe style)."
+        },
+        {
+          "type": "paragraph",
+          "text": "Best practices: prefer **additive, backward-compatible changes** (new optional fields) that need no new version; never remove or repurpose fields without a deprecation period; monitor usage of old versions before retiring them."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"We evolve additively; a breaking change gets a new version, and v1 stays supported until traffic drops below a threshold.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 68,
+      "qtype": "Define",
+      "level": "B",
+      "question": "What are webhooks and how are they used in integrations?",
+      "id": "q-68",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "A webhook is an HTTP callback: when an event happens in one system (payment succeeded, PR merged), it sends a POST to a URL the integrating system registered. It's push-based, avoiding constant polling."
+        },
+        {
+          "type": "paragraph",
+          "text": "Making webhooks reliable:"
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Sign payloads** (HMAC) so receivers can verify authenticity.",
+            "**Retry with backoff** until a 2xx response, with a dead-letter state after many failures.",
+            "Include an **event ID** so receivers can deduplicate retried deliveries.",
+            "Receivers should respond quickly (acknowledge, then process asynchronously)."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Payment events are delivered by signed webhooks with retries; merchants dedupe by event ID.\""
+        },
+        {
+          "type": "paragraph",
+          "text": "**Go deeper:** [Payment System](/learn/system-design/problem-breakdowns/payment-system)"
+        }
+      ]
+    }
+  ],
+  "quiz": []
+}

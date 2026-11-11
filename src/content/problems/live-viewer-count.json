@@ -1,0 +1,340 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "live-viewer-count",
+  "category": "Common Problems",
+  "title": "Live Viewer Count",
+  "seoTitle": "Design \"X People Are Viewing This Page\" Live Counts",
+  "description": "Design a live viewer counter — tracking active viewers per page with heartbeats, expiring presence, approximate counting at scale, and pushing updates.",
+  "tags": [
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    },
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Booking.com"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "👀",
+      "title": "What is a Live Viewer Count?",
+      "text": "Travel and shopping sites show messages like \"23 people are looking at this hotel right now\". The system tracks how many users currently have a page open and keeps the number roughly up to date."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "While a user has a page open, they should be counted as viewing it.",
+        "Users should see the current viewer count for the page they're on.",
+        "When users leave (or close the tab), they should stop being counted within about a minute."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Showing who the viewers are.",
+        "Historical viewing analytics."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Counts can be approximate and up to ~30-60 seconds stale.",
+        "Must not slow down page loads; failures should just hide the badge.",
+        "Scale to millions of concurrent viewers across millions of pages, with hot pages having 100k+ viewers."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Exact counts for billing."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- count active viewers per page",
+        "- show current count",
+        "- drop leavers within ~1 min",
+        "",
+        "Non-functional",
+        "- approximate, ~30-60s stale ok",
+        "- never slow pages",
+        "- millions concurrent, hot pages"
+      ],
+      "caption": "Viewer Count Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Page**: a hotel, product or listing ID.",
+        "**Viewer presence**: (pageId, viewerId) with a last-seen timestamp.",
+        "**Viewer count**: the number of active viewers for a page."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /pages/:pageId/heartbeat { viewerId }   (every 20-30s while visible)\nGET  /pages/:pageId/viewers -> { count }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-count-users-while-the-page-is-open",
+      "text": "1) Count users while the page is open"
+    },
+    {
+      "type": "paragraph",
+      "text": "The browser sends a **heartbeat** every ~20 seconds while the tab is visible (using the Page Visibility API). Each heartbeat refreshes the viewer's presence for that page with a TTL of ~60 seconds."
+    },
+    {
+      "type": "diagram",
+      "file": "01-heartbeats-and-counts.svg",
+      "caption": "Heartbeats and counts"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-show-the-current-count",
+      "text": "2) Show the current count"
+    },
+    {
+      "type": "paragraph",
+      "text": "Presence is stored per page in a Redis sorted set (`member = viewerId`, `score = lastSeen`). The count is the number of members seen within the last 60 seconds: remove older members (`ZREMRANGEBYSCORE`) and read `ZCARD`. The response is cached for a few seconds per page since everyone viewing it gets the same number."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-drop-users-who-leave",
+      "text": "3) Drop users who leave"
+    },
+    {
+      "type": "paragraph",
+      "text": "Viewers who close the tab simply stop heartbeating; their entries age out of the window. A `navigator.sendBeacon` on page hide can remove them immediately as a best effort."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-count-at-millions-of-concurrent-viewers",
+      "text": "1) How do we count at millions of concurrent viewers?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Store each heartbeat in a database",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Insert a row per heartbeat and `COUNT(DISTINCT viewer)` over the last minute."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Millions of writes per minute and expensive aggregate queries for every page view."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Redis sorted sets per page",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "As above: one sorted set per page, trimmed by score."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A hot page with 100k viewers means a big set and many writes on one key."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Time-bucketed approximate counting",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Bucket presence by minute: add each heartbeat to a **HyperLogLog** for `(pageId, currentMinute)`, which uses ~12KB regardless of viewers. The live count is the merged HLL of the last two buckets (`PFCOUNT` on both keys), giving ~1% error. Buckets expire after a few minutes. For very hot pages, aggregate heartbeats in each presence server for a second before writing."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Counts are approximate — perfectly fine for \"about 23 people\"."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-should-we-poll-or-push-the-count",
+      "text": "2) Should we poll or push the count?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Polling the count every 30 seconds piggybacks on the heartbeat response — the heartbeat endpoint simply returns the latest cached count. That's far cheaper than maintaining push connections for a badge that only needs minute-level freshness. Push (SSE) is worth it only for pages where the number changes the user's behaviour in seconds."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Return the count in the heartbeat response. One request every 20 seconds serves both \"I'm here\" and \"how many are here?\"."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "How does the system know a user left without an explicit signal?",
+      "options": [
+        "It doesn't",
+        "Their heartbeats stop and presence expires after the window",
+        "The server pings the browser",
+        "Cookies expire"
+      ],
+      "answer": 1,
+      "explanation": "Time-based expiry handles closed tabs and crashes."
+    },
+    {
+      "question": "Why use HyperLogLog for hot pages?",
+      "options": [
+        "Exact counts",
+        "Constant small memory with ~1% error regardless of viewer count",
+        "Encryption",
+        "Ordering"
+      ],
+      "answer": 1,
+      "explanation": "Approximate cardinality is all a viewer badge needs."
+    },
+    {
+      "question": "What's an efficient way to deliver the count to the page?",
+      "options": [
+        "A separate WebSocket per page",
+        "Return it in the heartbeat response",
+        "Email",
+        "Reload the page"
+      ],
+      "answer": 1,
+      "explanation": "One periodic request serves both purposes."
+    },
+    {
+      "question": "Why use the Page Visibility API for heartbeats?",
+      "options": [
+        "Security",
+        "To avoid counting tabs left open in the background",
+        "To speed up rendering",
+        "It's required"
+      ],
+      "answer": 1,
+      "explanation": "Only actively visible pages should count as viewers."
+    }
+  ]
+}

@@ -1,0 +1,300 @@
+{
+  "section": "tips",
+  "slug": "caching-failure-scenarios",
+  "category": "Tips & Tricks",
+  "title": "Caching Failure Scenarios",
+  "subtitle": "Stale reads, stampedes, hot keys and a dead cache — what goes wrong once you add Redis, and the fix for each.",
+  "seoTitle": "Caching Failure Scenarios and Fixes",
+  "description": "Ten caching problems interviewers ask about — stale data, races, stampedes, hot keys, penetration, avalanches, cache outages — with the standard fixes.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "blocks": [
+    {
+      "type": "paragraph",
+      "text": "\"Add a cache\" is the most common answer to \"how do we make reads fast?\" The follow-up is always \"and what can go wrong?\" These are the scenarios to have ready. Unless noted, assume **cache-aside**: read the cache, on a miss read the database and fill the cache."
+    },
+    {
+      "type": "code",
+      "code": "Client → Server → Cache ──hit──→ return\n                    │\n                   miss\n                    ▼\n                    DB → fill cache → return"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-failure-scenarios",
+      "text": "The Failure Scenarios"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-1-data-changes-but-the-cache-still-has-the-old-value",
+      "text": "Scenario 1 — Data changes but the cache still has the old value"
+    },
+    {
+      "type": "code",
+      "code": "Server: UPDATE price = 90   (DB ✓)\nCache:  price = 100          (stale)"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Problem:** Reads keep returning the old value until the entry expires."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** On every write, update the database **then delete** the cache key. The next read refills it. Always set a TTL as a safety net."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Why delete, not update?** Two concurrent writers updating the cache can leave it with the older value. Deleting can't be out of order in the same way."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-2-a-read-refills-the-cache-with-stale-data-during-a-write",
+      "text": "Scenario 2 — A read refills the cache with stale data during a write"
+    },
+    {
+      "type": "code",
+      "code": "Reader:  cache miss → reads DB (price = 100) ………………… writes cache (100) ✗\nWriter:            → UPDATE price = 90 → DELETE cache"
+    },
+    {
+      "type": "paragraph",
+      "text": "The slow reader puts the old value back *after* the writer deleted it."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Short TTLs bound the damage. For stricter needs: **delayed double delete** (delete again a few hundred ms after the write), or store a **version** with the value and only write to the cache if the version is newer."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-3-a-popular-key-expires-and-everyone-hits-the-database-stampede",
+      "text": "Scenario 3 — A popular key expires and everyone hits the database (stampede)"
+    },
+    {
+      "type": "code",
+      "code": "key \"homepage\" expires\n   │\n1,000 requests miss at once\n   │\n   ▼\n1,000 identical DB queries  →  DB overload"
+    },
+    {
+      "type": "label",
+      "text": "Solution:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Single-flight / request coalescing** — only one request rebuilds the key (via a short lock), the rest wait or get the stale value.",
+        "**Refresh ahead** — rebuild hot keys in the background *before* they expire.",
+        "**Serve stale while revalidating** — return the old value while one worker refreshes it."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-4-many-keys-expire-at-the-same-moment-avalanche",
+      "text": "Scenario 4 — Many keys expire at the same moment (avalanche)"
+    },
+    {
+      "type": "paragraph",
+      "text": "You warmed the cache at 9:00 with a 1-hour TTL. At 10:00 everything expires together."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Add **jitter** to TTLs (e.g. 60 min ± 10%) so expirations spread out."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-5-one-key-gets-far-more-traffic-than-a-single-cache-node-can-serve-hot-key",
+      "text": "Scenario 5 — One key gets far more traffic than a single cache node can serve (hot key)"
+    },
+    {
+      "type": "code",
+      "code": "celebrity_profile → cache node 3 → 500k req/s → node 3 melts"
+    },
+    {
+      "type": "label",
+      "text": "Solution:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Local in-process cache** for a few seconds on each app server in front of Redis.",
+        "**Replicate the hot key** across several keys/nodes (`profile:123#1…#N`) and pick one randomly.",
+        "**Read replicas** for the cache cluster."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-6-requests-for-things-that-don-t-exist-always-miss-penetration",
+      "text": "Scenario 6 — Requests for things that don't exist always miss (penetration)"
+    },
+    {
+      "type": "code",
+      "code": "GET /users/999999999   → cache miss → DB miss → return 404\n(repeat 10,000×/s from a bot)"
+    },
+    {
+      "type": "paragraph",
+      "text": "Every request goes straight to the database because nothing is ever cached."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** **Cache the \"not found\"** (negative caching) with a short TTL, and/or put a **Bloom filter** of valid IDs in front. Plus rate-limit the caller."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-7-the-cache-cluster-goes-down",
+      "text": "Scenario 7 — The cache cluster goes down"
+    },
+    {
+      "type": "code",
+      "code": "Server → Cache ✗\n   │\n   └─→ every request → DB → overload → outage"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Your database must survive a cold cache, or you need to protect it:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Circuit breaker + fallback** — degrade (serve partial data, static defaults) instead of sending 100% of traffic to the DB.",
+        "**Replicated cache** with automatic failover (Redis Sentinel / Cluster).",
+        "**Warm up** the cache before taking traffic after a restart."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-8-write-through-makes-writes-slow-write-back-loses-data",
+      "text": "Scenario 8 — Write-through makes writes slow, write-back loses data"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Strategy",
+          "How it writes",
+          "Risk"
+        ],
+        [
+          "Cache-aside",
+          "App writes DB, deletes cache",
+          "Brief staleness"
+        ],
+        [
+          "Write-through",
+          "App writes cache, cache writes DB synchronously",
+          "Slower writes"
+        ],
+        [
+          "Write-back (write-behind)",
+          "App writes cache, DB updated later",
+          "**Data loss** if the cache dies first"
+        ]
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "**Rule:** never use write-back for data you can't afford to lose (money, orders). It's fine for counters and analytics."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-9-the-cache-fills-up",
+      "text": "Scenario 9 — The cache fills up"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Problem:** Memory is full; something must go."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Pick an eviction policy on purpose — **LRU** is the usual default; **LFU** suits stable popularity. Size the cache for the hot set (often ~20% of daily reads), and monitor the hit rate."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-10-values-are-huge",
+      "text": "Scenario 10 — Values are huge"
+    },
+    {
+      "type": "paragraph",
+      "text": "A 5 MB JSON blob per key means slow network transfers and memory pressure."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Cache smaller pieces (only the fields you need), compress, or cache IDs and fetch details separately. Big media belongs in a CDN, not Redis."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "quick-reference",
+      "text": "Quick Reference"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "If the problem is…",
+          "Think of…"
+        ],
+        [
+          "🕰️ Stale data after a write",
+          "Update DB, then delete the cache key + TTL"
+        ],
+        [
+          "🏃 Old value written back by a slow reader",
+          "Short TTL, delayed double delete, versioned values"
+        ],
+        [
+          "🐘 Hot key expires, DB gets hammered",
+          "Single-flight lock, refresh ahead, serve stale"
+        ],
+        [
+          "❄️ Many keys expire together",
+          "TTL jitter"
+        ],
+        [
+          "🔥 One key gets too much traffic",
+          "Local cache, key replication"
+        ],
+        [
+          "👻 Lookups for missing data",
+          "Negative caching, Bloom filter, rate limit"
+        ],
+        [
+          "💥 Cache cluster down",
+          "Circuit breaker, replication, warm-up"
+        ],
+        [
+          "💾 Can't lose writes",
+          "Cache-aside or write-through, never write-back"
+        ],
+        [
+          "📦 Memory full",
+          "Eviction policy (LRU/LFU), size for hot set"
+        ]
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "where-to-go-next",
+      "text": "Where to Go Next"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "The bigger picture on read scaling: [Scaling Reads](/learn/system-design/patterns/scaling-reads).",
+        "How Redis works under the hood: [Redis](/learn/system-design/deep-dives/redis)."
+      ]
+    }
+  ],
+  "quiz": []
+}

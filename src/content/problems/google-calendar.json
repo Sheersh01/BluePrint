@@ -1,0 +1,362 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "google-calendar",
+  "category": "Common Problems",
+  "title": "Google Calendar",
+  "seoTitle": "Design a Calendar Service Like Google Calendar",
+  "description": "Design Google Calendar — creating events and recurring events, inviting attendees, free/busy lookups, time zones, and reminders.",
+  "tags": [
+    {
+      "label": "Multi-step Processes",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Google",
+      "LinkedIn"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📅",
+      "title": "What is Google Calendar?",
+      "text": "Google Calendar lets people schedule events, invite others, see when colleagues are free, and get reminders before events start."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to create, edit and delete events, including recurring events.",
+        "Users should be able to invite attendees, who can accept or decline.",
+        "Users should be able to view their calendar for a day, week or month.",
+        "Users should receive reminders before events."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Room booking and video-call links.",
+        "Calendar sharing permissions beyond invites."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Calendar views should load in < 200ms.",
+        "Strong consistency for a user's own edits (read-your-writes); invitee calendars can update within seconds.",
+        "Reminders must fire on time, reliably, for hundreds of millions of users.",
+        "Correct handling of time zones and daylight-saving changes."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Offline sync conflict resolution."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- CRUD events + recurrence",
+        "- invites, accept / decline",
+        "- day / week / month views",
+        "- reminders",
+        "",
+        "Non-functional",
+        "- views < 200ms",
+        "- read-your-writes",
+        "- reminders on time",
+        "- time zones + DST"
+      ],
+      "caption": "Calendar Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Event**: title, start/end (with time zone), organizer, recurrence rule (RRULE), location.",
+        "**Attendee**: an invite linking a user to an event, with response status.",
+        "**Event exception**: a modified or cancelled single occurrence of a recurring series.",
+        "**Reminder**: when to notify a user about an event."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST  /events { \"title\", \"start\", \"end\", \"timeZone\", \"rrule\": \"FREQ=WEEKLY;BYDAY=MO\", \"attendees\": [] }\nPATCH /events/:id?scope=THIS|FOLLOWING|ALL\nGET   /calendar?from=2026-11-09&to=2026-11-16 -> Occurrence[]\nPOST  /events/:id/rsvp { \"status\": \"ACCEPTED\" }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-should-be-able-to-create-events-including-recurring-ones",
+      "text": "1) Users should be able to create events, including recurring ones"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Event Service** stores each event once. A recurring event stores its **recurrence rule** (RFC 5545 RRULE) rather than one row per occurrence — \"every Monday forever\" can't be materialised. Edits to a single occurrence are stored as **exceptions**."
+    },
+    {
+      "type": "diagram",
+      "file": "01-calendar-services.svg",
+      "caption": "Calendar services"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-should-be-able-to-invite-attendees",
+      "text": "2) Users should be able to invite attendees"
+    },
+    {
+      "type": "paragraph",
+      "text": "Creating an event writes an Attendee row for each invitee. Invitations are delivered asynchronously (email + push) via a queue, and each attendee's response updates their row."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-users-should-be-able-to-view-their-calendar",
+      "text": "3) Users should be able to view their calendar"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Calendar View Service** fetches the user's events that overlap the requested range (their own plus those they're invited to), expands recurring events into concrete occurrences for that window, applies exceptions, and converts times into the viewer's time zone."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-users-should-receive-reminders",
+      "text": "4) Users should receive reminders"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each reminder is scheduled as a job at `start - offset`. A scheduler (like the one in [Job Scheduler](/learn/system-design/problem-breakdowns/job-scheduler)) fires it and hands it to the notification system."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-store-and-query-recurring-events-efficiently",
+      "text": "1) How do we store and query recurring events efficiently?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Materialise every occurrence",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Write a row for every instance of a recurring event."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Infinite series can't be stored; editing \"all future events\" means rewriting thousands of rows."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Store the rule, expand at read time",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Store the RRULE plus exceptions, and expand only within the requested window when rendering."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "To find events overlapping a range, you must know the series' overall span; store a computed `seriesEnd` (or null for infinite) so queries can filter quickly."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Rule storage + windowed materialisation cache",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Keep the rule as the source of truth, but materialise occurrences for a rolling window (e.g. the next 6 months) into an index table used for fast range and free/busy queries. Re-materialise when the series changes."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Two representations to keep in sync, but range queries become simple index scans."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-handle-time-zones-correctly",
+      "text": "2) How do we handle time zones correctly?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Store event times as **local time plus an IANA time zone** (e.g. `09:00 America/New_York`), not just UTC. A weekly 9am meeting must stay at 9am local time across daylight-saving changes; storing UTC alone would shift it by an hour twice a year. Convert to the viewer's zone only when rendering."
+    },
+    {
+      "type": "callout",
+      "variant": "warning",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"All-day\" events have no time zone — a birthday on March 3 is March 3 everywhere. Treat them as dates, not timestamps."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-answer-when-is-everyone-free",
+      "text": "3) How do we answer \"when is everyone free?\""
+    },
+    {
+      "type": "paragraph",
+      "text": "Free/busy lookups read each attendee's materialised occurrences for the window from the index, merge their busy intervals, and return the gaps. Cache per-user busy intervals for short periods; they're read far more often than they change."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why store a recurrence rule instead of every occurrence?",
+      "options": [
+        "It's faster to write",
+        "Series can be infinite and edits would rewrite many rows",
+        "Databases can't store dates",
+        "For encryption"
+      ],
+      "answer": 1,
+      "explanation": "Rules plus exceptions represent any series compactly."
+    },
+    {
+      "question": "How should a weekly 9am meeting be stored to survive DST changes?",
+      "options": [
+        "As UTC only",
+        "As local time plus an IANA time zone",
+        "As a Unix timestamp per week",
+        "As a string"
+      ],
+      "answer": 1,
+      "explanation": "Local time + zone keeps the meeting at 9am local year-round."
+    },
+    {
+      "question": "How is a change to one occurrence of a recurring event stored?",
+      "options": [
+        "Delete the series",
+        "As an exception linked to the series",
+        "As a new user",
+        "It isn't supported"
+      ],
+      "answer": 1,
+      "explanation": "Exceptions override or cancel individual occurrences."
+    },
+    {
+      "question": "What makes free/busy lookups fast?",
+      "options": [
+        "Expanding rules on every request for every attendee",
+        "A materialised occurrence index for a rolling window",
+        "Asking attendees",
+        "Polling"
+      ],
+      "answer": 1,
+      "explanation": "Precomputed occurrences turn free/busy into range scans."
+    }
+  ]
+}

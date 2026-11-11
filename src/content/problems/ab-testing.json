@@ -1,0 +1,350 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "ab-testing",
+  "category": "Common Problems",
+  "title": "A/B Testing Platform",
+  "seoTitle": "Design an A/B Testing Platform Like Optimizely",
+  "description": "Design an experimentation platform — deterministic user bucketing, low-latency assignment, exposure logging, and computing statistically sound results.",
+  "tags": [
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Affirm"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🧪",
+      "title": "What is an A/B Testing Platform?",
+      "text": "An experimentation platform lets product teams show different variants of a feature to different users — say, a green vs. blue checkout button — and measure which performs better on metrics like conversion."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Teams should be able to create an experiment with variants and traffic splits (e.g. 50/50).",
+        "Applications should be able to ask \"which variant does this user see?\" and get a consistent answer.",
+        "The platform should record which users were exposed to which variant.",
+        "Teams should see results: metric differences between variants with statistical significance."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Multi-armed bandits and auto-optimisation.",
+        "Visual editors for creating variants."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Assignment adds negligible latency (< 5ms), ideally computed in-process.",
+        "Assignment is sticky: a user sees the same variant every time.",
+        "Exposure logging handles billions of events per day without slowing apps.",
+        "Results are statistically sound — no peeking bias, correct sample ratios."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Real-time (sub-minute) results."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- create experiments + splits",
+        "- get variant for user",
+        "- log exposures",
+        "- results with significance",
+        "",
+        "Non-functional",
+        "- assignment < 5ms",
+        "- sticky assignment",
+        "- billions of exposures/day",
+        "- sound statistics"
+      ],
+      "caption": "A/B Testing Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Experiment**: name, status, variants with traffic percentages, target audience, primary metrics.",
+        "**Assignment**: the variant a user gets for an experiment (computed, not stored).",
+        "**Exposure event**: user, experiment, variant, timestamp.",
+        "**Metric event**: user actions (purchase, click) used to compute outcomes."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /experiments { \"name\": \"checkout-button\", \"variants\": [{\"name\":\"control\",\"weight\":50},{\"name\":\"green\",\"weight\":50}] }\n\n// SDK, in-process\ngetVariant(experimentKey, userId) -> \"green\"\n\nPOST /events/exposure (batched by the SDK)\nGET  /experiments/:id/results -> per-variant metrics, confidence intervals"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-teams-create-experiments",
+      "text": "1) Teams create experiments"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Experiment Service** stores experiment definitions and publishes a versioned **config snapshot** (all active experiments) to a CDN or config store."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-applications-get-a-consistent-variant",
+      "text": "2) Applications get a consistent variant"
+    },
+    {
+      "type": "paragraph",
+      "text": "The SDK downloads the config snapshot and refreshes it every few seconds. Assignment is **deterministic hashing**: `bucket = hash(experimentId + userId) % 10000`, mapped onto the variant ranges. No network call and no stored assignment table are needed, and the same user always lands in the same bucket."
+    },
+    {
+      "type": "diagram",
+      "file": "01-assignment-and-logging.svg",
+      "caption": "Assignment and logging"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-record-exposures",
+      "text": "3) Record exposures"
+    },
+    {
+      "type": "paragraph",
+      "text": "When the application actually renders the variant, the SDK logs an exposure, batched asynchronously, so logging never blocks the request. Events flow through Kafka into a data warehouse."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-show-results",
+      "text": "4) Show results"
+    },
+    {
+      "type": "paragraph",
+      "text": "A daily (or hourly) pipeline joins exposures with metric events per user, aggregates per variant, and computes effect sizes and confidence intervals."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-assign-variants-quickly-and-consistently",
+      "text": "1) How do we assign variants quickly and consistently?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Random assignment stored per user",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "On first request, randomly pick a variant and store it in a database; read it on every request."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A database lookup on every feature check, and a huge assignments table."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Deterministic hashing in the SDK",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Hash `(experimentSalt, userId)` into buckets and map buckets to variants using the locally cached config. Changing the salt re-randomises a new experiment, so users aren't correlated across experiments. Ramping from 10% to 50% only adds buckets, so existing users keep their variant."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Changing variant weights mid-experiment reassigns users — the platform should block it or start a new version."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-get-trustworthy-results",
+      "text": "2) How do we get trustworthy results?"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Analyse only **exposed** users (those who actually saw a variant), not everyone assigned.",
+        "Check for **sample ratio mismatch**: if a 50/50 test shows 52/48, assignment or logging is broken and results can't be trusted.",
+        "Avoid peeking bias: fix the sample size in advance, or use sequential testing methods that allow continuous monitoring.",
+        "Reduce variance with techniques like CUPED (using pre-experiment behaviour) to reach significance with fewer users."
+      ]
+    },
+    {
+      "type": "callout",
+      "variant": "warning",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Running many overlapping experiments on the same surface can cause interactions. Use **layers**: experiments in the same layer are mutually exclusive, while different layers are independent."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-handle-billions-of-exposure-events",
+      "text": "3) How do we handle billions of exposure events?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Deduplicate in the SDK (log an exposure once per user per experiment per session), batch and compress events, and write through Kafka to a columnar warehouse partitioned by date and experiment. Results are computed with pre-aggregation per user before joining, which keeps queries tractable."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "How can variant assignment be sticky without storing it?",
+      "options": [
+        "Cookies only",
+        "Deterministic hashing of experiment salt and user ID",
+        "Random each time",
+        "Database lookups"
+      ],
+      "answer": 1,
+      "explanation": "The same inputs always hash to the same bucket."
+    },
+    {
+      "question": "What does a sample ratio mismatch indicate?",
+      "options": [
+        "The variant won",
+        "Assignment or logging is broken, so results can't be trusted",
+        "More traffic is needed",
+        "Nothing"
+      ],
+      "answer": 1,
+      "explanation": "A 50/50 test should show roughly equal exposures."
+    },
+    {
+      "question": "Why analyse only exposed users?",
+      "options": [
+        "To reduce cost",
+        "Assigned users who never saw the variant dilute the measured effect",
+        "Exposure is random",
+        "Regulations"
+      ],
+      "answer": 1,
+      "explanation": "Including unexposed users biases results toward zero."
+    },
+    {
+      "question": "Why shouldn't you repeatedly peek and stop when results look significant?",
+      "options": [
+        "It's slow",
+        "It inflates false positives unless sequential methods are used",
+        "It changes assignment",
+        "Dashboards break"
+      ],
+      "answer": 1,
+      "explanation": "Multiple looks increase the chance of a spurious win."
+    }
+  ]
+}

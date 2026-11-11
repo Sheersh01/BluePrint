@@ -1,0 +1,299 @@
+{
+  "section": "tips",
+  "slug": "messaging-failure-scenarios",
+  "category": "Tips & Tricks",
+  "title": "Queue & Messaging Failure Scenarios",
+  "subtitle": "Duplicates, lost messages, ordering, poison messages and lag — what goes wrong with Kafka, SQS and friends, and the fix for each.",
+  "seoTitle": "Message Queue Failure Scenarios and Fixes",
+  "description": "Duplicate delivery, lost messages, ordering, poison messages, consumer lag and the dual-write problem — the standard fixes for queues and streams in system design interviews.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "blocks": [
+    {
+      "type": "paragraph",
+      "text": "Queues make systems resilient — until the interviewer asks \"what if the consumer crashes after doing the work but before acknowledging?\" Have these scenarios ready. The flow throughout:"
+    },
+    {
+      "type": "code",
+      "code": "Producer → Queue / Topic → Consumer → DB / side effect"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-failure-scenarios",
+      "text": "The Failure Scenarios"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-1-the-consumer-processes-a-message-then-crashes-before-acknowledging",
+      "text": "Scenario 1 — The consumer processes a message, then crashes before acknowledging"
+    },
+    {
+      "type": "code",
+      "code": "Consumer: charge card ✓\nConsumer: ack ✗ (crash)\nQueue:    redeliver → charge card again"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Problem:** Almost every broker is **at-least-once**. Redelivery is normal, not a bug."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Make consumers **idempotent**. Store a processed `message_id` (or business key like `order_id`) with a `UNIQUE` constraint in the same transaction as the work; skip if already present."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Golden rule:** \"exactly-once\" in practice means *at-least-once delivery + idempotent processing*."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-2-the-producer-times-out-and-sends-the-message-again",
+      "text": "Scenario 2 — The producer times out and sends the message again"
+    },
+    {
+      "type": "code",
+      "code": "Producer → Broker  (stored ✓, ack lost)\nProducer → Broker  (retry → duplicate)"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Idempotent producers (Kafka's `enable.idempotence`), a stable message ID set by the producer, and idempotent consumers as the backstop."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-3-the-database-write-succeeds-but-publishing-the-event-fails-dual-write",
+      "text": "Scenario 3 — The database write succeeds but publishing the event fails (dual write)"
+    },
+    {
+      "type": "code",
+      "code": "Service ── DB ✓\n        └─ Queue ✗"
+    },
+    {
+      "type": "paragraph",
+      "text": "The order exists, but nothing downstream ever hears about it."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** **Transactional outbox** — write the event into an `outbox` table in the same DB transaction, and have a relay publish it. Or use **change data capture** (Debezium) to stream committed changes. Never \"write DB, then publish\" and hope."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-4-the-consumer-acknowledges-first-then-crashes",
+      "text": "Scenario 4 — The consumer acknowledges first, then crashes"
+    },
+    {
+      "type": "code",
+      "code": "Consumer: ack ✓\nConsumer: process ✗ (crash)"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Problem:** The message is gone and the work never happened — at-*most*-once."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Acknowledge **after** the work is durably done. Accept duplicates (Scenario 1) instead of losses."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-5-events-for-the-same-entity-arrive-out-of-order",
+      "text": "Scenario 5 — Events for the same entity arrive out of order"
+    },
+    {
+      "type": "code",
+      "code": "OrderPaid    → consumer B (fast)\nOrderCreated → consumer A (slow)"
+    },
+    {
+      "type": "label",
+      "text": "Solution:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Partition by entity key** (`order_id`) — Kafka keeps order within a partition, so all events for one order go to one consumer in sequence.",
+        "**Version / sequence numbers** on events; ignore anything older than what you've applied.",
+        "Design state machines that tolerate out-of-order events."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-6-one-bad-message-keeps-failing-poison-message",
+      "text": "Scenario 6 — One bad message keeps failing (poison message)"
+    },
+    {
+      "type": "code",
+      "code": "msg 42 → consumer → exception → retry → exception → retry …\n         (queue blocked behind it)"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Limited retries with backoff, then move it to a **dead-letter queue (DLQ)**. Alert on DLQ size and replay after fixing the bug."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-7-consumers-can-t-keep-up-lag",
+      "text": "Scenario 7 — Consumers can't keep up (lag)"
+    },
+    {
+      "type": "code",
+      "code": "Producer: 50k msg/s\nConsumers: 20k msg/s  → backlog grows forever"
+    },
+    {
+      "type": "label",
+      "text": "Solution:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Scale consumers** — up to the number of partitions (Kafka) or freely (SQS).",
+        "**Batch** database writes in the consumer.",
+        "**Alert on consumer lag**, and plan partitions for peak, not average.",
+        "If the backlog doesn't matter, **shed or sample** low-value events."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-8-a-downstream-dependency-is-down-while-consuming",
+      "text": "Scenario 8 — A downstream dependency is down while consuming"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Problem:** Every message fails; retries hammer the dependency."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Pause consumption or use a **circuit breaker**; retry with exponential backoff (delayed queues/retry topics). Messages wait safely in the queue — that's the point of having one."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-9-a-message-is-too-large",
+      "text": "Scenario 9 — A message is too large"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Problem:** Brokers cap message size (around 1 MB by default in Kafka; 256 KB in SQS)."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** **Claim check** — put the payload in object storage and send a pointer (`s3://…/video-123`) in the message."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-10-the-broker-itself-fails",
+      "text": "Scenario 10 — The broker itself fails"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Replicate topics (Kafka replication factor 3, `acks=all`, `min.insync.replicas=2`) so an acknowledged message survives a broker loss. Managed queues (SQS, Pub/Sub) handle this for you."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "delivery-guarantees-at-a-glance",
+      "text": "Delivery Guarantees at a Glance"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Guarantee",
+          "How it happens",
+          "Risk",
+          "Use for"
+        ],
+        [
+          "At-most-once",
+          "Ack before processing",
+          "Lost messages",
+          "Metrics where loss is fine"
+        ],
+        [
+          "At-least-once",
+          "Ack after processing",
+          "Duplicates",
+          "**Default for almost everything**"
+        ],
+        [
+          "Effectively exactly-once",
+          "At-least-once + idempotent consumer (or Kafka transactions within Kafka)",
+          "Complexity",
+          "Payments, orders, counters that must be exact"
+        ]
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "quick-reference",
+      "text": "Quick Reference"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "If the problem is…",
+          "Think of…"
+        ],
+        [
+          "🔁 Same message processed twice",
+          "Idempotent consumer, UNIQUE message_id"
+        ],
+        [
+          "📤 DB saved but event not published",
+          "Transactional outbox / CDC"
+        ],
+        [
+          "🕳️ Message lost after a crash",
+          "Ack after processing"
+        ],
+        [
+          "🔀 Events out of order",
+          "Partition by entity key, version numbers"
+        ],
+        [
+          "☠️ One message always fails",
+          "Retries + dead-letter queue"
+        ],
+        [
+          "🐢 Backlog keeps growing",
+          "More consumers/partitions, batching, lag alerts"
+        ],
+        [
+          "🚨 Downstream is down",
+          "Backoff, circuit breaker, let the queue buffer"
+        ],
+        [
+          "🐘 Payload too big",
+          "Claim check (object storage pointer)"
+        ]
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "where-to-go-next",
+      "text": "Where to Go Next"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "How Kafka actually works: [Kafka](/learn/system-design/deep-dives/kafka).",
+        "Long workflows built on queues: [Multi-step Processes](/learn/system-design/patterns/multi-step-processes).",
+        "The same ideas applied to money: [Payment Failure Scenarios](/learn/system-design/tips/payment-failure-scenarios)."
+      ]
+    }
+  ],
+  "quiz": []
+}

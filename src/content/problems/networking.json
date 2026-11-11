@@ -1,0 +1,373 @@
+{
+  "section": "questions",
+  "slug": "networking",
+  "category": "Questions",
+  "title": "Networking & Gateways",
+  "subtitle": "Load balancers, proxies, gateways, DNS, service discovery and how services talk to each other.",
+  "seoTitle": "System Design Interview Questions — Networking, Traffic & Gateways",
+  "description": "Load balancers, proxies, gateways, DNS, service discovery and how services talk to each other.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "blocks": [
+    {
+      "type": "qa",
+      "number": 47,
+      "qtype": "Define",
+      "level": "B",
+      "question": "What is a load balancer and why is it used?",
+      "id": "q-47",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "A load balancer distributes incoming requests across multiple servers. It lets you scale horizontally, improves availability by routing around unhealthy instances (health checks), and gives clients one stable endpoint while servers come and go."
+        },
+        {
+          "type": "paragraph",
+          "text": "Load balancers can also terminate TLS, enforce connection limits and provide sticky sessions when needed. They run at multiple layers: DNS-level (global), L4 (TCP/UDP) and L7 (HTTP)."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"An L7 load balancer in front of the stateless API tier, with health checks so a failing instance is removed within seconds.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 48,
+      "qtype": "How",
+      "level": "B",
+      "question": "What are common load balancing algorithms?",
+      "id": "q-48",
+      "blocks": [
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Round robin**: each server in turn. Simple; assumes equal servers and similar requests.",
+            "**Weighted round robin**: bigger servers get proportionally more traffic.",
+            "**Least connections** (or least outstanding requests): send to the least busy server. Better when request costs vary.",
+            "**IP hash / consistent hashing**: the same client or key always goes to the same server — useful for caches or sticky sessions.",
+            "**Random with two choices**: pick two servers at random, send to the less loaded — surprisingly effective at scale."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Least outstanding requests for the API tier, consistent hashing for the cache tier so keys stay on the same node.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 49,
+      "qtype": "Compare",
+      "level": "I",
+      "question": "Layer 4 vs Layer 7 load balancing.",
+      "id": "q-49",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "**Layer 4** balancers route by IP and port at the transport layer (TCP/UDP) without looking inside packets. They're extremely fast, protocol-agnostic and handle huge connection counts — ideal for raw TCP, WebSockets, databases and as a front layer."
+        },
+        {
+          "type": "paragraph",
+          "text": "**Layer 7** balancers understand application protocols (HTTP, gRPC). They can route by path, host or header, terminate TLS, rewrite requests, retry, rate-limit and do canary splits — at the cost of more CPU and latency."
+        },
+        {
+          "type": "paragraph",
+          "text": "Often both are used: L4 at the edge spreading traffic across a fleet of L7 proxies."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"L7 for HTTP APIs because I want path-based routing to services; L4 for the WebSocket gateway's long-lived connections.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 50,
+      "qtype": "Compare",
+      "level": "B",
+      "question": "Forward proxy vs reverse proxy.",
+      "id": "q-50",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "A **forward proxy** sits in front of **clients** and makes requests on their behalf to the internet. The server sees the proxy, not the client. Uses: corporate egress filtering, caching, anonymity, bypassing geo-restrictions."
+        },
+        {
+          "type": "paragraph",
+          "text": "A **reverse proxy** sits in front of **servers** and receives requests on their behalf. The client sees the proxy, not the backends. Uses: load balancing, TLS termination, caching, compression, hiding internal topology (Nginx, Envoy, HAProxy, CDNs)."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Forward proxy protects and controls the client side; reverse proxy protects and scales the server side.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 51,
+      "qtype": "How",
+      "level": "I",
+      "question": "What is the role of a reverse proxy?",
+      "id": "q-51",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "A reverse proxy is the front door to your servers. It commonly:"
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Terminates TLS**, so backends don't manage certificates.",
+            "**Load balances** across instances with health checks.",
+            "**Caches** responses and serves static files.",
+            "**Compresses** responses (gzip/brotli).",
+            "**Hides backends** — clients never see internal hosts or ports.",
+            "Adds **security controls**: rate limiting, request size limits, IP filtering, WAF rules.",
+            "Handles **retries and timeouts** for upstream calls."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Envoy as the reverse proxy: TLS termination, retries with budgets, and per-route timeouts, so services stay focused on business logic.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 52,
+      "qtype": "Define",
+      "level": "B",
+      "question": "What is an API gateway and what does it do?",
+      "id": "q-52",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "An API gateway is a single entry point for client requests to many backend services. Its core job is **routing** each request to the right service; it also centralises cross-cutting concerns:"
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "Authentication and authorization checks.",
+            "Rate limiting and quotas.",
+            "Request/response transformation and protocol translation (REST ↔ gRPC).",
+            "Aggregating several service calls into one response (backend-for-frontend).",
+            "Logging, metrics and tracing at the edge."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "It should stay thin — business logic belongs in services."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"The gateway authenticates, rate-limits and routes; it never contains domain logic.\""
+        },
+        {
+          "type": "paragraph",
+          "text": "**Go deeper:** [API Gateway](/learn/system-design/deep-dives/api-gateway)"
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 53,
+      "qtype": "Compare",
+      "level": "I",
+      "question": "Load balancer vs API gateway. Can they be used interchangeably?",
+      "id": "q-53",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "No. A **load balancer** distributes traffic across identical instances of *one* service, focused on availability and spreading load. An **API gateway** routes requests to *different* services based on the API, and handles API concerns: auth, rate limits, transformations, versioning, quotas."
+        },
+        {
+          "type": "paragraph",
+          "text": "They overlap (modern L7 load balancers can route by path; gateways can balance load), but in a typical design they work together: clients → API gateway → (internal load balancing) → service instances. The gateway itself runs behind a load balancer."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Gateway for API concerns and routing; load balancing happens behind it, per service.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 54,
+      "qtype": "How",
+      "level": "B",
+      "question": "How does DNS work?",
+      "id": "q-54",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "DNS translates names (`api.example.com`) into IP addresses:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "The client asks its **recursive resolver** (ISP or public resolver).",
+            "On a cache miss, the resolver asks a **root** server, which points to the **TLD** server (`.com`).",
+            "The TLD server points to the domain's **authoritative** name servers.",
+            "The authoritative server returns the record (A/AAAA/CNAME), which is cached at each level according to its **TTL**."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "In system design, DNS also does coarse traffic management: geo-routing, weighted records, and failover by health checks — limited by TTLs and client caching."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Low TTLs on the API record so DNS-based regional failover takes effect within a minute.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 55,
+      "qtype": "Define",
+      "level": "B",
+      "question": "What is the role of a firewall in network security?",
+      "id": "q-55",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "A firewall controls which network traffic is allowed in and out, based on rules about sources, destinations, ports and protocols. It enforces a perimeter and **segmentation** — for example, only the load balancer can reach app servers, and only app servers can reach the database."
+        },
+        {
+          "type": "paragraph",
+          "text": "Forms include network firewalls and cloud security groups (L3/L4 rules), host firewalls, and **web application firewalls** (WAFs) that inspect HTTP traffic for attacks like SQL injection."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Security groups allow the database port only from the app tier's subnet; a WAF in front of the public API blocks common attack patterns.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 56,
+      "qtype": "Define",
+      "level": "I",
+      "question": "What is service discovery? Client-side vs server-side discovery.",
+      "id": "q-56",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Service discovery lets services find each other's current network locations as instances scale, move and fail. Instances register in a **registry** (Consul, etcd, Kubernetes, Eureka), with health checks removing dead ones."
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Client-side discovery**: the caller queries the registry and picks an instance itself (with its own load balancing). Fewer hops, but every client needs discovery logic.",
+            "**Server-side discovery**: the caller sends requests to a load balancer or router, which consults the registry. Simpler clients, one extra hop."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "Kubernetes services and service meshes make this mostly transparent."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"In Kubernetes, services resolve via cluster DNS and the mesh sidecar handles load balancing — effectively server-side discovery.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 57,
+      "qtype": "Compare",
+      "level": "B",
+      "question": "Synchronous vs asynchronous communication in microservices.",
+      "id": "q-57",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "**Synchronous** (REST, gRPC): the caller waits for a response. Simple and immediate, but couples availability and latency — if the callee is slow or down, the caller is too, and long call chains multiply failures."
+        },
+        {
+          "type": "paragraph",
+          "text": "**Asynchronous** (message queues, events): the caller publishes and moves on; consumers process later. Decouples services, absorbs spikes and tolerates downtime — but adds eventual consistency, harder debugging and the need for idempotent consumers."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Sync where the user needs the answer now (checking a price); async for side effects (sending emails, updating search, analytics).\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 58,
+      "qtype": "Define",
+      "level": "B",
+      "question": "What are the different ways a web server can communicate with another web server?",
+      "id": "q-58",
+      "blocks": [
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Synchronous APIs**: REST/HTTP, gRPC, GraphQL, SOAP — request/response.",
+            "**Asynchronous messaging**: message queues (SQS, RabbitMQ), logs/streams (Kafka), pub/sub.",
+            "**Shared datastore**: one writes, another reads (a database, cache or blob storage) — simple but couples schemas.",
+            "**Webhooks**: one server calls another's endpoint when an event happens.",
+            "**Long-lived connections**: WebSockets or streaming RPCs for continuous exchange."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Services own their data; they talk via gRPC for queries and Kafka events for state changes — never by reading each other's databases.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 59,
+      "qtype": "How",
+      "level": "I",
+      "question": "What is rate limiting/API throttling and how do you implement it?",
+      "id": "q-59",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Rate limiting caps how many requests a client can make in a time window, protecting services from abuse and overload and enforcing quotas."
+        },
+        {
+          "type": "paragraph",
+          "text": "Algorithms:"
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Fixed window** counters: simple; allows bursts at window edges.",
+            "**Sliding window log/counter**: smoother and more accurate.",
+            "**Token bucket**: tokens refill at a steady rate; allows short bursts up to the bucket size. The common default.",
+            "**Leaky bucket**: processes requests at a constant rate, smoothing bursts."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "Implementation: counters in **Redis** (atomic `INCR` with expiry or a Lua script) shared by all gateway instances; respond with **429 Too Many Requests** and a `Retry-After` header."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Token bucket per API key in Redis at the gateway, returning 429 with Retry-After.\""
+        },
+        {
+          "type": "paragraph",
+          "text": "**Go deeper:** [Rate Limiter](/learn/system-design/problem-breakdowns/rate-limiter)"
+        }
+      ]
+    }
+  ],
+  "quiz": []
+}

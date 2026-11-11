@@ -1,0 +1,28 @@
+{
+  "quiz": [
+    {
+      "question": "Which data structure efficiently partitions 2D space for proximity searches?",
+      "options": ["B-tree", "Linked list", "Hash table", "Quad-tree"],
+      "answer": 3,
+      "explanation": "A quad-tree recursively splits space into quadrants, so nearby points can be found without scanning everything."
+    },
+    {
+      "question": "Roughly how many driver location updates per second does the design need to handle?",
+      "options": ["About 2,000", "About 20,000", "About 2 million", "About 2 billion"],
+      "answer": 2,
+      "explanation": "10 million drivers each sending an update every ~5 seconds is about 2 million writes per second."
+    },
+    {
+      "question": "How do you stop the same driver from receiving two ride requests at once?",
+      "options": ["Send requests to all drivers", "A distributed lock with a TTL on the driver", "Client-side checks only", "A longer polling interval"],
+      "answer": 1,
+      "explanation": "Locking the driver while they consider a request, with a TTL for timeouts, enforces one request at a time."
+    },
+    {
+      "question": "Why use a durable queue or workflow engine for ride requests during peak demand?",
+      "options": ["So no request is dropped if a matching service fails", "To make fares cheaper", "To encrypt locations", "To skip the matching step"],
+      "answer": 0,
+      "explanation": "Requests persist until processed, so spikes or crashes don't lose rides; workflows also handle driver timeouts."
+    }
+  ]
+}

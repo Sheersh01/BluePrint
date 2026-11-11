@@ -1,0 +1,51 @@
+{
+  "solutions": [
+    { "verdict": "bad", "title": "Pessimistic Locking" },
+    { "verdict": "good", "title": "Status & Expiration Time with Cron" },
+    { "verdict": "great", "title": "Implicit Status with Status and Expiration Time" },
+    { "verdict": "great", "title": "Distributed Lock with TTL" },
+    { "verdict": "good", "title": "SSE for Real-Time Seat Updates" },
+    { "verdict": "great", "title": "Virtual Waiting Queue for Extremely Popular Events" },
+    { "verdict": "good", "title": "Indexing & SQL Query Optimization" },
+    { "verdict": "good", "title": "Full-text Indexes in the DB" },
+    { "verdict": "great", "title": "Use a Full-text Search Engine like Elasticsearch" },
+    { "verdict": "good", "title": "Implement Caching Strategies Using Redis or Memcached" },
+    { "verdict": "great", "title": "Query Result Caching and Edge Caching Techniques" }
+  ],
+  "quiz": [
+    {
+      "question": "Which component distributes incoming requests across multiple server instances?",
+      "options": ["Database with read replicas", "Cache", "Load Balancer", "Message Queue"],
+      "answer": 2,
+      "explanation": "A load balancer spreads requests across healthy instances so services can scale horizontally."
+    },
+    {
+      "question": "Why are long-running database locks a bad way to reserve a ticket during checkout?",
+      "options": [
+        "Databases don't support row locks",
+        "Locks are meant to last milliseconds, not the minutes a user spends paying",
+        "They make reads too fast",
+        "They require Redis"
+      ],
+      "answer": 1,
+      "explanation": "Holding a transaction open for minutes ties up connections and fails badly if the user abandons checkout."
+    },
+    {
+      "question": "What does a TTL on a distributed ticket lock achieve?",
+      "options": [
+        "It encrypts the reservation",
+        "The reservation is released automatically if the user abandons checkout",
+        "It speeds up search",
+        "It replaces the payment provider"
+      ],
+      "answer": 1,
+      "explanation": "When the TTL expires the lock disappears, so the seat becomes available again without a cleanup job."
+    },
+    {
+      "question": "Which approach best protects the booking system when millions of fans arrive for a hugely popular event?",
+      "options": ["A virtual waiting queue", "Longer cache TTLs", "Bigger database instances only", "Polling every second"],
+      "answer": 0,
+      "explanation": "A waiting room admits users in controlled batches, protecting the booking path and giving a fairer experience."
+    }
+  ]
+}

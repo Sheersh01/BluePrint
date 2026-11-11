@@ -1,0 +1,414 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "robinhood",
+  "category": "Common Problems",
+  "title": "Robinhood",
+  "seoTitle": "Design a Stock Trading App Like Robinhood",
+  "description": "Design Robinhood — live stock prices, placing and cancelling orders through an exchange, and tracking order status — with real-time price fan-out and reliable order handling.",
+  "tags": [
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    },
+    {
+      "label": "Multi-step Processes",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Robinhood",
+      "Coinbase",
+      "Citadel"
+    ],
+    "more": 10
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📈",
+      "title": "What is Robinhood?",
+      "text": "Robinhood is a commission-free brokerage app. Users watch live stock prices and place buy and sell orders, which Robinhood routes to an exchange for execution."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should see live prices for stocks they're viewing.",
+        "Users should be able to place market and limit orders to buy or sell.",
+        "Users should be able to cancel an order that hasn't been filled.",
+        "Users should be able to view the status of their orders."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Options, crypto and margin trading.",
+        "Portfolio analytics and charts.",
+        "Building our own matching engine — we route orders to an external exchange."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Order handling must be strongly consistent and never lose or duplicate an order.",
+        "Prices should update in near real time (< 1s) for viewers.",
+        "The system should scale to 20M daily users and handle market-open spikes.",
+        "Order placement should be low latency (< 200ms to acknowledgement)."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Regulatory reporting.",
+        "Fraud detection."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- live prices",
+        "- place market / limit orders",
+        "- cancel orders",
+        "- view order status",
+        "",
+        "Non-functional",
+        "- orders: consistent, no loss / dupes",
+        "- prices < 1s",
+        "- 20M DAU, market-open spikes",
+        "- order ack < 200ms"
+      ],
+      "caption": "Robinhood Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "Two very different flows: **prices** (massive one-to-many fan-out, where staleness of a second is fine) and **orders** (low volume per user but must be exactly right). We'll keep them separate."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Symbol**: a tradable stock with its latest price.",
+        "**Order**: userId, symbol, side (buy/sell), type (market/limit), quantity, limit price, status, external exchange order ID.",
+        "**User**: the account placing orders."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Core Entities",
+        "- Symbol",
+        "- Order",
+        "- User"
+      ],
+      "caption": "Robinhood Entities"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /symbols/:symbol -> Symbol\nGET  /prices/stream?symbols=AAPL,TSLA   (SSE)\n\nPOST /orders\n{ \"symbol\": \"AAPL\", \"side\": \"BUY\", \"type\": \"LIMIT\", \"quantity\": 10, \"limitPrice\": 190.5 } -> Order\n\nDELETE /orders/:orderId\nGET    /orders?status&cursor -> Order[]"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-should-see-live-prices",
+      "text": "1) Users should see live prices"
+    },
+    {
+      "type": "paragraph",
+      "text": "Robinhood consumes a market-data feed from exchanges or a data vendor. A **Price Ingest** service processes ticks and keeps the latest price per symbol. Clients subscribe to the symbols on screen."
+    },
+    {
+      "type": "diagram",
+      "file": "01-live-prices.svg",
+      "caption": "Live prices"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-should-be-able-to-place-orders",
+      "text": "2) Users should be able to place orders"
+    },
+    {
+      "type": "paragraph",
+      "text": "An **Order Service** validates the order (buying power, market hours), writes it to the database as `PENDING`, and submits it to the exchange through an **Exchange Gateway** that speaks the exchange protocol (e.g. FIX)."
+    },
+    {
+      "type": "diagram",
+      "file": "02-placing-an-order.svg",
+      "caption": "Placing an order"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-users-should-be-able-to-cancel-orders",
+      "text": "3) Users should be able to cancel orders"
+    },
+    {
+      "type": "paragraph",
+      "text": "Cancelling sends a cancel request to the exchange for the order's external ID. The order is only marked `CANCELLED` once the exchange confirms — it may have already filled."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-users-should-be-able-to-view-order-status",
+      "text": "4) Users should be able to view order status"
+    },
+    {
+      "type": "paragraph",
+      "text": "The exchange sends execution reports (filled, partially filled, rejected, cancelled) back through the gateway; the Order Service updates the order status, and the client reads it."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-fan-out-prices-to-millions-of-viewers",
+      "text": "1) How do we fan out prices to millions of viewers?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Clients poll for prices",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Each client calls `GET /symbols/:symbol` every second for every symbol on screen."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Millions of users × several symbols × 1 request/sec is huge, wasteful load — and it spikes exactly at market open."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "SSE with per-symbol pub/sub and coalescing",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Clients open one SSE connection listing their symbols. Each Price Stream server subscribes to only the symbols its connected clients need (Redis Pub/Sub or a similar fan-out layer) and pushes updates. Ticks are **coalesced** — at most a few updates per second per symbol are forwarded, since humans can't read faster and a fresher price replaces a stale one anyway."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Connections are long-lived, so servers must be scaled on connection count, and clients need to re-subscribe after reconnecting."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-make-sure-orders-are-never-lost-or-duplicated",
+      "text": "2) How do we make sure orders are never lost or duplicated?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Submit to the exchange, then write to the database",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Send the order to the exchange first and save it after the response."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "If we crash between the two, a real trade exists that we have no record of — unacceptable for a brokerage."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Write-ahead order record + client order IDs + reconciliation",
+      "approach": [
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "Persist the order as `PENDING_SUBMIT` with a unique **client order ID** before contacting the exchange.",
+            "Submit to the exchange using that client order ID — exchanges reject duplicate IDs, so retries are safe.",
+            "Update to `SUBMITTED` with the exchange's ID, then apply execution reports as they arrive.",
+            "A **reconciliation job** periodically compares orders stuck in intermediate states with the exchange's view and repairs them."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "The API itself accepts an idempotency key so a user's double tap doesn't create two orders."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Order status is a state machine with many transitions; every transition must be applied idempotently because execution reports can be redelivered."
+        }
+      ]
+    },
+    {
+      "type": "pattern",
+      "title": "Pattern: Multi-step Processes",
+      "text": "Placing an order spans our database and an external exchange. Durable state, idempotent steps and reconciliation are how you make a multi-step process reliable.",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-survive-market-open-spikes",
+      "text": "3) How do we survive market-open spikes?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Order requests are buffered behind the Order Service with per-user ordering preserved (partitioned by userId), and the Exchange Gateway enforces the exchange's rate limits. Price streaming scales horizontally on connection count and is pre-warmed before the opening bell, since the spike is entirely predictable."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "03-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why persist the order before sending it to the exchange?",
+      "options": [
+        "It is faster",
+        "So a crash can never leave a real trade with no record",
+        "Exchanges require it",
+        "To cache prices"
+      ],
+      "answer": 1,
+      "explanation": "A write-ahead record plus reconciliation means every submitted order is accounted for.",
+      "section": "2-how-do-we-make-sure-orders-are-never-lost-or-duplicated"
+    },
+    {
+      "question": "What makes retrying an order submission to the exchange safe?",
+      "options": [
+        "A longer timeout",
+        "A unique client order ID the exchange deduplicates on",
+        "Polling",
+        "Sending it twice"
+      ],
+      "answer": 1,
+      "explanation": "The exchange rejects a second order with the same client order ID."
+    },
+    {
+      "question": "Why coalesce price ticks before pushing them to clients?",
+      "options": [
+        "Humans can't read faster, and the newest price replaces older ones",
+        "To hide prices",
+        "Exchanges require it",
+        "To increase latency"
+      ],
+      "answer": 0,
+      "explanation": "Forwarding a few updates per second per symbol cuts fan-out load with no visible loss.",
+      "section": "1-how-do-we-fan-out-prices-to-millions-of-viewers"
+    },
+    {
+      "question": "When should an order be marked CANCELLED?",
+      "options": [
+        "As soon as the user taps cancel",
+        "Only after the exchange confirms the cancel",
+        "After 5 minutes",
+        "Never"
+      ],
+      "answer": 1,
+      "explanation": "The order may already have filled; the exchange is the source of truth."
+    }
+  ]
+}

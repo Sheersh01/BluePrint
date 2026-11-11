@@ -1,0 +1,434 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "distributed-cache",
+  "category": "Common Problems",
+  "title": "Distributed Cache",
+  "seoTitle": "Design a Distributed Cache Like Redis or Memcached",
+  "description": "Design a distributed in-memory cache — get/set/delete with TTL, LRU eviction, consistent hashing, replication and hot-key handling.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Amazon",
+      "Google",
+      "Microsoft"
+    ],
+    "more": 18
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🗄️",
+      "title": "What is a Distributed Cache?",
+      "text": "A distributed cache is an in-memory key-value store spread across many machines. Applications put frequently read data in it to avoid slower databases — think Redis Cluster or Memcached."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Clients should be able to `set`, `get`, and `delete` key-value pairs.",
+        "Clients should be able to set an expiration (TTL) on a key.",
+        "When memory is full, the cache should evict entries using an LRU policy."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Rich data structures (lists, sets, sorted sets).",
+        "Transactions and scripting.",
+        "Durable persistence to disk."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Operations should be extremely fast: < 10ms at p99, typically sub-millisecond on the server.",
+        "The cache should hold ~1TB of data and serve ~100M requests per second.",
+        "The system should be highly available and tolerate node failures; eventual consistency between replicas is acceptable.",
+        "It should scale horizontally by adding nodes."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Strong consistency.",
+        "Authentication and multi-tenancy."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- get / set / delete",
+        "- TTL expiration",
+        "- LRU eviction",
+        "",
+        "Non-functional",
+        "- < 10ms p99",
+        "- 1TB data, 100M req/s",
+        "- available, tolerate node failure",
+        "- scale horizontally"
+      ],
+      "caption": "Distributed Cache Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "We'll first design a single cache node that does get, set, TTL and LRU correctly, then work out how to spread data across many nodes and survive failures."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Key**: a string identifying an entry.",
+        "**Value**: opaque bytes.",
+        "**Entry metadata**: expiration timestamp and recency information for LRU."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Core Entities",
+        "- Key",
+        "- Value",
+        "- Expiry + LRU metadata"
+      ],
+      "caption": "Cache Entities"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET    /:key            -> value | 404\nPOST   /:key            { \"value\": \"...\", \"ttl\": 60 }\nDELETE /:key"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Real caches use a compact binary or text protocol over long-lived TCP connections (like RESP for Redis) rather than HTTP — per-request HTTP overhead would dominate sub-millisecond operations."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-clients-should-be-able-to-get-set-and-delete",
+      "text": "1) Clients should be able to get, set and delete"
+    },
+    {
+      "type": "paragraph",
+      "text": "A single node keeps everything in a **hash map** from key to entry, giving O(1) average lookups. A server process accepts connections and executes commands against the map."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-keys-should-expire-after-their-ttl",
+      "text": "2) Keys should expire after their TTL"
+    },
+    {
+      "type": "paragraph",
+      "text": "Store an `expiresAt` timestamp with each entry. Use two complementary mechanisms:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Lazy expiration**: on `get`, if the entry is expired, delete it and return a miss.",
+        "**Active expiration**: a background task periodically samples keys with TTLs and deletes expired ones, so memory isn't held by keys nobody reads."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-the-cache-should-evict-least-recently-used-entries",
+      "text": "3) The cache should evict least-recently-used entries"
+    },
+    {
+      "type": "paragraph",
+      "text": "Pair the hash map with a **doubly linked list** ordered by recency. Every `get` or `set` moves the entry's node to the head; when memory exceeds the limit, evict from the tail. Both operations are O(1) because the map holds a pointer to each list node."
+    },
+    {
+      "type": "diagram",
+      "file": "01-single-node-hash-map-lru-list.svg",
+      "caption": "Single node: hash map + LRU list"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-spread-data-across-many-nodes",
+      "text": "1) How do we spread data across many nodes?"
+    },
+    {
+      "type": "paragraph",
+      "text": "1TB doesn't fit on one machine, and 100M requests per second needs many CPUs. We need to partition keys across nodes."
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Modulo hashing",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Route each key to node `hash(key) % N`."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Adding or removing a single node changes N, which remaps almost every key. The cache is effectively flushed, and the database behind it gets a stampede of misses."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Consistent hashing with virtual nodes",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Place nodes on a hash ring; each key belongs to the first node clockwise from its hash. Adding or removing a node only moves the keys in its arc (~1/N of the data). Giving each physical node many **virtual nodes** on the ring evens out load and lets bigger machines take more tokens."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Clients (or a proxy) must know the current ring. Membership changes are propagated via a coordination service (e.g. ZooKeeper/etcd) or gossip, and clients refresh their view."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-survive-node-failures",
+      "text": "2) How do we survive node failures?"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Treat the cache as disposable",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "If a node dies, its keys are simply gone; consistent hashing sends those keys to the next node, which misses and refills from the database."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A large node failing causes a burst of misses and database load. Acceptable for small clusters, risky at our scale."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Primary-replica per shard with automatic failover",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Each shard has a primary and one or more replicas. Writes go to the primary and replicate **asynchronously** (we chose availability over consistency). Health checks detect a failed primary and promote a replica; clients update their routing."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Async replication can lose the last few writes on failover — fine for a cache. Split-brain must be prevented with a quorum-based failure detector."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-handle-hot-keys",
+      "text": "3) How do we handle hot keys?"
+    },
+    {
+      "type": "paragraph",
+      "text": "A single viral key can send millions of requests per second to one shard."
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Replicate hot keys",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Detect hot keys (sampling request counts) and store copies under suffixed keys like `key#1..key#k` on different shards; readers pick one at random. Writes update all copies."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Writes become k times more expensive and copies can briefly diverge."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Client-side near cache for hot keys",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Clients keep a tiny local in-process cache with a short TTL (e.g. 1-5 seconds) for keys flagged as hot. Most reads never leave the application server."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Values can be stale for up to the local TTL. Combine with server-side hot-key replication for the most extreme cases."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Which pair of data structures gives O(1) get and O(1) LRU eviction?",
+      "options": [
+        "Hash map + doubly linked list",
+        "Binary search tree + array",
+        "Heap + queue",
+        "Trie + stack"
+      ],
+      "answer": 0,
+      "explanation": "The map finds the entry instantly; the linked list lets you move it to the head or evict the tail in constant time.",
+      "section": "3-the-cache-should-evict-least-recently-used-entries"
+    },
+    {
+      "question": "Why does modulo hashing work poorly when nodes are added or removed?",
+      "options": [
+        "It is slow to compute",
+        "Changing N remaps almost every key",
+        "It can't handle strings",
+        "It needs a database"
+      ],
+      "answer": 1,
+      "explanation": "hash % N depends on N, so a membership change moves most keys and effectively flushes the cache.",
+      "section": "1-how-do-we-spread-data-across-many-nodes"
+    },
+    {
+      "question": "What do virtual nodes add to consistent hashing?",
+      "options": [
+        "Encryption",
+        "More even load distribution across physical nodes",
+        "Strong consistency",
+        "Persistence"
+      ],
+      "answer": 1,
+      "explanation": "Many tokens per machine smooth out the arcs each node owns."
+    },
+    {
+      "question": "Why is lazy expiration alone not enough for TTLs?",
+      "options": [
+        "It deletes keys too early",
+        "Expired keys that are never read would keep using memory",
+        "It breaks LRU",
+        "It requires disk"
+      ],
+      "answer": 1,
+      "explanation": "A background sweeper reclaims memory from expired keys nobody reads.",
+      "section": "2-keys-should-expire-after-their-ttl"
+    }
+  ]
+}

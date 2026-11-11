@@ -1,0 +1,362 @@
+{
+  "section": "questions",
+  "slug": "fundamentals",
+  "category": "Questions",
+  "title": "Fundamentals & Performance",
+  "subtitle": "Scalability, availability, latency and the estimation habits every design conversation leans on.",
+  "seoTitle": "System Design Interview Questions — Fundamentals & Performance",
+  "description": "Scalability, availability, latency and the estimation habits every design conversation leans on.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "blocks": [
+    {
+      "type": "qa",
+      "number": 1,
+      "qtype": "Define",
+      "level": "B",
+      "question": "What is scalability?",
+      "id": "q-1",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Scalability is a system's ability to handle more load — users, requests, data — by adding resources, while keeping performance acceptable. A scalable system's cost and latency grow roughly in proportion to load rather than falling over at a threshold."
+        },
+        {
+          "type": "paragraph",
+          "text": "It has several dimensions: **load** (requests per second), **data** (storage growth), and **organisational** (more teams working on it). Scaling usually means removing bottlenecks: stateful servers, a single database, synchronous chains of calls."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Scalable means we can add capacity — mostly by adding machines — and throughput rises without latency degrading. I'll look for the component that saturates first.\""
+        },
+        {
+          "type": "paragraph",
+          "text": "**Go deeper:** [Scaling Reads](/learn/system-design/patterns/scaling-reads) · [Scaling Writes](/learn/system-design/patterns/scaling-writes)"
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 2,
+      "qtype": "Compare",
+      "level": "B",
+      "question": "Vertical vs horizontal scaling: benefits and drawbacks of each.",
+      "id": "q-2",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "**Vertical scaling** (scale up) means a bigger machine: more CPU, RAM, faster disks. It's simple — no code changes, no distribution problems — but has a hard ceiling, gets expensive at the top end, and the machine remains a single point of failure."
+        },
+        {
+          "type": "paragraph",
+          "text": "**Horizontal scaling** (scale out) means more machines behind a load balancer. It has practically no ceiling and improves availability, but requires stateless services or partitioned data, and brings distributed-systems problems: consistency, coordination, network failures."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Scale stateless services horizontally by default; scale databases vertically as long as you can, then add replicas and shard only when one primary can't keep up.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 3,
+      "qtype": "Decide",
+      "level": "I",
+      "question": "How do you decide between vertical and horizontal scaling for a backend?",
+      "id": "q-3",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Ask three questions:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Is the component stateless?** Stateless app servers scale horizontally trivially — just add instances.",
+            "**Where's the bottleneck and how far is the ceiling?** A database at 40% of the biggest instance has years of vertical headroom; at 90% of it, plan sharding.",
+            "**What does availability require?** A single big box is a single point of failure; even when vertical is enough, run at least two."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "Vertical wins on simplicity and is often cheaper early on; horizontal wins on ceiling, fault tolerance and elasticity (auto-scaling)."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"App tier: horizontal from day one. Data tier: vertical plus read replicas first, sharding when write volume or dataset size demands it.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 4,
+      "qtype": "Compare",
+      "level": "B",
+      "question": "Latency vs throughput.",
+      "id": "q-4",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "**Latency** is how long one operation takes (e.g. p99 of 120ms). **Throughput** is how many operations complete per unit time (e.g. 50k requests/second)."
+        },
+        {
+          "type": "paragraph",
+          "text": "They're related but distinct: batching raises throughput while increasing latency for each item; adding parallel workers raises throughput without changing per-request latency. Always talk about latency in **percentiles** — averages hide the slow tail users actually feel."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"This read path needs p99 under 100ms; the write path needs throughput of 10k/s but can tolerate seconds of latency, so I'll batch writes.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 5,
+      "qtype": "Compare",
+      "level": "B",
+      "question": "Availability vs reliability.",
+      "id": "q-5",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "**Availability** is the fraction of time the system is up and responding (99.9% ≈ 8.8 hours of downtime a year). **Reliability** is whether it does the *right* thing consistently — correct results, no data loss — over time."
+        },
+        {
+          "type": "paragraph",
+          "text": "A system can be highly available but unreliable (always responds, sometimes with wrong or stale data), or reliable but not highly available (correct, but down for maintenance often). Good designs target both, but sometimes trade one: a payment system prefers refusing requests to processing them incorrectly."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"For the feed I'll favour availability; for the ledger I'll favour correctness, even if that means rejecting requests during a partition.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 6,
+      "qtype": "Define",
+      "level": "B",
+      "question": "What is high availability and how is it achieved?",
+      "id": "q-6",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "High availability (HA) means the system keeps serving despite failures of individual components, typically measured in \"nines\" (99.99% ≈ 52 minutes of downtime a year)."
+        },
+        {
+          "type": "paragraph",
+          "text": "It's achieved by removing single points of failure:"
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Redundancy** — multiple instances of every component, across availability zones.",
+            "**Health checks** — load balancers stop sending traffic to unhealthy instances.",
+            "**Automatic failover** — replicas promoted when a primary dies.",
+            "**Multi-AZ / multi-region** deployment for larger blast radiuses.",
+            "**Graceful degradation** — serve cached or partial results when a dependency is down."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Every tier runs at least two instances across zones behind health-checked load balancers; the database has a synchronous standby with automatic failover.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 7,
+      "qtype": "Compare",
+      "level": "I",
+      "question": "Fault tolerance vs high availability.",
+      "id": "q-7",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "**High availability** minimises downtime: when something fails, the system recovers quickly — a brief blip during failover is acceptable."
+        },
+        {
+          "type": "paragraph",
+          "text": "**Fault tolerance** goes further: the system continues operating *without interruption or data loss* when a component fails, usually through full redundancy running in parallel (e.g. synchronous replication, redundant hardware, consensus with a quorum)."
+        },
+        {
+          "type": "paragraph",
+          "text": "Fault tolerance costs more — duplicated work, extra latency for synchronous replication — so it's reserved for components where any interruption is unacceptable."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"HA is 'we recover in seconds'; fault tolerance is 'users never notice'. I'd make the payment ledger fault tolerant and the rest highly available.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 8,
+      "qtype": "Define",
+      "level": "B",
+      "question": "What is redundancy and why does it matter for reliability?",
+      "id": "q-8",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Redundancy is having more than one of something — servers, disks, network paths, data copies, even whole regions — so a single failure doesn't take the system down or lose data."
+        },
+        {
+          "type": "paragraph",
+          "text": "Types: **active redundancy** (all copies serve traffic), **passive/standby** (a copy waits to take over), and **data redundancy** (replication, RAID, backups). Redundancy only helps if failures are *independent*: three replicas in the same rack share a power supply."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"I'll keep three replicas of the data in different availability zones so a zone outage doesn't lose writes.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 9,
+      "qtype": "How",
+      "level": "I",
+      "question": "What are failover strategies and how do they contribute to availability?",
+      "id": "q-9",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Failover is switching work from a failed component to a healthy one."
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Cold standby** — a backup is provisioned only on failure. Cheap; minutes to hours of downtime.",
+            "**Warm standby** — a running but idle replica kept up to date; promoted in seconds to minutes.",
+            "**Hot standby / active-active** — replicas already serving traffic; failover is just routing away."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "Key mechanics: health checks to detect failure, a way to decide the new leader without split-brain (consensus or a fencing mechanism), and redirecting clients (DNS, load balancer, virtual IP)."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Database: synchronous hot standby with automatic promotion; app tier: active-active behind a load balancer, so failover is instant.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 10,
+      "qtype": "Compare",
+      "level": "I",
+      "question": "Active-active vs active-passive architectures.",
+      "id": "q-10",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "**Active-passive**: one node (or region) serves traffic; the other is a standby that takes over on failure. Simple consistency (one writer), but standby capacity sits idle and failover takes time."
+        },
+        {
+          "type": "paragraph",
+          "text": "**Active-active**: all nodes/regions serve traffic simultaneously. Better resource use, lower latency for distributed users and near-instant failover — but writes in multiple places need conflict handling or data partitioning (each user \"homed\" to one region)."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Stateless services are active-active everywhere. For the database I'd start active-passive across regions; active-active only if we partition users by region or accept conflict resolution.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 11,
+      "qtype": "Define",
+      "level": "I",
+      "question": "What is backpressure?",
+      "id": "q-11",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Backpressure is a way for a slow consumer to signal producers to slow down instead of being overwhelmed. Without it, queues and memory grow until something crashes or latency explodes."
+        },
+        {
+          "type": "paragraph",
+          "text": "Mechanisms include bounded queues that block or reject when full, TCP flow control, reactive streams' demand signalling, pull-based consumers (consumers fetch at their own pace, as in Kafka), and returning `429`/`503` to callers so they back off."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Workers pull from the queue at their own pace, and the ingestion API returns 429 when the queue depth exceeds a threshold, so overload degrades gracefully instead of cascading.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 12,
+      "qtype": "How",
+      "level": "I",
+      "question": "How do you do back-of-the-envelope estimation?",
+      "id": "q-12",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Start from users and work down to resources, rounding aggressively:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Traffic**: daily active users × actions per user ÷ 86,400 ≈ requests per second; multiply by 2-10× for peak.",
+            "**Storage**: items per day × size × retention.",
+            "**Bandwidth**: requests per second × payload size.",
+            "**Read/write ratio** — tells you whether to optimise for caching or write throughput."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "Useful anchors: 1 day ≈ 10⁵ seconds; a server handles ~10k simple requests/s; memory access ~100ns, SSD ~100µs, cross-region round trip ~100ms."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** Only estimate what changes a decision — \"500M rows × 500 bytes ≈ 250GB, so one database is fine\" is valuable; computing bandwidth to three decimals isn't."
+        },
+        {
+          "type": "paragraph",
+          "text": "**Go deeper:** [Bitly](/learn/system-design/problem-breakdowns/bitly)"
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 13,
+      "qtype": "Compare",
+      "level": "B",
+      "question": "Stream processing vs batch processing.",
+      "id": "q-13",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "**Batch processing** runs over a bounded dataset on a schedule (nightly reports, ETL, model training). It's simple, efficient for large volumes, and easy to re-run — but results are hours old."
+        },
+        {
+          "type": "paragraph",
+          "text": "**Stream processing** handles unbounded events continuously as they arrive (fraud checks, live dashboards, alerting), with results in seconds. It's harder: state management, late events, exactly-once semantics."
+        },
+        {
+          "type": "paragraph",
+          "text": "Many systems use both: streaming for fresh approximate results, batch to recompute exact results later."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Real-time counts come from the stream; a nightly batch job recomputes from raw data to correct anything the stream got wrong.\""
+        },
+        {
+          "type": "paragraph",
+          "text": "**Go deeper:** [Flink](/learn/system-design/deep-dives/flink) · [Ad Click Aggregator](/learn/system-design/problem-breakdowns/ad-click-aggregator)"
+        }
+      ]
+    }
+  ],
+  "quiz": []
+}

@@ -1,0 +1,382 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "twitter",
+  "category": "Common Problems",
+  "title": "Twitter",
+  "seoTitle": "Design a Microblogging Platform Like Twitter",
+  "description": "Design Twitter — posting tweets, following users, a home timeline served in milliseconds, and handling celebrity fan-out.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    },
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Uber",
+      "Coupang"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🐦",
+      "title": "What is Twitter?",
+      "text": "Twitter (now X) is a microblogging platform where users post short messages — tweets — and read a home timeline of recent tweets from the accounts they follow."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to post a tweet (280 characters, optional media).",
+        "Users should be able to follow and unfollow other users.",
+        "Users should be able to view a home timeline of recent tweets from people they follow.",
+        "Users should be able to like a tweet and see like counts."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Search, trends and recommendations.",
+        "Direct messages and notifications."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Timelines should load in < 200ms.",
+        "Availability over consistency — a tweet can take a few seconds to appear in followers' timelines.",
+        "Scale to 300M daily users reading ~100 timelines each, and ~500M tweets per day.",
+        "Handle accounts with 100M+ followers."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Content moderation."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- post tweets",
+        "- follow / unfollow",
+        "- home timeline",
+        "- likes + counts",
+        "",
+        "Non-functional",
+        "- timeline < 200ms",
+        "- availability >> consistency",
+        "- 300M DAU, 500M tweets/day",
+        "- celebrities with 100M followers"
+      ],
+      "caption": "Twitter Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**User**: an account.",
+        "**Tweet**: text, media references, author, timestamp, counters.",
+        "**Follow**: follower → followee edge.",
+        "**Like**: user → tweet edge."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST   /tweets                  { \"text\": \"...\", \"mediaIds\": [] } -> Tweet\nPOST   /users/:id/follow\nDELETE /users/:id/follow\nGET    /timeline?cursor        -> Tweet[]\nPOST   /tweets/:id/like"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-should-be-able-to-post-tweets",
+      "text": "1) Users should be able to post tweets"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Tweet Service** stores tweets in a database partitioned by tweet ID. Media is uploaded directly to blob storage via presigned URLs and served through a CDN."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-should-be-able-to-follow-other-users",
+      "text": "2) Users should be able to follow other users"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Graph Service** stores follow edges in two tables (or a table and an index): `following(userId → followeeId)` and `followers(userId → followerId)`, so both directions are cheap to query."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-users-should-be-able-to-view-their-home-timeline",
+      "text": "3) Users should be able to view their home timeline"
+    },
+    {
+      "type": "paragraph",
+      "text": "The naive approach computes the timeline on read: fetch everyone I follow, pull their recent tweets, merge by time. With hundreds of followees and a 200ms budget, that's too slow at scale — so we precompute timelines."
+    },
+    {
+      "type": "diagram",
+      "file": "01-timeline-fan-out-on-write.svg",
+      "caption": "Timeline fan-out on write"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-users-should-be-able-to-like-tweets",
+      "text": "4) Users should be able to like tweets"
+    },
+    {
+      "type": "paragraph",
+      "text": "Likes are stored as edges for \"did I like this?\" checks, and counted separately (see deep dive) because popular tweets receive enormous like volumes."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-serve-timelines-fast-including-for-celebrity-followers",
+      "text": "1) How do we serve timelines fast, including for celebrity followers?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Fan-out on read",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Assemble the timeline at request time from each followee's recent tweets."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Hundreds of queries per timeline load, at 300M users × 100 loads a day — far too expensive."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Fan-out on write",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "When a tweet is posted, workers push its ID onto each follower's timeline list in Redis (capped at ~800 entries). Reading a timeline is one list read plus tweet hydration from cache."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A celebrity tweet means 100M list writes, delaying delivery and wasting work on inactive accounts."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Hybrid fan-out",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Fan out on write for normal accounts; skip fan-out for accounts above a follower threshold. At read time, merge the precomputed timeline with recent tweets from the few celebrities the user follows (cached heavily, since everyone reads them). Skip maintaining timelines for users inactive for weeks and rebuild them on their next visit."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Two code paths and a tunable threshold — the standard trade-off Twitter itself made."
+        }
+      ]
+    },
+    {
+      "type": "pattern",
+      "title": "Pattern: Scaling Reads",
+      "text": "Precomputed timelines trade write amplification for constant-time reads — the right trade when reads dominate.",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-count-likes-on-viral-tweets",
+      "text": "2) How do we count likes on viral tweets?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Increment a counter column on every like",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "`UPDATE tweets SET likes = likes + 1` per like."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A viral tweet receives thousands of likes per second, all contending on one row."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Sharded counters with async aggregation",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Record like events in a log (Kafka); counter workers aggregate them in memory and flush totals periodically. For hot tweets, split the counter into N shards (`tweet:123:likes:0..N`) and sum on read. Displayed counts can lag by a second or two."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Counts are approximate in real time but converge; the like-edge table remains the source of truth for \"did I like it\"."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why does fan-out on write struggle for celebrities?",
+      "options": [
+        "Their tweets are longer",
+        "One tweet requires writing to tens of millions of timelines",
+        "They tweet rarely",
+        "Redis can't store their tweets"
+      ],
+      "answer": 1,
+      "explanation": "Write amplification grows with follower count."
+    },
+    {
+      "question": "In a hybrid timeline, how are celebrity tweets included?",
+      "options": [
+        "Fanned out like everyone else",
+        "Merged in at read time",
+        "Emailed to followers",
+        "Ignored"
+      ],
+      "answer": 1,
+      "explanation": "Celebrity tweets are fetched and merged when the timeline is read."
+    },
+    {
+      "question": "How should like counts on viral tweets be maintained?",
+      "options": [
+        "One UPDATE per like",
+        "Aggregate like events asynchronously, sharding hot counters",
+        "Count likes on every read",
+        "Store counts on the client"
+      ],
+      "answer": 1,
+      "explanation": "Batching and sharding avoid contention on a single hot row."
+    },
+    {
+      "question": "Why store follow edges in both directions?",
+      "options": [
+        "For backups",
+        "Timelines need 'who do I follow' and fan-out needs 'who follows me'",
+        "To save space",
+        "It's required by Redis"
+      ],
+      "answer": 1,
+      "explanation": "Each direction serves a different hot query."
+    }
+  ]
+}

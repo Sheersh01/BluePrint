@@ -1,0 +1,365 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "content-moderation",
+  "category": "Common Problems",
+  "title": "Content Moderation",
+  "seoTitle": "Design a Content Moderation System",
+  "description": "Design a content moderation system — automated classifiers and hash matching on uploads, risk-based routing, human review queues, user reports, appeals and policy versioning.",
+  "tags": [
+    {
+      "label": "Managing Long Running Tasks",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    },
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🚦",
+      "title": "What is a Content Moderation System?",
+      "text": "A content moderation system checks what users post — text, images, video — against a platform's policies, and removes, restricts or labels content that breaks them. At scale it's a pipeline of automated detection (hash matching and ML classifiers) feeding human reviewers, who handle the uncertain cases and appeals."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Every new post (text, image, video) should be checked automatically against policies.",
+        "Clearly violating content should be blocked or removed automatically; uncertain content should go to human review.",
+        "Users should be able to report content, which feeds the same pipeline.",
+        "Reviewers should work through prioritised queues and record decisions with a policy reason.",
+        "Authors should be notified and able to appeal."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Training the ML models themselves.",
+        "Account-level enforcement (strikes, bans), mentioned briefly.",
+        "Legal requests from governments."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Low latency for synchronous checks: text in < 100 ms, images within a second, before content is visible.",
+        "Severe harms (known illegal imagery, terrorism) must be caught before publication with very high recall.",
+        "Handle ~500M new posts per day, with spikes during breaking news.",
+        "Every decision must be auditable: which model or reviewer, which policy version.",
+        "Protect reviewer wellbeing (limit exposure to graphic content)."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Perfect accuracy; the aim is balancing harm against wrongly removing legitimate speech."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- auto-check every post",
+        "- block clear violations, queue unsure",
+        "- user reports",
+        "- prioritised review queues",
+        "- notify + appeal",
+        "",
+        "Non-functional",
+        "- text < 100ms, images < 1s",
+        "- severe harms caught pre-publish",
+        "- 500M posts / day",
+        "- auditable decisions",
+        "- reviewer wellbeing"
+      ],
+      "caption": "Moderation Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Content item**: post ID, type, author, media references, status (`pending`, `published`, `restricted`, `removed`).",
+        "**Signal**: a score or match from one detector (e.g. `nudity: 0.92`, `hash_match: known_csam`).",
+        "**Case**: content needing human review, with priority, reasons and assignment.",
+        "**Decision**: action, policy and version, actor (model or reviewer), timestamp.",
+        "**Appeal**: a request to re-review a decision."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "(internal) POST /moderate { contentId, type, text?, mediaUrls[] } -> { action: allow|block|hold, caseId? }\nPOST /reports { contentId, reason }\nGET  /review/queues/:queue/next -> case\nPOST /review/cases/:id/decision { action, policyId, notes }\nPOST /appeals { decisionId, message }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-automated-checks-on-every-post",
+      "text": "1) Automated checks on every post"
+    },
+    {
+      "type": "paragraph",
+      "text": "When a post is created, the **Moderation Service** runs fast checks synchronously: **hash matching** of images and video against databases of known violating media (perceptual hashes like PhotoDNA, so resized copies still match), and lightweight text classifiers. Clear violations are blocked before publishing. Heavier checks (video models, multi-modal classifiers) run **asynchronously** right after publication."
+    },
+    {
+      "type": "diagram",
+      "file": "01-automated-checks.svg",
+      "caption": "Automated checks"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-routing-by-confidence",
+      "text": "2) Routing by confidence"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **decision engine** combines signals with policy thresholds: high-confidence violations are actioned automatically, low scores pass, and the middle band becomes a **review case**. Thresholds differ per policy — very low for child-safety, higher for spam — and are tuned against precision and recall."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-user-reports",
+      "text": "3) User reports"
+    },
+    {
+      "type": "paragraph",
+      "text": "Reports go into the same pipeline as a signal. Many reports on the same item are **deduplicated** into one case whose priority rises with report volume and the reporters' track record."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-human-review-and-appeals",
+      "text": "4) Human review and appeals"
+    },
+    {
+      "type": "paragraph",
+      "text": "Reviewers pull cases from **queues** split by policy area and language. The tool shows the content, signals and relevant policy, and records the decision. Appeals create a new case routed to a different, often more senior, reviewer."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-prioritise-the-review-queue",
+      "text": "1) How do we prioritise the review queue?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "First in, first out",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Review cases in arrival order."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A viral harmful video waits behind thousands of low-risk spam reports while it spreads."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Priority by severity",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Order cases by policy severity, so self-harm or violence cases come before spam."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Ignores reach: a borderline post seen by millions matters more than one seen by five people."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Expected harm = severity × probability × reach",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Compute a **priority score** from the policy's severity, the model's violation probability, and **predicted views** in the next hours (current velocity, author's follower count). Re-score cases as their reach grows. While a high-priority case waits, apply interim measures such as **limiting distribution** (no recommendations) so harm doesn't grow during review."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Needs a reliable reach prediction and constant monitoring that low-reach cases still get reviewed eventually."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-scale-to-500m-posts-a-day",
+      "text": "2) How do we scale to 500M posts a day?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Keep synchronous checks cheap (hashes and small text models on CPU) and push expensive models onto an asynchronous, autoscaled **GPU inference** fleet fed by a queue partitioned by content type. During spikes, queues absorb the backlog while synchronous checks keep blocking known severe content. Near-duplicate detection means one decision can be applied to thousands of re-uploads of the same media."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention that once a reviewer removes something, its hash goes into the hash database — so every future re-upload is caught automatically."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-make-decisions-auditable-and-consistent",
+      "text": "3) How do we make decisions auditable and consistent?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Policies are **versioned**; every decision records the policy version, the model versions and signals, or the reviewer ID. Quality teams **re-review samples** of decisions to measure reviewer accuracy and agreement, and disagreements feed policy clarifications and model training data. Reviewer tools blur graphic media by default and cap exposure time per shift."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why use perceptual hashes rather than exact file hashes?",
+      "options": [
+        "They're shorter",
+        "They still match media that has been resized or slightly altered",
+        "They're encrypted",
+        "They're faster to compute"
+      ],
+      "answer": 1,
+      "explanation": "Re-uploads are often modified copies of known violating media."
+    },
+    {
+      "question": "What goes to human review?",
+      "options": [
+        "Everything",
+        "Content in the uncertain middle band of model confidence, plus reports",
+        "Nothing",
+        "Only text"
+      ],
+      "answer": 1,
+      "explanation": "Clear cases are automated; humans handle ambiguity."
+    },
+    {
+      "question": "What's a good way to prioritise review cases?",
+      "options": [
+        "First in, first out",
+        "Expected harm: severity × probability × predicted reach",
+        "Alphabetically",
+        "By author name"
+      ],
+      "answer": 1,
+      "explanation": "Viral harmful content is reviewed before low-reach spam."
+    },
+    {
+      "question": "Why record the policy version with every decision?",
+      "options": [
+        "For marketing",
+        "For audits, appeals and measuring consistency as policies change",
+        "To speed up review",
+        "It's required by the CDN"
+      ],
+      "answer": 1,
+      "explanation": "Decisions must be explainable against the rules that applied at the time."
+    }
+  ]
+}

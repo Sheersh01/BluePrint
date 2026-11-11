@@ -1,0 +1,52 @@
+{
+  "tags": [
+    "Managing Long Running Tasks",
+    "Scaling Writes"
+  ],
+  "quiz": [
+    {
+      "question": "A crawler worker crashes while processing a URL. Which message queue feature ensures the URL gets processed by another worker?",
+      "options": [
+        "Connection pooling to the database",
+        "Horizontal scaling of workers to increase total throughput",
+        "Load balancing across workers",
+        "Visibility timeout re-exposes unacknowledged messages"
+      ],
+      "answer": 3,
+      "explanation": "If a worker doesn't acknowledge a message before the visibility timeout, the queue makes it visible to other workers again."
+    },
+    {
+      "question": "Why separate fetching HTML from parsing/extracting text into different stages?",
+      "options": [
+        "So each stage can scale and retry independently",
+        "Because parsing must happen on the client",
+        "To avoid storing HTML",
+        "It is required by robots.txt"
+      ],
+      "answer": 0,
+      "explanation": "Fetching is network-bound and parsing is CPU-bound; separate stages let you scale and recover each on its own."
+    },
+    {
+      "question": "Which file tells a crawler what it may crawl and how often?",
+      "options": [
+        "sitemap.css",
+        "robots.txt",
+        "index.html",
+        "favicon.ico"
+      ],
+      "answer": 1,
+      "explanation": "robots.txt lists disallowed paths and often a crawl delay that a polite crawler must respect."
+    },
+    {
+      "question": "How can the crawler avoid processing the same page content twice?",
+      "options": [
+        "Hash the page content and check it before processing",
+        "Increase the number of workers",
+        "Crawl only HTTPS pages",
+        "Use a bigger DNS cache"
+      ],
+      "answer": 0,
+      "explanation": "Different URLs often serve identical content; a content hash lookup (or Bloom filter) skips duplicates."
+    }
+  ]
+}

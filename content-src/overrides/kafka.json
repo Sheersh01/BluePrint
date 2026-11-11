@@ -1,0 +1,48 @@
+{
+  "quiz": [
+    {
+      "question": "In Kafka's architecture, what is the relationship between topics, partitions, and brokers?",
+      "options": [
+        "Partitions contain brokers which contain topics",
+        "Brokers contain topics which contain partitions, each with its own log",
+        "They are all equivalent concepts in Kafka's architecture",
+        "Topics are logical groupings of partitions distributed across brokers"
+      ],
+      "answer": 3,
+      "explanation": "A topic is a logical name; its partitions are the physical logs spread across brokers."
+    },
+    {
+      "question": "How does Kafka guarantee ordering?",
+      "options": [
+        "Globally across a topic",
+        "Within a single partition",
+        "Across all topics",
+        "It doesn't"
+      ],
+      "answer": 1,
+      "explanation": "Messages with the same key go to the same partition and are read in order."
+    },
+    {
+      "question": "What do consumer groups enable?",
+      "options": [
+        "Encryption",
+        "Splitting a topic's partitions across consumers so each message is processed by one consumer in the group",
+        "Schema validation",
+        "Compaction"
+      ],
+      "answer": 1,
+      "explanation": "Each partition is assigned to exactly one consumer in a group, giving parallelism."
+    },
+    {
+      "question": "Why can a 'hot' partition become a bottleneck?",
+      "options": [
+        "Too many brokers",
+        "A skewed key sends a disproportionate share of messages to one partition",
+        "Consumers are too fast",
+        "Retention is too long"
+      ],
+      "answer": 1,
+      "explanation": "Spread load with better keys, e.g. adding a suffix for hot keys."
+    }
+  ]
+}

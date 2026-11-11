@@ -1,0 +1,394 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "notification-system",
+  "category": "Common Problems",
+  "title": "Notification System",
+  "seoTitle": "Design a Notification System (Push, Email, SMS)",
+  "description": "Design a multi-channel notification system — push, email and SMS — with user preferences, reliable delivery, retries, deduplication and rate limiting.",
+  "tags": [
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    },
+    {
+      "label": "Multi-step Processes",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Amazon",
+      "Uber",
+      "LinkedIn"
+    ],
+    "more": 16
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🔔",
+      "title": "What is a Notification System?",
+      "text": "A notification system is a shared platform that lets internal services send messages to users over push, email and SMS without each team integrating with providers themselves."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Internal services should be able to send a notification to a user (or many users) via push, email or SMS.",
+        "Users should be able to set preferences — opt out of channels or categories (e.g. marketing).",
+        "Services should be able to schedule notifications for a future time."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "An in-app inbox UI.",
+        "A/B testing notification copy."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Notifications must be delivered at least once — none should be silently lost.",
+        "Transactional notifications (OTP codes, payments) should arrive within seconds; marketing can be slower.",
+        "The system should handle 10M notifications per minute during campaign bursts.",
+        "Users shouldn't receive duplicates or be spammed."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Content localisation.",
+        "Analytics dashboards."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- send push / email / SMS",
+        "- user preferences & opt-outs",
+        "- scheduled sends",
+        "",
+        "Non-functional",
+        "- at-least-once, never lost",
+        "- transactional in seconds",
+        "- 10M / min bursts",
+        "- no duplicates, no spam"
+      ],
+      "caption": "Notification System Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "The system is a pipeline: accept a request, resolve who and how to reach, then deliver through third-party providers (APNs, FCM, SES/SendGrid, Twilio). We'll make each step durable and independently scalable."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Notification**: the request — recipient(s), template, data, priority, category, schedule.",
+        "**Template**: per-channel content with placeholders.",
+        "**Preference**: a user's opt-ins per channel and category.",
+        "**Device / Contact**: push tokens, email address, phone number.",
+        "**Delivery**: one attempt to send one notification over one channel, with status."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Core Entities",
+        "- Notification",
+        "- Template",
+        "- Preference",
+        "- Device / Contact",
+        "- Delivery"
+      ],
+      "caption": "Notification Entities"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /notifications\n{\n  \"userIds\": [\"u1\", \"u2\"],\n  \"template\": \"order_shipped\",\n  \"data\": { \"orderId\": \"123\" },\n  \"category\": \"TRANSACTIONAL\",\n  \"channels\": [\"PUSH\", \"EMAIL\"],\n  \"sendAt\": null,\n  \"idempotencyKey\": \"order-123-shipped\"\n} -> { \"notificationId\": \"...\" }\n\nPUT /users/:userId/preferences"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-services-should-be-able-to-send-a-notification",
+      "text": "1) Services should be able to send a notification"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Notification Service** validates the request, stores it, and immediately returns `202 Accepted`. Work then flows through queues so a slow provider never blocks callers."
+    },
+    {
+      "type": "diagram",
+      "file": "01-send-pipeline.svg",
+      "caption": "Send pipeline"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-should-be-able-to-set-preferences",
+      "text": "2) Users should be able to set preferences"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Router** reads the user's preferences (cached in Redis, since every notification needs them) and drops channels or categories the user has opted out of. It then renders the template per channel and looks up contact details and device tokens."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-services-should-be-able-to-schedule-notifications",
+      "text": "3) Services should be able to schedule notifications"
+    },
+    {
+      "type": "paragraph",
+      "text": "Scheduled notifications are stored with a `sendAt` time and released into the queue when due, using a delayed-delivery mechanism like the one in the Job Scheduler problem."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-guarantee-at-least-once-delivery",
+      "text": "1) How do we guarantee at-least-once delivery?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Call providers synchronously from the API",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "The Notification Service calls APNs, SES and Twilio directly before responding."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Provider latency and outages leak into every caller; if the process crashes mid-send, the notification is lost."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Durable queues per channel with retries and a DLQ",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Persist the notification first, then enqueue. Each channel (push, email, SMS) has its own queue and worker pool so an SMS provider outage doesn't back up push. Workers acknowledge only after the provider accepts the message; failures retry with exponential backoff and eventually land in a dead-letter queue for inspection."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Retries mean the same message can be sent twice — handled by deduplication below."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-avoid-duplicate-notifications",
+      "text": "2) How do we avoid duplicate notifications?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Callers include an **idempotency key**; the Notification Service stores it with a unique constraint and returns the existing notification on a repeat request. Channel workers record a `Delivery` row keyed by `(notificationId, userId, channel)` and skip sending if it's already `SENT`. This makes both API retries and worker retries safe."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-handle-campaign-bursts-without-delaying-critical-messages",
+      "text": "3) How do we handle campaign bursts without delaying critical messages?"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Single queue, scale workers",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Autoscale workers on queue depth."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A 50M-recipient marketing blast sits in front of an OTP code, which then arrives minutes late."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Priority lanes and rate limiting",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Separate **high-priority** (transactional) and **bulk** queues per channel, with dedicated capacity for high priority. Expand campaigns asynchronously in batches. Respect provider rate limits with a token bucket per provider, and enforce per-user frequency caps (e.g. at most 3 marketing pushes a day)."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Requires classifying every notification correctly — the API's `category` field drives routing."
+        }
+      ]
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Clean up dead push tokens: APNs and FCM tell you when a token is invalid. Deleting them avoids wasting sends and keeps provider reputation healthy."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why should the API return 202 Accepted and send asynchronously?",
+      "options": [
+        "It is faster to type",
+        "Provider latency and outages shouldn't block callers or lose messages",
+        "SMS requires it",
+        "To avoid storing notifications"
+      ],
+      "answer": 1,
+      "explanation": "Persisting and queueing decouples callers from slow, failure-prone third-party providers."
+    },
+    {
+      "question": "What prevents a retried API request from sending the same notification twice?",
+      "options": [
+        "A longer timeout",
+        "An idempotency key with a unique constraint",
+        "Rate limiting",
+        "A CDN"
+      ],
+      "answer": 1,
+      "explanation": "The repeat request maps to the existing notification instead of creating a new one.",
+      "section": "2-how-do-we-avoid-duplicate-notifications"
+    },
+    {
+      "question": "How do you stop a marketing blast from delaying OTP codes?",
+      "options": [
+        "Send marketing first",
+        "Separate high-priority and bulk queues with dedicated capacity",
+        "Use one big queue",
+        "Disable OTP during campaigns"
+      ],
+      "answer": 1,
+      "explanation": "Priority lanes keep transactional traffic flowing regardless of bulk backlog.",
+      "section": "3-how-do-we-handle-campaign-bursts-without-delaying-critical-messages"
+    },
+    {
+      "question": "Why give each channel its own queue and worker pool?",
+      "options": [
+        "To isolate failures, so an SMS outage doesn't back up push",
+        "To save memory",
+        "Because email is encrypted",
+        "It isn't useful"
+      ],
+      "answer": 0,
+      "explanation": "Isolation keeps healthy channels flowing while a broken provider retries."
+    }
+  ]
+}

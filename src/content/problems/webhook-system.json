@@ -1,0 +1,364 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "webhook-system",
+  "category": "Common Problems",
+  "title": "Webhook System",
+  "seoTitle": "Design a Webhook Delivery System",
+  "description": "Design a webhook delivery system — customers register endpoints, events are delivered reliably with retries and backoff, signed payloads, per-endpoint isolation so slow receivers don't hurt others, and replay.",
+  "tags": [
+    {
+      "label": "Managing Long Running Tasks",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    },
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🔔",
+      "title": "What is a Webhook System?",
+      "text": "A webhook system lets a platform (Stripe, GitHub, Shopify) notify its customers' servers when something happens — a payment succeeded, a PR was merged — by sending an HTTP POST to a URL the customer registered. The platform doesn't control those servers: they can be slow, down for hours, or return errors, so delivery has to be reliable, secure and isolated."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Customers should register endpoints (URLs) and choose which event types they want.",
+        "When an event occurs, every matching endpoint should receive it as an HTTP POST.",
+        "Failed deliveries should be retried with backoff for up to ~3 days.",
+        "Customers should see delivery attempts and responses, and manually replay events.",
+        "Receivers should be able to verify that a webhook genuinely came from us."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Transforming payloads per customer.",
+        "Polling APIs as an alternative."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "At-least-once delivery: no event is silently dropped.",
+        "Low latency when receivers are healthy: delivered within seconds.",
+        "Isolation: a slow or failing endpoint must not delay deliveries to others.",
+        "Scale to ~50k events per second and millions of endpoints.",
+        "Security: signed payloads and protection against our servers being used to attack internal networks (SSRF)."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Exactly-once delivery (receivers dedupe by event ID).",
+        "Strict global ordering."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- register endpoints + event types",
+        "- POST matching events",
+        "- retry with backoff, ~3 days",
+        "- delivery logs + replay",
+        "- verifiable signatures",
+        "",
+        "Non-functional",
+        "- at-least-once",
+        "- seconds when healthy",
+        "- isolate bad endpoints",
+        "- 50k events / s",
+        "- signed + SSRF-safe"
+      ],
+      "caption": "Webhook Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Endpoint**: customer, URL, subscribed event types, signing secret, status (active, disabled).",
+        "**Event**: ID, type, payload, created at.",
+        "**Delivery**: event × endpoint, status, attempts, next attempt time.",
+        "**Attempt**: timestamp, response code, latency, error."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /webhook-endpoints { url, events: [\"payment.succeeded\"] } -> { id, secret }\nGET  /webhook-endpoints/:id/deliveries?status=failed\nPOST /deliveries/:id/retry\nOutgoing: POST {customer url}\n  Headers: X-Signature: t=..., v1=HMAC_SHA256(secret, t + \".\" + body)\n  Body: { id, type, created, data }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-registering-endpoints",
+      "text": "1) Registering endpoints"
+    },
+    {
+      "type": "paragraph",
+      "text": "Customers create endpoints with the event types they care about; we generate a **signing secret**. URLs are validated (HTTPS, public IPs only) at registration and again at delivery time."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-fan-out-from-events-to-deliveries",
+      "text": "2) Fan-out from events to deliveries"
+    },
+    {
+      "type": "paragraph",
+      "text": "Internal services publish domain events to **Kafka**. A **dispatcher** consumes them, looks up which endpoints subscribe to that event type for that customer (cached), and creates one **delivery** per endpoint, enqueuing it for sending."
+    },
+    {
+      "type": "diagram",
+      "file": "01-delivery-pipeline.svg",
+      "caption": "Delivery pipeline"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-sending-and-retrying",
+      "text": "3) Sending and retrying"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Sender workers** POST the payload with a timestamped **HMAC signature** and a short timeout (~10 s). A 2xx response marks the delivery done. Errors and timeouts schedule a retry with **exponential backoff and jitter** (1 min, 5 min, 30 min, 2 h, … over ~3 days). After the final attempt, the delivery is marked failed and the customer is emailed."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-visibility-and-replay",
+      "text": "4) Visibility and replay"
+    },
+    {
+      "type": "paragraph",
+      "text": "Every attempt is recorded so the dashboard can show request, response code and latency. Customers can **replay** a delivery or all failed deliveries for an endpoint once they've fixed their server."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-isolate-slow-or-failing-endpoints",
+      "text": "1) How do we isolate slow or failing endpoints?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "One shared queue",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "All deliveries go into one queue processed by a worker pool."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A popular customer's endpoint that takes 10 s per request ties up workers, and every other customer's webhooks wait behind it."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Separate retry queue",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Send first attempts from a fast queue; failed deliveries move to a delayed retry queue."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A slow-but-not-failing endpoint still consumes worker time on first attempts."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Per-endpoint concurrency limits and circuit breakers",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Track each endpoint's **concurrency and latency**. Each endpoint gets a small limit on in-flight requests; excess deliveries wait in that endpoint's own backlog (scheduled in a time-indexed store), not in front of others. An endpoint that keeps failing trips a **circuit breaker**: we pause sending and probe it periodically, then drain its backlog gradually once it recovers. Endpoints failing for days are **disabled** with a notification."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Millions of per-endpoint backlogs need a scheduler built on a sorted set or database index of `nextAttemptAt`, not millions of queues."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-receivers-trust-and-deduplicate-webhooks",
+      "text": "2) How do receivers trust and deduplicate webhooks?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each request includes a **timestamp and HMAC signature** over the timestamp and body using the endpoint's secret; receivers recompute it and reject old timestamps, which defeats replay attacks. Because delivery is at-least-once, the payload carries a stable **event ID** for deduplication. Secrets can be rotated with an overlap period where both old and new signatures are sent."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention ordering: we don't guarantee it (retries reorder events), so payloads include a timestamp or version and receivers should fetch the latest object state from the API when order matters."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-prevent-ssrf",
+      "text": "3) How do we prevent SSRF?"
+    },
+    {
+      "type": "paragraph",
+      "text": "A customer could register `http://169.254.169.254/` or an internal hostname to make our servers attack our own network. Senders resolve DNS themselves and **refuse private, loopback and link-local addresses** (checking after resolution, to defeat DNS rebinding), run in an isolated network segment with egress only to the internet, don't follow redirects to internal addresses, and cap response sizes."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why include a timestamp in the webhook signature?",
+      "options": [
+        "For sorting",
+        "So receivers can reject old requests replayed by an attacker",
+        "To compress the body",
+        "It's required by HTTP"
+      ],
+      "answer": 1,
+      "explanation": "A signed timestamp prevents replay attacks."
+    },
+    {
+      "question": "What prevents one slow customer endpoint from delaying everyone?",
+      "options": [
+        "More retries",
+        "Per-endpoint concurrency limits and circuit breakers",
+        "A single big queue",
+        "Longer timeouts"
+      ],
+      "answer": 1,
+      "explanation": "Each endpoint's backlog waits separately."
+    },
+    {
+      "question": "How do receivers handle duplicate deliveries?",
+      "options": [
+        "They can't happen",
+        "Deduplicate by the event ID in the payload",
+        "Reject all retries",
+        "Compare response codes"
+      ],
+      "answer": 1,
+      "explanation": "At-least-once delivery means receivers must be idempotent."
+    },
+    {
+      "question": "What is the SSRF risk in webhooks?",
+      "options": [
+        "Slow responses",
+        "Customers registering internal addresses to make our servers attack our own network",
+        "Large payloads",
+        "Expired certificates"
+      ],
+      "answer": 1,
+      "explanation": "Block private addresses after DNS resolution and isolate egress."
+    }
+  ]
+}

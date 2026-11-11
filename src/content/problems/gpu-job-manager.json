@@ -1,0 +1,363 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "gpu-job-manager",
+  "category": "Common Problems",
+  "title": "GPU Job Manager",
+  "seoTitle": "Design an Interface for Managing and Running Jobs across GPUs",
+  "description": "Design a system for submitting and running jobs across a GPU cluster — job queues, quotas and priorities, gang scheduling, topology-aware placement, preemption with checkpoints, and live job status and logs.",
+  "tags": [
+    {
+      "label": "Managing Long Running Tasks",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    },
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🖥️",
+      "title": "What is a GPU Job Manager?",
+      "text": "Teams training and running ML models share an expensive cluster of GPU machines. A GPU job manager is the interface and scheduler they use: submit a job (\"train this model on 64 GPUs\"), see it queue, start, and stream logs, and cancel or resubmit it. Behind it, the scheduler decides which jobs run where, keeps usage fair across teams, and keeps the GPUs busy."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to submit a job with a container image, command, and resources (e.g. 8 nodes × 8 GPUs, GPU type).",
+        "Users should see job status (queued, running, succeeded, failed), position in the queue, live logs and GPU metrics.",
+        "Users should be able to cancel jobs; failed jobs can be retried automatically.",
+        "Admins should set quotas and priorities per team."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Serving inference endpoints.",
+        "Dataset management.",
+        "Cost billing between teams (mentioned briefly)."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "High GPU utilisation (> 85%): idle GPUs are very expensive.",
+        "Fairness: teams get their guaranteed share; idle capacity is borrowed but returned quickly.",
+        "Distributed jobs start all at once (all 64 GPUs together) and are placed for fast interconnect.",
+        "Tolerate hardware failures: GPUs and nodes fail regularly at scale; jobs recover from checkpoints.",
+        "Scale to ~10k GPUs and thousands of queued jobs."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Multi-cluster federation across regions (mentioned briefly)."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- submit: image, command, GPUs",
+        "- status, queue position, logs",
+        "- cancel + auto-retry",
+        "- team quotas + priorities",
+        "",
+        "Non-functional",
+        "- > 85% utilisation",
+        "- fair share + borrowing",
+        "- all-or-nothing start, good placement",
+        "- survive hardware failures",
+        "- 10k GPUs"
+      ],
+      "caption": "GPU Jobs Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Job**: owner, team, image, command, resources, priority, status, retries.",
+        "**Node**: GPUs (type, count), health, rack/network topology.",
+        "**Allocation**: which GPUs on which nodes a job holds.",
+        "**Queue / quota**: per team, guaranteed GPUs and maximum borrowable GPUs.",
+        "**Checkpoint**: saved training state in object storage."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /jobs { image, command, nodes: 8, gpusPerNode: 8, gpuType: \"H100\", priority, maxRetries }\nGET  /jobs/:id -> { status, queuePosition, allocation, startedAt }\nGET  /jobs/:id/logs?follow=true      (streamed)\nDELETE /jobs/:id\nPUT  /teams/:id/quota { guaranteedGpus, maxGpus }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-submitting-jobs",
+      "text": "1) Submitting jobs"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Job API** validates the request against the team's quota, stores the job in the **job database** as `queued`, and notifies the scheduler. The UI and CLI read the same API."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-scheduling",
+      "text": "2) Scheduling"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **scheduler** runs in a loop: it orders queued jobs by priority and team fair-share, and for each, tries to find a **placement** for all its GPUs at once (**gang scheduling**). When it finds one, it records the allocation and tells the **node agents** on those machines to start the containers."
+    },
+    {
+      "type": "diagram",
+      "file": "01-scheduling.svg",
+      "caption": "Scheduling"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-running-and-monitoring",
+      "text": "3) Running and monitoring"
+    },
+    {
+      "type": "paragraph",
+      "text": "Node agents start containers, report status and heartbeats, and ship logs to a **log service** that users can follow live. GPU metrics (utilisation, memory, temperature) flow into the metrics system and are shown per job."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-failures-and-retries",
+      "text": "4) Failures and retries"
+    },
+    {
+      "type": "paragraph",
+      "text": "If a node fails, its agent stops heartbeating; the scheduler marks the job's allocation failed, stops the remaining processes and **requeues** the job (up to `maxRetries`). The job resumes from its latest **checkpoint**. Bad nodes are cordoned for repair."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-share-gpus-fairly-but-keep-them-busy",
+      "text": "1) How do we share GPUs fairly but keep them busy?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "First come, first served",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "One global queue in submission order."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "One team submitting hundreds of jobs starves everyone else, and big jobs block small ones behind them."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Static quotas per team",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Each team gets a fixed number of GPUs and can never exceed it."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Fair, but when a team is idle its GPUs sit unused while others wait."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Guaranteed quotas with borrowing and preemption",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Each team has a **guaranteed share**; idle capacity can be **borrowed** by others at lower priority. When the owner submits work, the scheduler **preempts** borrowed jobs (with notice, so they can checkpoint) to give capacity back. Within a team, priority classes order jobs, and **backfilling** lets small jobs run in gaps while a large job waits for enough GPUs — as long as they won't delay its start."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Preemption only works if jobs checkpoint frequently; the platform should provide checkpointing libraries and make it the default."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-why-does-placement-matter",
+      "text": "2) Why does placement matter?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Distributed training exchanges gradients constantly, so a 64-GPU job is much faster on nodes connected by the same high-speed network fabric (e.g. within one InfiniBand leaf switch) than spread across the data centre. The scheduler is **topology-aware**: it prefers placements within one rack or switch group and avoids fragmenting groups with small jobs. Gang scheduling avoids deadlock where two big jobs each hold half the GPUs they need and wait forever."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention fragmentation: small jobs scattered across nodes can leave no complete 8-GPU node free. Pack small jobs onto partially used nodes first."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-handle-failures-at-scale",
+      "text": "3) How do we handle failures at scale?"
+    },
+    {
+      "type": "paragraph",
+      "text": "With 10k GPUs, some hardware fails daily. Node agents run **health checks** (GPU errors, network tests) before and during jobs; suspect nodes are drained. Jobs write checkpoints to object storage every N minutes, and the scheduler requeues failed jobs with **priority** so they restart soon. For very large jobs, keeping a few **hot spare** nodes lets a job replace a failed node in minutes instead of waiting in the queue."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What is gang scheduling?",
+      "options": [
+        "Scheduling by team name",
+        "Starting all of a distributed job's processes together, or none of them",
+        "Scheduling at night",
+        "Random placement"
+      ],
+      "answer": 1,
+      "explanation": "It avoids partial starts and deadlocks between big jobs."
+    },
+    {
+      "question": "How can idle GPUs be used without breaking guarantees?",
+      "options": [
+        "They can't",
+        "Other teams borrow them at lower priority and are preempted when the owner needs them",
+        "Turn them off",
+        "Give them to the biggest team"
+      ],
+      "answer": 1,
+      "explanation": "Borrowing with preemption keeps utilisation high and quotas intact."
+    },
+    {
+      "question": "Why place a distributed job within one network switch group?",
+      "options": [
+        "It's cheaper",
+        "Gradient exchange is much faster on the same high-speed fabric",
+        "For security",
+        "Racks have more power"
+      ],
+      "answer": 1,
+      "explanation": "Topology-aware placement shortens training time."
+    },
+    {
+      "question": "What makes preemption and failures tolerable?",
+      "options": [
+        "Bigger GPUs",
+        "Frequent checkpoints so jobs resume where they left off",
+        "Longer timeouts",
+        "Fewer jobs"
+      ],
+      "answer": 1,
+      "explanation": "Checkpoints turn restarts into small delays."
+    }
+  ]
+}

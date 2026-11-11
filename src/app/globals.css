@@ -1,26 +1,272 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
+@font-face {
+  font-family: "Virgil";
+  src: url("/fonts/Virgil.woff2") format("woff2");
+  font-display: swap;
+}
+
+/* ---------- Blueprint · blueprint paper ---------- */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #f5f7fb; /* paper */
+  --bg-subtle: #eef2f8;
+  --surface: #ffffff;
+  --surface-muted: #e8eef6;
+  --surface-hover: #e2e9f3;
+  --border: #d5dde8;
+  --border-strong: #b8c4d4;
+
+  --text: #0f172a; /* ink */
+  --text-body: #334155;
+  --text-muted: #64748b;
+  --text-faint: #94a3b8;
+
+  --primary: #2563eb; /* blueprint blue */
+  --primary-hover: #1d4ed8;
+  --primary-soft: #dbeafe;
+
+  --bad: #b42318; /* brick */
+  --good: #0f766e; /* teal */
+  --great: #3f6f4e; /* moss */
+  --info: #3f5873; /* slate */
+
+  --code-bg: #e8eef6;
+  --code-text: #1d4ed8;
+  --tok-comment: #94a3b8;
+  --tok-string: #0f766e;
+  --tok-key: #334155;
+  --tok-number: #0369a1;
+  --tok-keyword: #2563eb;
+
+  --diagram-filter: none;
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #0b1220;
+  --bg-subtle: #0f172a;
+  --surface: #111827;
+  --surface-muted: #1a2332;
+  --surface-hover: #1e293b;
+  --border: #243044;
+  --border-strong: #334155;
+
+  --text: #e8eef8;
+  --text-body: #cbd5e1;
+  --text-muted: #94a3b8;
+  --text-faint: #64748b;
+
+  --primary: #60a5fa;
+  --primary-hover: #93c5fd;
+  --primary-soft: #172554;
+
+  --bad: #e57060;
+  --good: #2dd4bf;
+  --great: #7fb08e;
+  --info: #8ea6c2;
+
+  --code-bg: #111827;
+  --code-text: #93c5fd;
+  --tok-comment: #64748b;
+  --tok-string: #5eead4;
+  --tok-key: #cbd5e1;
+  --tok-number: #7dd3fc;
+  --tok-keyword: #60a5fa;
+
+  /* Diagrams are drawn black on transparent; invert them for dark paper. */
+  --diagram-filter: invert(0.88) sepia(0.15) hue-rotate(180deg);
+  color-scheme: dark;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --color-bg: var(--bg);
+  --color-bg-subtle: var(--bg-subtle);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-hover: var(--surface-hover);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-ink: var(--text);
+  --color-body: var(--text-body);
+  --color-muted: var(--text-muted);
+  --color-faint: var(--text-faint);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-soft: var(--primary-soft);
+  --color-bad: var(--bad);
+  --color-good: var(--good);
+  --color-great: var(--great);
+  --color-info: var(--info);
+  --color-code: var(--code-bg);
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-newsreader), ui-serif, Georgia, serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-hand: "Virgil", "Segoe UI Emoji", cursive;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--primary-soft);
+  color: var(--text);
+}
+
+[data-anchor] {
+  scroll-margin-top: 84px;
+}
+
+@layer components {
+  /* Small-caps section label used throughout the UI */
+  .label-caps {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  /* ---------- Article prose ---------- */
+  .prose-bp {
+    color: var(--text-body);
+    font-size: 17px;
+    line-height: 1.7;
+  }
+  .prose-bp strong {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .prose-bp a.inline-link {
+    color: var(--primary);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--primary) 35%, transparent);
+    text-underline-offset: 3px;
+    transition: text-decoration-color 150ms;
+  }
+  .prose-bp a.inline-link:hover {
+    text-decoration-color: var(--primary);
+  }
+  .prose-bp code.inline-code {
+    font-family: var(--font-mono);
+    font-size: 0.84em;
+    color: var(--code-text);
+    background: var(--code-bg);
+    border-radius: 3px;
+    padding: 0.1em 0.35em;
+    word-break: break-word;
+  }
+  .prose-bp abbr {
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+    cursor: help;
+  }
+  .hi-p {
+    margin: 0 0 1.1rem;
+  }
+  .hi-list {
+    margin: 0 0 1.1rem;
+    padding-left: 1.4rem;
+  }
+  ul.hi-list {
+    list-style: none;
+  }
+  ul.hi-list > li {
+    position: relative;
+  }
+  ul.hi-list > li::before {
+    content: "";
+    position: absolute;
+    left: -1rem;
+    top: 0.78em;
+    width: 6px;
+    height: 1px;
+    background: var(--text-faint);
+  }
+  ol.hi-list {
+    list-style: decimal;
+  }
+  ol.hi-list > li::marker {
+    color: var(--text-muted);
+    font-feature-settings: "tnum";
+  }
+  .hi-list > li {
+    margin: 0.35rem 0;
+    padding-left: 0.2rem;
+  }
+  .hi-list > li > .hi-list {
+    margin: 0.35rem 0;
+  }
+  .hi-flow > :last-child {
+    margin-bottom: 0;
+  }
+}
+
+/* Q&A cards: answers always visible, except in flashcard mode until revealed. */
+.qa-reveal {
+  display: none;
+}
+[data-flashcards="on"] .qa-card:not([data-revealed]) .qa-answer {
+  display: none;
+}
+[data-flashcards="on"] .qa-card:not([data-revealed]) .qa-reveal {
+  display: inline-flex;
+}
+
+/* Hand-drawn diagrams sit directly on the paper. */
+.diagram-svg svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.diagram-svg svg > rect:first-of-type {
+  fill: transparent;
+}
+.diagram-svg {
+  filter: var(--diagram-filter);
+}
+
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.thin-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-fade-in {
+  animation: fade-in 140ms ease-out;
+}
+.animate-pop-in {
+  animation: rise 160ms ease-out;
 }

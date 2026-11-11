@@ -1,0 +1,515 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "yelp",
+  "category": "Common Problems",
+  "title": "Yelp",
+  "seoTitle": "Design a Local Business Review Site Like Yelp",
+  "description": "Design Yelp — business search by location and keyword, reviews and ratings — with geospatial indexing, full-text search and consistent rating aggregates.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Google",
+      "Meta",
+      "Amazon"
+    ],
+    "more": 9
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🍽️",
+      "title": "What is Yelp?",
+      "text": "Yelp is an online platform that lets users discover local businesses — restaurants, salons, plumbers — by searching near a location, reading reviews, and leaving their own ratings."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to search for businesses by name, category, and location.",
+        "Users should be able to view a business and its reviews.",
+        "Users should be able to leave a review (a 1-5 star rating plus optional text) on a business."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Business owners claiming and editing their listings.",
+        "Reservations, ordering, and messaging.",
+        "Personalised recommendations."
+      ]
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "A common constraint interviewers add is that **each user may review a business only once**. It's worth asking about, because it changes the data model and how you validate writes."
+        }
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "The system should have low latency for search (< 500ms).",
+        "The system should be highly available for search and viewing; eventual consistency is fine for new reviews appearing.",
+        "The system should scale to 100M daily users and 10M businesses.",
+        "A user can only leave one review per business."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Spam and fake-review detection.",
+        "GDPR and data residency."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "The defining property of Yelp is that it is **extremely read-heavy**. Millions of searches and page views happen for every review written — this should shape every decision we make."
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- search by name, category, location",
+        "- view business + reviews",
+        "- leave a review (1 per user/business)",
+        "",
+        "Non-functional",
+        "- low latency search (< 500ms)",
+        "- availability >> consistency",
+        "- 100M DAU, 10M businesses"
+      ],
+      "caption": "Yelp Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "We'll build the design by walking through each functional requirement in order, then use our deep dives to hit the non-functional requirements — especially search latency and keeping average ratings correct."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Business**: name, location (lat/long), category, address, and an aggregate average rating.",
+        "**User**: the person searching and reviewing.",
+        "**Review**: a rating and optional text, written by one user about one business."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Core Entities",
+        "- Business",
+        "- User",
+        "- Review"
+      ],
+      "caption": "Yelp Entities"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "paragraph",
+      "text": "Search takes optional filters and returns a paginated list of partial business objects:"
+    },
+    {
+      "type": "code",
+      "code": "GET /businesses?query&category&lat&long&radius&page -> Partial<Business>[]"
+    },
+    {
+      "type": "paragraph",
+      "text": "Viewing a business returns its details along with the first page of reviews:"
+    },
+    {
+      "type": "code",
+      "code": "GET /businesses/:businessId -> Business & Review[]\nGET /businesses/:businessId/reviews?cursor -> Review[]"
+    },
+    {
+      "type": "paragraph",
+      "text": "Leaving a review:"
+    },
+    {
+      "type": "code",
+      "code": "POST /businesses/:businessId/reviews\n{\n  \"rating\": 4,\n  \"text\": \"Great tacos, slow service.\"\n}"
+    },
+    {
+      "type": "callout",
+      "variant": "warning",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "The userId comes from the authenticated session (JWT), never from the request body — otherwise anyone could post reviews as someone else."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-should-be-able-to-search-for-businesses",
+      "text": "1) Users should be able to search for businesses"
+    },
+    {
+      "type": "paragraph",
+      "text": "We start with a client, an API Gateway that handles routing, authentication and rate limiting, and a **Business Service** backed by a relational database."
+    },
+    {
+      "type": "diagram",
+      "file": "01-search-businesses.svg",
+      "caption": "Search businesses"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "The client sends `GET /businesses` with the query, category, and the user's location.",
+        "The API Gateway forwards the request to the Business Service.",
+        "The Business Service queries the Business table, filtering by category and a bounding box around the location, and matches the name with `LIKE`.",
+        "Results are returned to the client, paginated."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "This works for a demo, but a `LIKE '%taco%'` query plus a lat/long range filter can't use indexes efficiently. We'll fix both in the deep dives."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-should-be-able-to-view-a-business-and-its-reviews",
+      "text": "2) Users should be able to view a business and its reviews"
+    },
+    {
+      "type": "paragraph",
+      "text": "Viewing a business is a primary-key lookup on the Business table plus a query on the Review table by `businessId`, ordered by creation time. Because reviews can be numerous, we paginate them with a cursor."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-users-should-be-able-to-leave-a-review",
+      "text": "3) Users should be able to leave a review"
+    },
+    {
+      "type": "paragraph",
+      "text": "We add a **Review Service** that owns writes to the Review table. Separating it from the Business Service lets us scale the read path independently — reads outnumber writes by orders of magnitude."
+    },
+    {
+      "type": "diagram",
+      "file": "02-leave-a-review.svg",
+      "caption": "Leave a review"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "The client sends `POST /businesses/:businessId/reviews`.",
+        "The Review Service validates the rating (1-5) and writes a row to the Review table.",
+        "The response returns once the review is durably stored."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-keep-the-average-rating-fast-to-read-and-correct",
+      "text": "1) How do we keep the average rating fast to read and correct?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Search results and business pages all show the average rating, so recomputing it on every read is out of the question."
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Compute the average on every read",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Run `SELECT AVG(rating) FROM reviews WHERE business_id = ?` whenever a business is shown."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A popular business may have tens of thousands of reviews and appears in thousands of searches per second. Aggregating on every read wastes enormous amounts of database work and blows our latency budget."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Periodic batch recompute",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Store `avgRating` and `numRatings` on the Business row and recompute them with a cron job every few minutes."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Ratings are stale between runs, and the job grows with the dataset. A newly reviewed business shows the old rating — acceptable for many products, but users notice when their own review doesn't move the number."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Synchronous update in a transaction",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Store `avgRating` and `numRatings` on the Business row and update them in the **same transaction** that inserts the review:"
+        },
+        {
+          "type": "code",
+          "code": "BEGIN;\nINSERT INTO reviews (user_id, business_id, rating, text) VALUES (...);\nUPDATE businesses\nSET avg_rating = (avg_rating * num_ratings + :rating) / (num_ratings + 1),\n    num_ratings = num_ratings + 1\nWHERE id = :business_id;\nCOMMIT;"
+        },
+        {
+          "type": "paragraph",
+          "text": "Write volume is tiny (reviews are rare compared to reads), so the extra row lock is cheap. Reads now get a precomputed number for free."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A single extremely popular business can see lock contention on its row. At Yelp's write volume this is not a real problem, but if it were, you could buffer rating deltas in a queue and apply them in small batches."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-can-we-make-search-fast-across-name-category-and-location",
+      "text": "2) How can we make search fast across name, category and location?"
+    },
+    {
+      "type": "pattern",
+      "title": "Pattern: Scaling Reads",
+      "text": "Search pages are hit far more often than businesses change, which makes this a classic case for read-optimised indexes and caching rather than more database replicas alone.",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Basic SQL with LIKE and lat/long ranges",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Filter with `latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?` and `name LIKE '%term%'`."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A B-tree index can only range-scan one dimension efficiently, so the database scans a wide strip of the map. Leading-wildcard `LIKE` can't use an index at all. Latency grows with the table."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Geospatial index in the database (PostGIS)",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Store location as a geography column with a GiST index (PostGIS) and query with `ST_DWithin`. Add a full-text index (`tsvector` + GIN) on name and description for keyword matching."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "This keeps everything in Postgres, which is operationally simple. Combining geo, full-text and category filters in one query is possible but tuning ranking and relevance in SQL is awkward, and search load competes with transactional load."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Dedicated search engine (Elasticsearch)",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Index businesses into Elasticsearch with a `geo_point` field, keyword fields for category, and analysed text for name and description. Use **change data capture** from the primary database to keep the index up to date."
+        },
+        {
+          "type": "paragraph",
+          "text": "A single query combines a `geo_distance` filter, a category `term` filter and a full-text `match`, then ranks by relevance and rating."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "The index is eventually consistent with the database — a new business may take a few seconds to appear, which our requirements allow. Running an Elasticsearch cluster adds operational cost."
+        }
+      ]
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "For predefined areas like \"Pizza in San Francisco\", the same query shape repeats constantly. Caching the first page of results by `(query, category, geohash prefix)` in Redis removes most of the load from the search cluster."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-enforce-one-review-per-user-per-business",
+      "text": "3) How do we enforce one review per user per business?"
+    },
+    {
+      "type": "paragraph",
+      "text": "The simplest correct answer is a database constraint: a **unique index on `(user_id, business_id)`** in the Review table. Application-level checks alone are racy — two concurrent requests could both pass the check — but the database guarantees uniqueness atomically and the second insert fails cleanly with a conflict we can return as `409`."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "03-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why is a plain B-tree index on latitude and longitude a poor fit for proximity search?",
+      "options": [
+        "B-trees cannot store decimals",
+        "It can only range-scan one dimension efficiently",
+        "It uses too little memory",
+        "It requires a cache"
+      ],
+      "answer": 1,
+      "explanation": "A B-tree narrows one dimension at a time, so a 2D bounding-box query still scans a wide strip. Geospatial indexes partition both dimensions.",
+      "section": "2-how-can-we-make-search-fast-across-name-category-and-location"
+    },
+    {
+      "question": "What is the best way to guarantee a user leaves only one review per business?",
+      "options": [
+        "Check in the application before inserting",
+        "A unique index on (user_id, business_id)",
+        "Rate limit the endpoint",
+        "Cache recent reviewers"
+      ],
+      "answer": 1,
+      "explanation": "Application checks race under concurrency; a unique constraint is enforced atomically by the database.",
+      "section": "3-how-do-we-enforce-one-review-per-user-per-business"
+    },
+    {
+      "question": "How should the average rating be kept fast to read and correct?",
+      "options": [
+        "Compute AVG() on every request",
+        "Update avgRating and numRatings in the same transaction as the review insert",
+        "Recompute nightly",
+        "Store ratings only in the cache"
+      ],
+      "answer": 1,
+      "explanation": "Reviews are rare relative to reads, so maintaining the aggregate transactionally is cheap and always correct.",
+      "section": "1-how-do-we-keep-the-average-rating-fast-to-read-and-correct"
+    },
+    {
+      "question": "How does the Elasticsearch index stay in sync with the primary database?",
+      "options": [
+        "Clients write to both",
+        "Change data capture from the database",
+        "A nightly full export only",
+        "It doesn't need to"
+      ],
+      "answer": 1,
+      "explanation": "CDC streams every change from the database log into the index, giving eventual consistency without dual writes."
+    }
+  ]
+}

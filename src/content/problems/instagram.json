@@ -1,0 +1,403 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "instagram",
+  "category": "Common Problems",
+  "title": "Instagram",
+  "seoTitle": "Design a Photo Sharing App Like Instagram",
+  "description": "Design Instagram — photo/video posts, follows and a low-latency home feed — covering fan-out strategies, media upload and CDN delivery.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    },
+    {
+      "label": "Handling Large Blobs",
+      "href": "/learn/system-design/patterns/handling-large-blobs"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Meta",
+      "Google",
+      "Snap"
+    ],
+    "more": 14
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📸",
+      "title": "What is Instagram?",
+      "text": "Instagram is a social network for sharing photos and videos. Users follow other accounts and scroll a home feed of recent posts from the people they follow."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to create posts with a photo or video and a caption.",
+        "Users should be able to follow other users.",
+        "Users should be able to view a chronological feed of posts from the users they follow."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Likes, comments, and direct messages.",
+        "Stories, Reels ranking, and search.",
+        "Ranked (algorithmic) feeds."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "The system should be highly available, prioritising availability over consistency (a post may take a few seconds to show up in feeds).",
+        "Feed loads should be fast — under 500ms end to end.",
+        "Media should render quickly anywhere in the world.",
+        "The system should scale to 500M daily active users, with some accounts having 100M+ followers."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Content moderation.",
+        "Analytics."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- create post (photo/video + caption)",
+        "- follow users",
+        "- view chronological feed",
+        "",
+        "Non-functional",
+        "- availability >> consistency",
+        "- feed < 500ms",
+        "- fast media globally",
+        "- 500M DAU, celebrities w/ 100M followers"
+      ],
+      "caption": "Instagram Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "The two hard parts here are the **feed** (a fan-out problem) and **media** (a large-blob problem). We'll get a simple design working first, then go deep on both."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**User**: an account that posts and follows others.",
+        "**Post**: a caption plus a reference to a media object, owned by a user.",
+        "**Media**: the photo or video bytes, stored in blob storage.",
+        "**Follow**: a directed edge from follower to followee."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Core Entities",
+        "- User",
+        "- Post",
+        "- Media",
+        "- Follow"
+      ],
+      "caption": "Instagram Entities"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /posts\n{ \"mediaId\": \"...\", \"caption\": \"...\" } -> Post\n\nPOST /media/upload-url -> { \"mediaId\", \"uploadUrl\" }\n\nPOST /users/:userId/follow\n\nGET /feed?cursor={cursor}&limit={limit} -> Post[]"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-should-be-able-to-create-posts",
+      "text": "1) Users should be able to create posts"
+    },
+    {
+      "type": "paragraph",
+      "text": "Media is large, so it should never flow through our application servers. The client asks the **Post Service** for a presigned upload URL, uploads the bytes directly to S3, then creates the post with the returned `mediaId`."
+    },
+    {
+      "type": "diagram",
+      "file": "01-create-a-post.svg",
+      "caption": "Create a post"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Client requests an upload URL; the Post Service returns a presigned S3 URL and a `mediaId`.",
+        "Client uploads the photo straight to S3.",
+        "Client calls `POST /posts` with the `mediaId` and caption; the Post Service writes the Post row."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-should-be-able-to-follow-other-users",
+      "text": "2) Users should be able to follow other users"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **Follow Service** writes to a Follow table keyed by `(followerId, followeeId)`. We'll want to query in both directions — \"who do I follow\" for building feeds and \"who follows me\" for fan-out — so we add a secondary index on `followeeId`. DynamoDB with a GSI or Postgres with two indexes both work."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-users-should-be-able-to-view-their-feed",
+      "text": "3) Users should be able to view their feed"
+    },
+    {
+      "type": "paragraph",
+      "text": "The simplest approach is fan-out on read: look up everyone I follow, fetch their recent posts, merge and sort."
+    },
+    {
+      "type": "diagram",
+      "file": "02-feed-fan-out-on-read.svg",
+      "caption": "Feed (fan-out on read)"
+    },
+    {
+      "type": "paragraph",
+      "text": "This works for small accounts, but if a user follows 2,000 accounts, every feed load becomes thousands of queries. That brings us to the deep dives."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-make-feed-loads-fast-at-scale",
+      "text": "1) How do we make feed loads fast at scale?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Fan-out on read for everyone",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Compute the feed at request time by querying the latest posts for every followee and merging them."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Feed reads are by far the most common operation. Doing hundreds or thousands of lookups per load makes latency unpredictable and puts enormous load on the Posts DB."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Fan-out on write (precomputed feeds)",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "When a user posts, a worker looks up their followers and appends the post ID to each follower's precomputed feed — a Redis sorted set keyed by `feed:{userId}` scored by timestamp. Reading a feed is now a single `ZREVRANGE`."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Celebrities break this. A post from an account with 100M followers means 100M writes, delaying delivery and costing a fortune — most of those feeds belong to inactive users who'll never look."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Hybrid fan-out",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Fan out on write for normal accounts, but **skip fan-out for accounts above a follower threshold** (say 100k). At read time, the Feed Service merges the user's precomputed feed with the recent posts of the few celebrities they follow, which are cheap to fetch and heavily cached."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Two code paths to maintain, and the threshold needs tuning. Feeds for inactive users can also be skipped entirely and rebuilt lazily on their next login."
+        }
+      ]
+    },
+    {
+      "type": "pattern",
+      "title": "Pattern: Scaling Reads",
+      "text": "Precomputing feeds trades write amplification for constant-time reads — exactly the right trade when reads outnumber writes by 100:1 or more.",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-serve-media-fast-worldwide",
+      "text": "2) How do we serve media fast worldwide?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Uploaded originals land in S3. A media-processing worker (triggered by an S3 event) generates resized variants — thumbnails for the grid, medium for the feed, full size for detail view — and transcodes video. All variants are served through a **CDN**, so images are cached close to users and S3 is rarely hit directly."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Serve the right size for the device. Sending a 4K original to a phone showing a 400px thumbnail wastes bandwidth and slows the feed far more than any backend optimisation."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-keep-the-posts-db-from-becoming-a-bottleneck",
+      "text": "3) How do we keep the Posts DB from becoming a bottleneck?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Feed pages return post IDs, so the Feed Service must hydrate them into full posts. A distributed cache in front of the Posts table (posts rarely change, so long TTLs are safe) absorbs nearly all of these reads. Shard the Posts table by `postId` to spread writes, and shard precomputed feeds in Redis by `userId`."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "03-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why does pure fan-out on write break down for celebrity accounts?",
+      "options": [
+        "Their posts are larger",
+        "A single post must be written to tens of millions of feeds",
+        "They post too rarely",
+        "Their followers are offline"
+      ],
+      "answer": 1,
+      "explanation": "Write amplification scales with follower count; 100M followers means 100M feed writes per post.",
+      "section": "1-how-do-we-make-feed-loads-fast-at-scale"
+    },
+    {
+      "question": "In a hybrid feed, when are celebrity posts merged in?",
+      "options": [
+        "At write time",
+        "At read time",
+        "Nightly",
+        "Never"
+      ],
+      "answer": 1,
+      "explanation": "Celebrity posts skip fan-out and are merged into the precomputed feed when the user loads it."
+    },
+    {
+      "question": "Why should clients upload media using presigned URLs?",
+      "options": [
+        "It compresses the media",
+        "It keeps large bytes off our application servers",
+        "It removes the need for a CDN",
+        "It encrypts the media"
+      ],
+      "answer": 1,
+      "explanation": "The client streams directly to blob storage; our servers only handle small metadata requests."
+    },
+    {
+      "question": "Which data structure works well for a precomputed feed in Redis?",
+      "options": [
+        "A sorted set scored by timestamp",
+        "A HyperLogLog",
+        "A Bloom filter",
+        "A plain string"
+      ],
+      "answer": 0,
+      "explanation": "Sorted sets keep post IDs ordered by time and support cheap range reads for pagination."
+    }
+  ]
+}

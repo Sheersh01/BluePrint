@@ -1,0 +1,362 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "spotify",
+  "category": "Common Problems",
+  "title": "Spotify",
+  "seoTitle": "Design a Music Streaming Service like Spotify",
+  "description": "Design a music streaming service like Spotify — catalog and search, low-latency audio playback through CDNs, offline downloads with DRM, playlists, and play counting for royalties.",
+  "tags": [
+    {
+      "label": "Handling Large Blobs",
+      "href": "/learn/system-design/patterns/handling-large-blobs"
+    },
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🎵",
+      "title": "What is Spotify?",
+      "text": "Spotify streams music from a catalog of over 100 million tracks to hundreds of millions of listeners. Users search and browse, build playlists, play tracks instantly, and download music for offline listening. Every play is counted, because artists and labels are paid royalties based on streams."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to search the catalog for tracks, albums and artists.",
+        "Users should be able to play a track with playback starting almost instantly.",
+        "Users should be able to create and edit playlists.",
+        "Premium users should be able to download tracks for offline playback.",
+        "Plays should be counted accurately for royalties and charts."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Recommendations (Discover Weekly) — see Recommendation Engine.",
+        "Podcasts — see Podcast Platform.",
+        "Social features and lyrics."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Playback starts in < 300 ms, with no gaps between tracks.",
+        "Highly available playback; ~500M users, ~50M concurrent streams at peak.",
+        "Licensed content must be protected (encrypted, offline downloads expire).",
+        "Play counts must be accurate and fraud-resistant."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Lossless audio and spatial audio."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- search catalog",
+        "- instant playback",
+        "- playlists",
+        "- offline downloads",
+        "- count plays for royalties",
+        "",
+        "Non-functional",
+        "- start < 300ms, gapless",
+        "- 50M concurrent streams",
+        "- DRM-protected",
+        "- accurate, fraud-resistant counts"
+      ],
+      "caption": "Spotify Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Track**: ID, title, artists, album, duration, audio file references per quality.",
+        "**Album / Artist**: catalog metadata.",
+        "**Playlist**: owner, ordered track list, version.",
+        "**Play event**: user, track, timestamp, duration played, device."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /search?q=&type=track,album,artist\nGET  /tracks/:id/stream -> { cdnUrls[], keyId, formats }   (signed URLs)\nGET  /playlists/:id\nPATCH /playlists/:id { add|remove|move, version }\nPOST /downloads { trackIds[] } -> { licences[] }\nPOST /events/plays [{ trackId, msPlayed, ts }]   (batched)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-searching-the-catalog",
+      "text": "1) Searching the catalog"
+    },
+    {
+      "type": "paragraph",
+      "text": "Catalog metadata lives in a database and is indexed into **Elasticsearch** with fields for titles, artists and popularity. Prefix matching powers search-as-you-type, and popularity boosts results so \"Hello\" finds the famous song first."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-playing-a-track",
+      "text": "2) Playing a track"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each track is transcoded into a few bitrates (e.g. 96, 160, 320 kbps Ogg/AAC), **encrypted**, and stored in object storage. The **Playback Service** returns short-lived **signed CDN URLs** and the decryption key reference. The client fetches audio from the nearest **CDN** edge and starts playing after the first few hundred kilobytes."
+    },
+    {
+      "type": "diagram",
+      "file": "01-playback.svg",
+      "caption": "Playback"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-playlists",
+      "text": "3) Playlists"
+    },
+    {
+      "type": "paragraph",
+      "text": "Playlists are stored as an ordered list of track IDs with a **version number**. Edits are applied as operations (add, remove, move) checked against the version, so two devices editing at once don't overwrite each other; collaborative playlists merge operations."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-offline-downloads-and-play-counting",
+      "text": "4) Offline downloads and play counting"
+    },
+    {
+      "type": "paragraph",
+      "text": "Downloads fetch the same encrypted files plus a **device-bound licence** that must be refreshed online every 30 days. Clients send **play events** in batches (including plays made offline), which flow through **Kafka** into counting pipelines; a stream counts as a play after 30 seconds of listening."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-make-playback-start-instantly",
+      "text": "1) How do we make playback start instantly?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Download the whole file first",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Fetch the full track, then start playing."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A 5 MB file over mobile takes seconds before any sound plays."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Progressive streaming from a CDN",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Stream from the CDN with HTTP range requests and start playback after a small buffer."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "The first track still pays DNS, TLS and cache-miss latency."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Prefetching and local caching",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "The client **prefetches** the start of tracks it predicts will play next (the next song in the queue, the top search result) and keeps a large **local cache** of recently played music, since people replay the same songs. Popular tracks are **pre-warmed** at edges. The client starts at a lower bitrate and switches up once the buffer is healthy, and preloads the next track for gapless playback."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Prefetching uses mobile data, so it's limited on cellular networks."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-count-plays-accurately-at-scale",
+      "text": "2) How do we count plays accurately at scale?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Play events arrive in huge volume, sometimes late (offline plays) and sometimes duplicated (client retries). Each event carries a unique ID; the pipeline **deduplicates** and aggregates per track per day. Fraud detection looks for bots and farms: many accounts looping the same tracks, impossible listening hours, or suspicious device patterns, and their plays are excluded from royalty reports. Royalty totals are computed in a batch job from the cleaned events, since they must be exact and auditable."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention the split: real-time counters for charts and \"plays this week\" can be approximate, while monthly royalty reports come from an exact, deduplicated batch job."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-protect-licensed-content",
+      "text": "3) How do we protect licensed content?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Audio is encrypted at rest and on the CDN; the client fetches a key from a **licence service** after authorisation and holds it in protected memory. Offline licences are tied to the device and expire unless the app checks in, and the number of devices with downloads is capped per account."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why does Spotify use signed, short-lived CDN URLs?",
+      "options": [
+        "They're shorter",
+        "So only authorised clients can fetch audio, and links can't be shared indefinitely",
+        "To speed up DNS",
+        "For SEO"
+      ],
+      "answer": 1,
+      "explanation": "Signatures and expiry protect licensed content on a public CDN."
+    },
+    {
+      "question": "What helps playback start almost instantly?",
+      "options": [
+        "Larger files",
+        "Prefetching likely next tracks and caching recently played music locally",
+        "Waiting for full downloads",
+        "Turning off the CDN"
+      ],
+      "answer": 1,
+      "explanation": "The fastest network request is the one already done."
+    },
+    {
+      "question": "Why deduplicate play events?",
+      "options": [
+        "To save disk",
+        "Clients retry, so the same play can arrive twice, inflating royalties",
+        "Duplicates are illegal",
+        "Kafka requires it"
+      ],
+      "answer": 1,
+      "explanation": "Each event's unique ID makes counting exact."
+    },
+    {
+      "question": "How do offline downloads stay protected?",
+      "options": [
+        "They're unencrypted",
+        "Encrypted files plus device-bound licences that expire unless refreshed",
+        "Users promise not to share",
+        "They're deleted daily"
+      ],
+      "answer": 1,
+      "explanation": "Licence expiry ensures downloads stop working if the subscription ends."
+    }
+  ]
+}

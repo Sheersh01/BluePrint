@@ -1,0 +1,363 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "code-deployment",
+  "category": "Common Problems",
+  "title": "Code Deployment",
+  "seoTitle": "Design a Code Deployment System",
+  "description": "Design a code deployment system — building versioned artefacts once, distributing them to thousands of servers, rolling and canary deployments with health checks, automatic rollback, and a deploy pipeline across environments.",
+  "tags": [
+    {
+      "label": "Multi-step Processes",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    },
+    {
+      "label": "Managing Long Running Tasks",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🚀",
+      "title": "What is a Code Deployment System?",
+      "text": "A deployment system takes a commit that has passed CI and gets it running on production servers — safely. It builds an artefact once, ships it to every machine across regions, replaces the old version gradually while watching health, and rolls back automatically when something goes wrong. Facebook, Google and Netflix (Spinnaker) all run internal systems like this."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Engineers should be able to deploy a specific build of a service to an environment (staging, production).",
+        "Deployments should roll out gradually (canary, then waves) across thousands of hosts in several regions.",
+        "Health should be checked during rollout; bad deploys should halt and roll back automatically.",
+        "Users should see deployment progress and history, and be able to roll back with one click."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Running tests (that's CI — see GitHub Actions).",
+        "Database schema migrations (mentioned briefly).",
+        "Infrastructure provisioning."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Safety: a bad build reaches only a small fraction of traffic before it's stopped.",
+        "Zero downtime during deploys.",
+        "Speed: a full production rollout within ~1 hour; rollback within minutes.",
+        "Scale to ~100k hosts and hundreds of deploys per day.",
+        "Auditable: who deployed what, where and when."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Mobile app releases."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- deploy build X to env Y",
+        "- canary, then waves across regions",
+        "- health checks + auto rollback",
+        "- progress, history, one-click rollback",
+        "",
+        "Non-functional",
+        "- small blast radius",
+        "- zero downtime",
+        "- rollout ~1h, rollback minutes",
+        "- 100k hosts",
+        "- auditable"
+      ],
+      "caption": "Deployment Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Artefact**: an immutable, versioned build output (container image or tarball) with a content hash.",
+        "**Service**: deploy target with environments, host groups and health metrics.",
+        "**Deployment**: service, artefact version, environment, strategy, status, current stage.",
+        "**Stage**: a step in the rollout — canary (1%), region A (10%), region A (100%), region B…",
+        "**Host agent**: software on each host that installs and reports versions."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /deployments { service, version, environment, strategy: \"canary-waves\" }\nGET  /deployments/:id -> { status, stages: [{ name, hosts, healthy, status }] }\nPOST /deployments/:id/pause | resume | rollback\n(agent) GET /hosts/:id/desired -> { service, version }   POST /hosts/:id/status"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-build-once-deploy-everywhere",
+      "text": "1) Build once, deploy everywhere"
+    },
+    {
+      "type": "paragraph",
+      "text": "CI produces an **immutable artefact** (container image), stored in an artefact registry and tagged with commit and version. The same artefact goes to staging and production, so what was tested is exactly what ships."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-the-deployment-orchestrator",
+      "text": "2) The deployment orchestrator"
+    },
+    {
+      "type": "paragraph",
+      "text": "A deployment is a **workflow** of stages. The **Deploy Orchestrator** (a durable workflow, e.g. on Temporal) sets the **desired version** for the hosts in the current stage, waits for them to converge, checks health for a bake period, then moves to the next stage."
+    },
+    {
+      "type": "diagram",
+      "file": "01-rollout.svg",
+      "caption": "Rollout"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-host-agents-converge",
+      "text": "3) Host agents converge"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each host runs an **agent** that polls its desired state. When the desired version changes, it downloads the artefact, drains traffic from the old instance (removing it from the load balancer), starts the new one, runs a local health check, and re-registers. It reports status back."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-progress-and-history",
+      "text": "4) Progress and history"
+    },
+    {
+      "type": "paragraph",
+      "text": "Every state change is recorded, so the UI shows each stage's progress and the full history. Rollback is just another deployment to the previous artefact version, using a faster strategy."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-which-rollout-strategy",
+      "text": "1) Which rollout strategy?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Deploy to all hosts at once",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Push the new version everywhere simultaneously."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A bad build takes down the whole service, and there's a capacity dip while everything restarts."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Rolling deploy in batches",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Replace hosts in batches (e.g. 10% at a time), keeping enough capacity serving."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Without health gates, a bad build still rolls through every batch."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Canary + waves with automated gates",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "First deploy to a **canary** (a few hosts or 1% of traffic) and compare its error rate, latency and key business metrics against the old version's hosts for a **bake period**. If metrics are within thresholds, proceed in **waves** — one region at a time, growing in size — with a gate after each. Any gate failure **halts and rolls back** automatically. Blue-green deploys (switching traffic between two full fleets) are an option for services where mixed versions can't coexist."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Canary analysis needs good metrics and statistical comparison so noise doesn't block deploys or let regressions through."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-distribute-artefacts-to-100k-hosts-quickly",
+      "text": "2) How do we distribute artefacts to 100k hosts quickly?"
+    },
+    {
+      "type": "paragraph",
+      "text": "A single registry serving a 500 MB image to 100k hosts would need enormous bandwidth. Use a **regional cache** of the registry in each data centre, and **peer-to-peer distribution** (BitTorrent-style, as in Facebook's and Uber's systems) so hosts download chunks from each other. Since rollout is staged, later waves find the artefact already cached nearby."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention backward compatibility: during a rollout, old and new versions run side by side, so APIs and database changes must work with both (expand-then-contract migrations)."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-why-do-agents-pull-desired-state-instead-of-the-server-pushing",
+      "text": "3) Why do agents pull desired state instead of the server pushing?"
+    },
+    {
+      "type": "paragraph",
+      "text": "A pull model scales to many hosts (agents poll a replicated store), survives orchestrator restarts (desired state is durable), and self-heals: a host that was offline converges when it comes back. The orchestrator only writes desired state and reads reported state, which also makes the system easy to reason about — the same idea as Kubernetes controllers."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why build the artefact once and promote it through environments?",
+      "options": [
+        "To save disk",
+        "So exactly what was tested in staging is what runs in production",
+        "Registries charge per build",
+        "It's faster to type"
+      ],
+      "answer": 1,
+      "explanation": "Rebuilding can introduce differences."
+    },
+    {
+      "question": "What does a canary deployment do?",
+      "options": [
+        "Deploys to everyone",
+        "Exposes a small fraction of traffic to the new version and compares health before continuing",
+        "Tests on birds",
+        "Skips health checks"
+      ],
+      "answer": 1,
+      "explanation": "It limits blast radius of a bad build."
+    },
+    {
+      "question": "Why drain a host before replacing its version?",
+      "options": [
+        "To save power",
+        "So in-flight requests finish and users see no errors",
+        "For logging",
+        "To speed up downloads"
+      ],
+      "answer": 1,
+      "explanation": "Draining enables zero-downtime deploys."
+    },
+    {
+      "question": "How can artefacts reach 100k hosts quickly?",
+      "options": [
+        "One central server",
+        "Regional caches plus peer-to-peer distribution between hosts",
+        "Email",
+        "USB drives"
+      ],
+      "answer": 1,
+      "explanation": "Spreading the download load avoids a bandwidth bottleneck."
+    }
+  ]
+}

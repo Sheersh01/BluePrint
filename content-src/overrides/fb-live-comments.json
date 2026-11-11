@@ -1,0 +1,33 @@
+{
+  "quiz": [
+    {
+      "question": "Which protocol fits pushing new comments to viewers in near real time with one-way server-to-client traffic?",
+      "options": ["Server-Sent Events (SSE)", "FTP", "SMTP", "Batch polling every 10 minutes"],
+      "answer": 0,
+      "explanation": "Comments flow mostly from server to viewer, which SSE handles efficiently over a long-lived HTTP connection."
+    },
+    {
+      "question": "Why does co-locating viewers of the same live video on the same servers help?",
+      "options": [
+        "It reduces how many servers must receive each new comment",
+        "It improves video quality",
+        "It removes the need for a database",
+        "It encrypts comments"
+      ],
+      "answer": 0,
+      "explanation": "If a video's viewers are concentrated on a few servers, each comment only needs to be broadcast to those servers."
+    },
+    {
+      "question": "What is the main downside of clients polling for new comments?",
+      "options": ["It is impossible to implement", "Wasted requests and added latency at scale", "It requires WebRTC", "It guarantees ordering"],
+      "answer": 1,
+      "explanation": "Most polls return nothing new, and comments only appear on the next poll — costly and laggy for millions of viewers."
+    },
+    {
+      "question": "How should older comments be loaded when a viewer scrolls back?",
+      "options": ["Offset pagination over the whole table", "Cursor-based pagination by comment time/ID", "Download every comment upfront", "Reload the page"],
+      "answer": 1,
+      "explanation": "Cursor pagination stays stable and efficient while new comments keep arriving."
+    }
+  ]
+}

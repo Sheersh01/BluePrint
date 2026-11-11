@@ -1,0 +1,368 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "database-control-plane",
+  "category": "Common Problems",
+  "title": "Database Control Plane",
+  "seoTitle": "Design a Control Plane for a Distributed Database",
+  "description": "Design the control plane for a managed distributed database — cluster provisioning, desired-state reconciliation, failover, scaling, and safe rolling operations.",
+  "tags": [
+    {
+      "label": "Multi-step Processes",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    },
+    {
+      "label": "Managing Long Running Tasks",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Netflix"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🎛️",
+      "title": "What is a Database Control Plane?",
+      "text": "A distributed database has a **data plane** (the nodes that store and serve data) and a **control plane** (the system that creates clusters, scales them, replaces failed nodes, applies upgrades and backups). Managed services like Amazon RDS, Cassandra operators, or Netflix's internal platforms are control planes."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to create, resize and delete database clusters via an API.",
+        "The control plane should detect failed nodes and replace them automatically.",
+        "The control plane should perform rolling operations — version upgrades and config changes — without downtime.",
+        "Users should be able to see the status of each cluster and in-progress operations."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Query routing (handled by the data plane).",
+        "Billing."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "A control-plane outage must never take down the data plane — databases keep serving traffic.",
+        "Operations must be safe: never remove more replicas than the cluster can tolerate.",
+        "Operations are long-running (minutes to hours) and must survive control-plane restarts.",
+        "Manage thousands of clusters and tens of thousands of nodes."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Multi-cloud support."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- create / resize / delete clusters",
+        "- auto-replace failed nodes",
+        "- rolling upgrades + config changes",
+        "- status of clusters + operations",
+        "",
+        "Non-functional",
+        "- data plane survives control plane outage",
+        "- never violate quorum",
+        "- durable long-running operations",
+        "- 1000s of clusters"
+      ],
+      "caption": "Control Plane Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Cluster spec (desired state)**: engine version, node count, instance type, config.",
+        "**Cluster status (observed state)**: nodes, their health, versions, roles.",
+        "**Node**: a VM/container running the database.",
+        "**Operation**: a long-running workflow (create, scale, upgrade, replace node) with steps and status."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST  /clusters { \"engine\": \"cassandra\", \"version\": \"4.1\", \"nodes\": 6, \"instanceType\": \"r6i.2xlarge\" }\nPATCH /clusters/:id { \"nodes\": 9 } | { \"version\": \"5.0\" }\nGET   /clusters/:id -> { spec, status, operations }\nDELETE /clusters/:id"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-create-and-resize-clusters",
+      "text": "1) Users create and resize clusters"
+    },
+    {
+      "type": "paragraph",
+      "text": "The API writes the **desired state** (spec) to a durable store and returns immediately. It doesn't perform the work inline — a **reconciler** notices that desired and observed state differ and launches an operation to close the gap, like a Kubernetes controller."
+    },
+    {
+      "type": "diagram",
+      "file": "01-desired-state-reconciliation.svg",
+      "caption": "Desired-state reconciliation"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-detect-and-replace-failed-nodes",
+      "text": "2) Detect and replace failed nodes"
+    },
+    {
+      "type": "paragraph",
+      "text": "An **agent** on every node reports health and database-level status (is it in the ring, is replication caught up). If a node is unhealthy beyond a threshold, the observed state no longer matches the spec, and the reconciler starts a \"replace node\" operation: provision a new node, join it, stream data, then decommission the old one."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-rolling-operations",
+      "text": "3) Rolling operations"
+    },
+    {
+      "type": "paragraph",
+      "text": "Upgrades proceed **one node (or one rack/zone) at a time**: drain, upgrade, restart, wait until healthy and caught up, then continue. Each step is gated by health checks."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-status",
+      "text": "4) Status"
+    },
+    {
+      "type": "paragraph",
+      "text": "Cluster status and operation progress are read from the state store and surfaced through the API and UI."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-run-long-operations-reliably",
+      "text": "1) How do we run long operations reliably?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Run operations inside API request handlers",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Call cloud APIs and wait for completion during the request."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Operations take hours; any restart loses progress and leaves clusters half-changed."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Durable workflows with idempotent steps",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Model each operation as a workflow (Temporal, Step Functions, or a state machine persisted in the database). Every step — provision VM, join node, stream data, verify — is idempotent and its result is recorded, so after a crash the workflow resumes exactly where it left off. Only one operation per cluster runs at a time (a per-cluster lock) to avoid conflicting changes."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Workflow versioning when operation logic changes mid-flight."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-make-operations-safe",
+      "text": "2) How do we make operations safe?"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Health checks between steps",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Wait for each node to be healthy before moving on."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Doesn't prevent two independent operations (or an auto-replacement during an upgrade) from taking down multiple replicas at once."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Disruption budgets and topology awareness",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Before removing or restarting any node, check a **disruption budget**: with replication factor 3 and quorum reads/writes, at most one replica of any token range may be down. Operate by rack/zone so replicas in other zones keep quorum. Automatically pause and alert if error rates or latency regress, and support rollback."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Requires the control plane to understand the database's replica placement, not just VMs."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-what-if-the-control-plane-itself-goes-down",
+      "text": "3) What if the control plane itself goes down?"
+    },
+    {
+      "type": "paragraph",
+      "text": "The data plane must be fully independent: nodes keep serving, replicating and electing leaders without the control plane. The control plane only changes topology. Run it in multiple zones, keep its state in a replicated store, and ensure reconcilers are **level-triggered** (they compare state rather than relying on missed events), so after an outage they simply catch up."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What is the most important property of the control plane relative to the data plane?",
+      "options": [
+        "It serves queries",
+        "Its outage must not take down the databases",
+        "It stores the data",
+        "It is single-region"
+      ],
+      "answer": 1,
+      "explanation": "Databases keep running; the control plane only changes topology."
+    },
+    {
+      "question": "What does desired-state reconciliation do?",
+      "options": [
+        "Runs commands immediately",
+        "Continuously compares spec to observed state and acts to close the gap",
+        "Deletes clusters",
+        "Caches queries"
+      ],
+      "answer": 1,
+      "explanation": "It's the controller pattern used by Kubernetes operators."
+    },
+    {
+      "question": "What is a disruption budget?",
+      "options": [
+        "A cost limit",
+        "A limit on how many replicas can be unavailable at once",
+        "A backup schedule",
+        "A rate limit"
+      ],
+      "answer": 1,
+      "explanation": "It ensures operations never break quorum."
+    },
+    {
+      "question": "Why model operations as durable workflows?",
+      "options": [
+        "For pretty UIs",
+        "Operations take hours and must resume after control-plane restarts",
+        "Cloud APIs require it",
+        "To avoid health checks"
+      ],
+      "answer": 1,
+      "explanation": "Persisted, idempotent steps make long operations recoverable."
+    }
+  ]
+}

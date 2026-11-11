@@ -1,0 +1,336 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "p2p-file-transfer",
+  "category": "Common Problems",
+  "title": "P2P File Transfer",
+  "seoTitle": "Design a Peer-to-Peer File Distribution System Like BitTorrent",
+  "description": "Design peer-to-peer file distribution — splitting files into verified pieces, peer discovery with trackers and DHTs, piece selection strategies, and incentives to upload.",
+  "tags": [
+    {
+      "label": "Handling Large Blobs",
+      "href": "/learn/system-design/patterns/handling-large-blobs"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Google",
+      "Atlassian",
+      "Twitch"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🔁",
+      "title": "What is P2P File Transfer?",
+      "text": "Peer-to-peer distribution (like BitTorrent) lets many machines download a large file from each other instead of all pulling from one server. Every downloader also uploads the pieces it already has, so capacity grows with demand. Companies use the same idea internally to ship builds and container images to thousands of servers."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "A publisher should be able to share a file so others can download it.",
+        "Peers should discover other peers that have the file.",
+        "Peers should download pieces from many peers in parallel and verify each piece.",
+        "Peers should upload pieces they have to others while downloading (and after)."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Search for content.",
+        "Anonymity and encryption of traffic."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Scalability: distributing a 10GB file to 10,000 machines shouldn't overload the original source.",
+        "Integrity: corrupted or malicious data is detected and discarded.",
+        "Resilience: peers come and go constantly; downloads continue.",
+        "Efficient: aggregate bandwidth across peers is well used."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "NAT traversal details."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- publish a file",
+        "- discover peers",
+        "- parallel verified pieces",
+        "- upload while downloading",
+        "",
+        "Non-functional",
+        "- source never the bottleneck",
+        "- detect corrupt pieces",
+        "- tolerate churn",
+        "- use aggregate bandwidth"
+      ],
+      "caption": "P2P Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Metadata file (torrent)**: file name, size, piece size, and the hash of every piece; identified by an info-hash.",
+        "**Piece**: a fixed-size chunk (e.g. 1-4MB) of the file.",
+        "**Peer**: a participant with a bitfield of pieces it has.",
+        "**Tracker / DHT**: services that answer \"which peers have this info-hash?\"."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "// Tracker\nGET /announce?infoHash&peerId&port&left&event=started -> { peers: [ip:port, ...], interval }\n\n// Peer wire protocol (TCP)\nhandshake(infoHash, peerId)\nbitfield(pieces) / have(index)\nrequest(index, offset, length) -> piece(index, offset, data)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-share-a-file",
+      "text": "1) Share a file"
+    },
+    {
+      "type": "paragraph",
+      "text": "The publisher splits the file into pieces, hashes each one (SHA-256), and creates a metadata file listing the piece hashes. The info-hash (hash of the metadata) identifies the file everywhere. The publisher starts as the first **seed**."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-discover-peers",
+      "text": "2) Discover peers"
+    },
+    {
+      "type": "paragraph",
+      "text": "Peers **announce** to a tracker with the info-hash and receive a list of other peers. For decentralisation, a **DHT** (Kademlia) maps info-hashes to peers without a central server; peers also exchange peer lists with each other (peer exchange)."
+    },
+    {
+      "type": "diagram",
+      "file": "01-swarm.svg",
+      "caption": "Swarm"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-download-pieces-in-parallel-and-verify",
+      "text": "3) Download pieces in parallel and verify"
+    },
+    {
+      "type": "paragraph",
+      "text": "A peer connects to dozens of others, learns which pieces each has (bitfields), and requests different pieces from different peers simultaneously. Every received piece is hashed and compared with the metadata; mismatches are discarded and the sender is penalised or banned."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-upload-while-downloading",
+      "text": "4) Upload while downloading"
+    },
+    {
+      "type": "paragraph",
+      "text": "As soon as a piece is verified, the peer announces `have(index)` and can serve it to others. This is what makes the swarm scale: every new downloader adds upload capacity."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-which-pieces-should-a-peer-request-first",
+      "text": "1) Which pieces should a peer request first?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Sequential order",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Request piece 0, then 1, then 2..."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Everyone wants the same early pieces and nobody has unique pieces to trade; if the seed leaves, later pieces may vanish from the swarm."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Rarest-first with random first pieces and endgame mode",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Request the pieces held by the fewest connected peers, which spreads every piece widely and keeps the swarm healthy. Start with a few random pieces so a new peer quickly has something to trade. Near completion, **endgame mode** requests the last few pieces from several peers at once and cancels duplicates."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Streaming playback needs roughly sequential order — a hybrid with a sequential window is used for video."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-encourage-peers-to-upload",
+      "text": "2) How do we encourage peers to upload?"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Tit-for-tat choking**: each peer uploads to the few peers that upload to it fastest (\"unchoked\"), and periodically **optimistically unchokes** a random peer to discover better partners and give newcomers a start. Free-riders who never upload get slow downloads. In a company-internal deployment, incentives aren't needed — every machine is configured to seed for a period."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-keep-the-source-from-becoming-a-bottleneck",
+      "text": "3) How do we keep the source from becoming a bottleneck?"
+    },
+    {
+      "type": "paragraph",
+      "text": "The original seed only needs to upload each piece roughly once; peers then share among themselves. Use rarest-first so pieces from the seed are spread to different peers, and add a few dedicated **super-seeds** (or a web seed/CDN fallback) for reliability when the swarm is small."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why does P2P distribution scale with demand?",
+      "options": [
+        "Servers get bigger",
+        "Every downloader also uploads pieces, adding capacity",
+        "Files are smaller",
+        "Trackers cache files"
+      ],
+      "answer": 1,
+      "explanation": "More peers means more upload bandwidth in the swarm."
+    },
+    {
+      "question": "How are corrupted or malicious pieces detected?",
+      "options": [
+        "Peers vote",
+        "Each piece is hashed and compared with the hash in the metadata",
+        "TCP checksums only",
+        "They can't be"
+      ],
+      "answer": 1,
+      "explanation": "Per-piece hashes make verification local and immediate."
+    },
+    {
+      "question": "Why use rarest-first piece selection?",
+      "options": [
+        "It's alphabetical",
+        "It spreads scarce pieces widely, keeping the swarm healthy",
+        "It's fastest for video",
+        "Trackers require it"
+      ],
+      "answer": 1,
+      "explanation": "Rare pieces are most at risk of disappearing."
+    },
+    {
+      "question": "What does a DHT replace?",
+      "options": [
+        "Piece hashing",
+        "The central tracker for peer discovery",
+        "Uploading",
+        "TCP"
+      ],
+      "answer": 1,
+      "explanation": "A distributed hash table maps info-hashes to peers without a central server."
+    }
+  ]
+}

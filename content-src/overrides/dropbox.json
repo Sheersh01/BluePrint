@@ -1,0 +1,47 @@
+{
+  "solutions": [
+    { "verdict": "bad", "title": "Download through File Server" },
+    { "verdict": "good", "title": "Download from Blob Storage" },
+    { "verdict": "great", "title": "Download from CDN" },
+    { "verdict": "bad", "title": "Add a Sharelist to Metadata" },
+    { "verdict": "good", "title": "Caching to Speed Up Fetching the Sharelist" },
+    { "verdict": "great", "title": "Create a Separate Table for Shares" },
+    { "verdict": "bad", "title": "Update Chunks Field on Each Chunk Upload" },
+    { "verdict": "great", "title": "Server-Side Verification with ETags" }
+  ],
+  "quiz": [
+    {
+      "question": "Which technology distributes content geographically to reduce latency?",
+      "options": ["Content Delivery Network (CDN)", "Database Replica", "Load Balancer with geographic routing policies", "Message Queue"],
+      "answer": 0,
+      "explanation": "A CDN caches files on edge servers around the world so downloads are served from a location close to the user.",
+      "section": "2-users-should-be-able-to-download-a-file-from-any-device"
+    },
+    {
+      "question": "Why should clients upload files directly to blob storage using presigned URLs?",
+      "options": [
+        "It encrypts files automatically",
+        "It avoids sending large file bytes through our own servers",
+        "It removes the need for file metadata",
+        "It guarantees strong consistency"
+      ],
+      "answer": 1,
+      "explanation": "Presigned URLs let the client stream bytes straight to S3, so our file service only handles small metadata requests.",
+      "section": "1-users-should-be-able-to-upload-a-file-from-any-device"
+    },
+    {
+      "question": "What makes resumable uploads of a 50GB file possible?",
+      "options": ["Gzip compression", "Chunking the file and tracking which chunks have been uploaded", "Storing the file in the metadata DB", "Uploading over a WebSocket"],
+      "answer": 1,
+      "explanation": "Splitting the file into 5-10MB chunks with fingerprints means an interrupted upload only needs to resend the missing chunks.",
+      "section": "1-how-can-you-support-large-files"
+    },
+    {
+      "question": "When both compression and encryption are used, what is the correct order?",
+      "options": ["Encrypt, then compress", "Compress, then encrypt", "Order does not matter", "Only one can be used at a time"],
+      "answer": 1,
+      "explanation": "Encrypted data looks random and doesn't compress, so you compress first and then encrypt.",
+      "section": "2-how-can-we-make-uploads-downloads-and-syncing-as-fast-as-possible"
+    }
+  ]
+}

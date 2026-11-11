@@ -1,0 +1,56 @@
+---
+title: Choosing a Database
+subtitle: Start from the access pattern, not the brand name — a decision table for the storage choices that come up in interviews.
+section: tips
+category: Tips & Tricks
+seoTitle: How to Choose a Database in a System Design Interview
+description: SQL vs NoSQL vs cache vs search vs object storage — how to pick storage from access patterns, and how to justify the choice in an interview.
+author: Editorial Team
+published: Nov 11, 2026
+---
+
+"Which database?" is rarely the interesting question — the access pattern is. Interviewers want to hear *why*, in terms of how the data is read and written. Most designs end up with two or three stores, each doing one job well.
+
+## Start With These Questions
+
+1. **How is it read?** By key? By range (time, score)? By arbitrary filters? By text search? By location?
+2. **How is it written?** Rate, size, and whether writes must be transactional across rows.
+3. **How consistent must it be?** Money and inventory vs likes and feeds.
+4. **How big will it get?** Fits on one machine (a few TB) or needs sharding from day one?
+5. **What's the shape?** Rows with relations, documents, a graph, blobs, time series?
+
+## The Decision Table
+
+| If you need… | Reach for | Examples | Watch out for |
+|---|---|---|---|
+| Transactions, relations, flexible queries | Relational (SQL) | PostgreSQL, MySQL | Sharding is manual work at very large scale |
+| Huge write volume, simple key/range access | Wide-column / key-value | Cassandra, DynamoDB | Design tables around queries; few joins |
+| Flexible documents, nested data | Document store | MongoDB, DynamoDB | Cross-document consistency |
+| Sub-millisecond reads, counters, leaderboards | In-memory store | Redis | Memory cost; persistence is secondary |
+| Full-text search, fuzzy match, facets | Search index | Elasticsearch, OpenSearch | Eventually consistent; not a source of truth |
+| Files, images, video, backups | Object storage | S3, GCS | High latency per object; serve via CDN |
+| Metrics and events over time | Time-series store | InfluxDB, TimescaleDB, Prometheus | Usually append-only |
+| Analytics over billions of rows | Columnar warehouse / OLAP | BigQuery, ClickHouse, Snowflake | Not for user-facing transactions |
+| Relationships many hops deep | Graph database | Neo4j | Rarely needed — SQL handles 1–2 hops fine |
+| Nearby things | Geospatial index | PostGIS, Redis GEO, geohash in any store | Hot cells in dense cities |
+| A durable stream of events | Log / message broker | Kafka, Kinesis | It's a pipe, not a query engine |
+
+## Common Combinations
+
+| System | Typical storage |
+|---|---|
+| URL shortener | Key-value or SQL for mappings + Redis cache |
+| Social feed | SQL/NoSQL for posts + Redis for precomputed feeds |
+| Chat | Wide-column (messages by conversation + time) + Redis for presence |
+| E-commerce | SQL for orders, inventory and payments + search index for the catalog |
+| Ride sharing | Redis GEO for live driver locations + SQL for trips |
+| Video / photo app | Object storage + CDN for media, SQL/NoSQL for metadata |
+| Metrics / monitoring | Time-series store + Kafka for ingestion |
+
+## Tips
+
+- **"PostgreSQL" is a fine default.** It handles far more than most people assume (millions of rows per table, JSON, full-text basics, PostGIS). Move off it when you can name the limit you're hitting.
+- **Justify with the access pattern.** "Messages are always read by conversation, newest first, at high write volume — a wide-column store partitioned by `conversationId` and sorted by time fits that exactly."
+- **Separate the source of truth from derived stores.** Search indexes and caches are rebuilt from the primary database; say how (change data capture, events).
+- **Name the partition key** whenever you shard, and check it for hot spots: a celebrity's user ID, today's date, a viral post.
+- **Big blobs never go in the database.** Store them in object storage and keep the URL.

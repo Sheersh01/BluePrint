@@ -1,0 +1,379 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "message-queue",
+  "category": "Common Problems",
+  "title": "Distributed Message Queue",
+  "seoTitle": "Design a Distributed Message Queue Like RabbitMQ or Kafka",
+  "description": "Design a distributed message queue — durable topics and partitions, producers and consumer groups, acknowledgements, ordering, retention and replication.",
+  "tags": [
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    },
+    {
+      "label": "Managing Long Running Tasks",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Amazon",
+      "Microsoft",
+      "Apple",
+      "Confluent"
+    ],
+    "more": 2
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📨",
+      "title": "What is a Distributed Message Queue?",
+      "text": "A message queue lets producers send messages that consumers process later, decoupling the two. Systems like RabbitMQ and Kafka do this durably across many machines at very high throughput."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Producers should be able to publish messages to a named topic.",
+        "Consumers should be able to subscribe and receive messages, with multiple consumers sharing the work.",
+        "Messages should be retained until consumed (or for a configured retention period).",
+        "Consumers should acknowledge messages; unacknowledged messages are redelivered."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Exactly-once transactions across topics.",
+        "Complex routing rules and priorities."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Durable: an acknowledged publish is never lost, even if a broker dies.",
+        "High throughput: millions of messages per second.",
+        "Ordering preserved for messages with the same key.",
+        "Highly available and horizontally scalable."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Cross-region replication."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- publish to topic",
+        "- consume, shared across consumers",
+        "- retention",
+        "- ack + redelivery",
+        "",
+        "Non-functional",
+        "- durable once acked",
+        "- millions msg/s",
+        "- per-key ordering",
+        "- available, scalable"
+      ],
+      "caption": "Message Queue Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Topic**: a named stream of messages.",
+        "**Partition**: an ordered, append-only log that holds part of a topic.",
+        "**Message**: key, payload, offset within its partition.",
+        "**Consumer group**: consumers that share a topic's partitions, each tracking committed offsets.",
+        "**Broker**: a server hosting partitions."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "publish(topic, key, payload) -> { partition, offset }\nsubscribe(topic, groupId) -> stream of messages\ncommit(topic, partition, offset)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-producers-publish-messages",
+      "text": "1) Producers publish messages"
+    },
+    {
+      "type": "paragraph",
+      "text": "A topic is split into partitions spread across brokers. The producer hashes the message key to pick a partition (`hash(key) % P`), so all messages for one key land in the same ordered log. The broker appends the message to the partition's log file on disk — sequential writes are fast."
+    },
+    {
+      "type": "diagram",
+      "file": "01-topics-partitions-and-consumer-groups.svg",
+      "caption": "Topics, partitions and consumer groups"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-consumers-receive-and-share-the-work",
+      "text": "2) Consumers receive and share the work"
+    },
+    {
+      "type": "paragraph",
+      "text": "Within a consumer group, each partition is assigned to exactly one consumer, so the group processes the topic in parallel while each partition stays in order. Consumers **pull** batches from their partitions, which lets them control their own pace."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-messages-are-retained-and-acknowledged",
+      "text": "3) Messages are retained and acknowledged"
+    },
+    {
+      "type": "paragraph",
+      "text": "Instead of deleting messages on consumption, the broker keeps the log for a retention period (e.g. 7 days). Each group commits its **offset** — \"I've processed everything up to here\". If a consumer crashes, its replacement resumes from the last committed offset, so unacknowledged messages are redelivered."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-make-sure-acknowledged-messages-are-never-lost",
+      "text": "1) How do we make sure acknowledged messages are never lost?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Write to one broker's memory",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Ack as soon as the leader has the message in memory."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A crash loses everything not yet flushed."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Write to disk on the leader",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Ack after the leader appends to its log (and fsyncs periodically)."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Survives restarts, but losing the disk or machine still loses data."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Replicate partitions and ack after in-sync replicas",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Each partition has a leader and followers on other brokers. Followers fetch from the leader; the set that is caught up is the **in-sync replica set (ISR)**. With `acks=all`, the producer is acknowledged only once every ISR member has the message. If the leader fails, a controller promotes an in-sync follower, so no acknowledged message is lost."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Higher publish latency; set a minimum ISR size so you don't silently fall back to one copy."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-what-delivery-guarantees-can-we-offer",
+      "text": "2) What delivery guarantees can we offer?"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "At-least-once delivery",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Consumers commit offsets after processing. A crash between processing and commit redelivers the message."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Duplicates are possible, so consumers must be idempotent (dedupe by message ID)."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Effectively-once with idempotent producers and transactions",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Producers attach sequence numbers so brokers drop duplicate retries. For read-process-write pipelines, commit output messages and consumer offsets in one transaction."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "More coordination and latency; only worth it where duplicates are costly."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-scale-throughput",
+      "text": "3) How do we scale throughput?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Add partitions to spread load across more brokers and consumers (parallelism equals partition count). Batch and compress messages on the producer, and serve consumers straight from the OS page cache with zero-copy transfers. Watch for **hot partitions** caused by skewed keys."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "How does a message queue preserve ordering for a given key?",
+      "options": [
+        "Global locks",
+        "All messages with the same key go to the same partition",
+        "Sorting at the consumer",
+        "Timestamps only"
+      ],
+      "answer": 1,
+      "explanation": "Each partition is an ordered log; keyed routing keeps related messages together."
+    },
+    {
+      "question": "What does acks=all with an in-sync replica set guarantee?",
+      "options": [
+        "Exactly-once processing",
+        "An acknowledged message survives the loss of the leader",
+        "Lower latency",
+        "Global ordering"
+      ],
+      "answer": 1,
+      "explanation": "Every in-sync replica has the message before the producer is told it's safe."
+    },
+    {
+      "question": "What limits the parallelism of a consumer group?",
+      "options": [
+        "Number of brokers",
+        "Number of partitions in the topic",
+        "Message size",
+        "Retention period"
+      ],
+      "answer": 1,
+      "explanation": "Each partition is consumed by at most one consumer in the group."
+    },
+    {
+      "question": "With at-least-once delivery, what must consumers do?",
+      "options": [
+        "Process messages twice",
+        "Be idempotent so duplicates are harmless",
+        "Disable commits",
+        "Use bigger batches"
+      ],
+      "answer": 1,
+      "explanation": "A crash before committing an offset causes redelivery."
+    }
+  ]
+}

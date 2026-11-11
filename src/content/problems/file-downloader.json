@@ -1,0 +1,340 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "file-downloader",
+  "category": "Common Problems",
+  "title": "File Downloader Library",
+  "seoTitle": "Design a File Downloader Library with Resume and Parallel Chunks",
+  "description": "Design a client-side file downloader — parallel ranged downloads, pause and resume, retries with backoff, integrity checks, and the server support it needs.",
+  "tags": [
+    {
+      "label": "Handling Large Blobs",
+      "href": "/learn/system-design/patterns/handling-large-blobs"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Facebook"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "⬇️",
+      "title": "What is a File Downloader Library?",
+      "text": "A downloader library is the component an app uses to fetch large files — videos, game assets, offline maps — reliably over flaky networks, with progress, pause/resume and integrity checking, backed by a server that supports it."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Apps should be able to enqueue downloads by URL and receive progress callbacks.",
+        "Users should be able to pause, resume and cancel downloads, including after an app restart.",
+        "Downloads should survive network interruptions and resume where they stopped.",
+        "Completed files should be verified against a checksum."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Peer-to-peer distribution.",
+        "Uploads."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Efficient: saturate available bandwidth for large files without starving the app's other traffic.",
+        "Resilient: no re-downloading of completed bytes after interruptions.",
+        "Battery- and data-aware on mobile (e.g. Wi-Fi only option).",
+        "Server side scales to millions of concurrent downloads via CDN."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "DRM."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- enqueue + progress",
+        "- pause / resume / cancel",
+        "- resume after interruptions",
+        "- checksum verification",
+        "",
+        "Non-functional",
+        "- use bandwidth well",
+        "- never refetch completed bytes",
+        "- battery / data aware",
+        "- CDN-scale serving"
+      ],
+      "caption": "Downloader Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Download task**: URL, destination, total size, ETag, status, priority.",
+        "**Chunk**: a byte range of the file with its own status and bytes written.",
+        "**Manifest**: file size, chunk checksums, overall hash (provided by the server)."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "// Client library\nconst id = downloader.enqueue({ url, dest, priority: \"HIGH\", wifiOnly: true })\ndownloader.onProgress(id, (bytes, total) => ...)\ndownloader.pause(id); downloader.resume(id); downloader.cancel(id)\n\n// Server\nHEAD /files/:id           -> Content-Length, ETag, Accept-Ranges: bytes\nGET  /files/:id           Range: bytes=0-8388607  -> 206 Partial Content\nGET  /files/:id/manifest  -> { size, sha256, chunks: [{ offset, length, sha256 }] }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-enqueue-downloads-and-report-progress",
+      "text": "1) Enqueue downloads and report progress"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **Download Manager** in the library keeps a persistent queue of tasks (in a small local database) and a pool of workers. Progress is the sum of bytes written across chunks, throttled to a few callbacks per second."
+    },
+    {
+      "type": "diagram",
+      "file": "01-client-library-and-server.svg",
+      "caption": "Client library and server"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-pause-resume-and-survive-restarts",
+      "text": "2) Pause, resume and survive restarts"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each chunk's progress is persisted. Pausing stops workers; resuming (even after the app was killed) reloads the task and requests only the remaining bytes of each chunk with `Range` headers. The library sends `If-Range: <ETag>` so if the file changed on the server, it restarts rather than stitching two versions together."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-survive-network-interruptions",
+      "text": "3) Survive network interruptions"
+    },
+    {
+      "type": "paragraph",
+      "text": "Failed chunk requests retry with exponential backoff and jitter. The library listens for connectivity changes and pauses on loss (or when leaving Wi-Fi if `wifiOnly`), resuming automatically."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-verify-integrity",
+      "text": "4) Verify integrity"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each chunk is checked against its checksum from the manifest as it completes; a bad chunk is re-downloaded alone. When all chunks finish, the full file hash is verified before moving it from a temporary path to its destination atomically."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-download-large-files-fast",
+      "text": "1) How do we download large files fast?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Single stream, restart on failure",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "One GET for the whole file."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A drop at 95% of a 4GB file restarts from zero; one TCP connection may not use the available bandwidth."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Resumable single stream",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Track bytes written and resume with a `Range` request from that offset."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Resilient, but still limited by one connection's throughput."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Parallel ranged chunks with adaptive concurrency",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Split the file into chunks (e.g. 8MB) and download several in parallel, writing each at its offset in a pre-allocated file. Adjust concurrency based on observed throughput and errors (more connections on fast networks, fewer on congested or metered ones), and reassign the slowest remaining chunks near the end to avoid stragglers."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Too many connections can be throttled by servers or hurt other app traffic; cap per-host concurrency."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-what-does-the-server-need-to-provide",
+      "text": "2) What does the server need to provide?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Serve files from a **CDN** with `Accept-Ranges: bytes`, strong ETags and correct `Content-Length`, and publish a manifest with chunk checksums. Use signed, expiring URLs for private files, and version file URLs so cached content never mixes versions. On mobile, OS background download APIs can carry transfers when the app isn't running."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Which HTTP feature makes resuming a download possible?",
+      "options": [
+        "Cookies",
+        "Range requests returning 206 Partial Content",
+        "WebSockets",
+        "CORS"
+      ],
+      "answer": 1,
+      "explanation": "The client asks only for the bytes it still needs."
+    },
+    {
+      "question": "Why send If-Range with the ETag when resuming?",
+      "options": [
+        "For authentication",
+        "So a changed file restarts instead of mixing two versions",
+        "To compress data",
+        "To speed up DNS"
+      ],
+      "answer": 1,
+      "explanation": "If the ETag no longer matches, the server returns the full new file."
+    },
+    {
+      "question": "What do per-chunk checksums enable?",
+      "options": [
+        "Faster DNS",
+        "Re-downloading only a corrupted chunk instead of the whole file",
+        "Encryption",
+        "Smaller files"
+      ],
+      "answer": 1,
+      "explanation": "Corruption is detected and repaired locally."
+    },
+    {
+      "question": "Why write to a temporary path and rename on completion?",
+      "options": [
+        "To hide files",
+        "So other code never sees a partial or unverified file",
+        "It's faster",
+        "For compression"
+      ],
+      "answer": 1,
+      "explanation": "Atomic rename finalises only verified files."
+    }
+  ]
+}

@@ -1,0 +1,365 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "autonomous-vehicle-platform",
+  "category": "Common Problems",
+  "title": "Autonomous Vehicle Platform",
+  "seoTitle": "Design the Cloud Platform for Autonomous Vehicles",
+  "description": "Design the cloud platform behind an autonomous vehicle fleet — ingesting petabytes of sensor logs, finding interesting scenarios, simulation at scale, safe over-the-air model rollouts, fleet telemetry and remote assistance.",
+  "tags": [
+    {
+      "label": "Handling Large Blobs",
+      "href": "/learn/system-design/patterns/handling-large-blobs"
+    },
+    {
+      "label": "Managing Long Running Tasks",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🚗",
+      "title": "What is an Autonomous Vehicle Platform?",
+      "text": "A self-driving car makes its driving decisions on board, in real time. The cloud platform behind the fleet does everything else: collects the huge sensor logs from every car, finds the rare situations worth learning from, replays them in simulation to test new software, rolls out updates safely, and lets remote operators help a car that's stuck. Waymo, Cruise and Tesla all build platforms like this."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Vehicles should upload driving logs (camera, lidar, radar, vehicle state) for storage and analysis.",
+        "Engineers should be able to search logs for specific scenarios (e.g. \"cyclist cuts in at night\") and label them.",
+        "New driving software should be tested by replaying millions of scenarios in simulation before release.",
+        "Software and model updates should be rolled out over the air to the fleet in stages.",
+        "Vehicles should stream live telemetry, and remote operators should be able to assist a vehicle that requests help."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "On-vehicle perception and planning algorithms.",
+        "Ride-hailing dispatch (see Uber).",
+        "HD map creation (mentioned briefly)."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Safety: no update reaches the fleet without passing simulation and staged rollout gates; rollbacks are instant.",
+        "Handle ~1-5 TB of raw data per vehicle per day across thousands of vehicles.",
+        "Remote assistance with low latency (< 200 ms round trip) and high availability.",
+        "Driving never depends on cloud connectivity; the car must stay safe when offline.",
+        "Data is retained and traceable for incident investigation and regulators."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Cost optimisation details for storage tiers."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- upload driving logs",
+        "- search + label scenarios",
+        "- simulate before release",
+        "- staged OTA rollouts",
+        "- telemetry + remote assist",
+        "",
+        "Non-functional",
+        "- safety gates + instant rollback",
+        "- TBs per vehicle per day",
+        "- remote assist < 200ms",
+        "- car safe when offline",
+        "- traceable for investigations"
+      ],
+      "caption": "AV Platform Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Vehicle**: ID, hardware version, software version, location, status.",
+        "**Drive log**: time-ranged sensor data split into segments, with metadata and an index of events.",
+        "**Scenario**: a short labelled slice of a log (or a synthetic variant) used for training or testing.",
+        "**Software release**: version, components (models, planner), rollout stage and target cohort.",
+        "**Assistance session**: vehicle, operator, guidance given."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "(vehicle) PUT  /logs/:vehicleId/:segmentId      (resumable chunked upload at depot)\n(vehicle) MQTT telemetry/{vehicleId}            (live state, every second)\nGET  /scenarios/search?query=&tags=\nPOST /simulations { releaseId, scenarioSet } -> { jobId }\nPOST /releases/:id/rollout { cohort, percentage }\n(vehicle) POST /assist/request { context }       -> session"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-getting-logs-off-vehicles",
+      "text": "1) Getting logs off vehicles"
+    },
+    {
+      "type": "paragraph",
+      "text": "Vehicles record everything locally on large SSDs. A small, high-priority subset (events flagged on board: hard braking, disengagements, unusual objects) is uploaded over cellular soon after it happens. The full logs are uploaded over high-bandwidth links when the car returns to the **depot**, using **resumable chunked uploads** into object storage. An ingestion pipeline extracts metadata and builds an index of the log."
+    },
+    {
+      "type": "diagram",
+      "file": "01-log-ingestion.svg",
+      "caption": "Log ingestion"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-finding-and-labelling-scenarios",
+      "text": "2) Finding and labelling scenarios"
+    },
+    {
+      "type": "paragraph",
+      "text": "Offline models run over new logs to tag what happened (pedestrians, weather, manoeuvres) and compute **embeddings** of scenes. Engineers search with filters and similarity (\"more scenes like this one\"), and send interesting slices to labelling. Labelled scenarios become training data and regression tests."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-simulation-before-release",
+      "text": "3) Simulation before release"
+    },
+    {
+      "type": "paragraph",
+      "text": "A candidate release is tested by **replaying** thousands to millions of scenarios: the recorded sensor data is fed to the new software, and its decisions are scored against safety and comfort metrics. Variations (a pedestrian stepping out a second earlier) are generated synthetically. Simulation runs as a massive batch job across a compute cluster."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-rollout-telemetry-and-remote-assistance",
+      "text": "4) Rollout, telemetry and remote assistance"
+    },
+    {
+      "type": "paragraph",
+      "text": "Releases that pass simulation go to a test fleet, then expand in **stages** across cohorts. Every vehicle streams telemetry (position, health, software version) over MQTT. When a vehicle is unsure — a road blocked by construction — it stops safely and requests **remote assistance**; an operator views its sensor feed and suggests a path, which the car validates before acting."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-handle-petabytes-of-logs",
+      "text": "1) How do we handle petabytes of logs?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Upload everything over cellular",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Stream all sensor data to the cloud continuously."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Terabytes per car per day over cellular is impossibly expensive and unreliable."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Depot uploads with tiered storage",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Upload full logs at depots and keep them in object storage, moving older data to cold tiers."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Most of the data is uneventful highway driving that is rarely used but costly to keep."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Triage on board and in the cloud",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Vehicles **prioritise** on board: flagged events at full fidelity, ordinary driving downsampled. In the cloud, a triage pipeline keeps full-resolution data for interesting segments (by tags and novelty of embeddings) and keeps only compressed or summary data for the rest after a retention period. Everything needed for **incident investigation** is kept with legal holds."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "On-board triage must not miss important events; err toward keeping data around anomalies."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-roll-out-software-safely",
+      "text": "2) How do we roll out software safely?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each release passes **simulation gates** (no regression on the safety-critical scenario suite), then a closed-course and test-fleet phase, then **staged rollout** by cohort — by city, hardware version and percentage — with automatic halts if disengagement or incident metrics worsen. Vehicles keep the **previous version installed** in a second partition (A/B partitions), so rollback is a restart into the known-good version. Updates install only while parked."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Stress that the car never depends on the cloud to drive: a lost connection or a failed update leaves it on the last known-good software, able to reach a safe stop."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-make-remote-assistance-responsive",
+      "text": "3) How do we make remote assistance responsive?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Assistance sessions use a low-latency connection from the nearest region, carrying a **compressed, reduced view** (key camera feeds, the car's perception output) rather than raw sensors. The operator gives **high-level guidance** (a path or permission to proceed), never direct steering, so latency spikes can't cause unsafe motion. Requests are routed to available operators by region, with queues monitored to keep wait time low."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why are full driving logs uploaded at depots rather than over cellular?",
+      "options": [
+        "Cellular is insecure",
+        "Terabytes per vehicle per day is too costly and slow over cellular",
+        "Depots are closer to the cloud",
+        "Regulations"
+      ],
+      "answer": 1,
+      "explanation": "Only flagged events go over cellular; bulk data waits for high-bandwidth links."
+    },
+    {
+      "question": "What must a release pass before reaching the fleet?",
+      "options": [
+        "Nothing",
+        "Simulation gates on safety scenarios, then staged rollout with halts",
+        "Only unit tests",
+        "A manager's approval"
+      ],
+      "answer": 1,
+      "explanation": "Safety requires evidence from simulation and gradual exposure."
+    },
+    {
+      "question": "Why do vehicles keep two software partitions?",
+      "options": [
+        "Speed",
+        "So rollback is instant to the previous known-good version",
+        "To run two drivers",
+        "For logging"
+      ],
+      "answer": 1,
+      "explanation": "A/B partitions make updates recoverable."
+    },
+    {
+      "question": "What does a remote operator send to a stuck vehicle?",
+      "options": [
+        "Direct steering commands",
+        "High-level guidance the car validates before acting",
+        "A new map",
+        "Nothing"
+      ],
+      "answer": 1,
+      "explanation": "The car stays responsible for safe motion, so latency can't cause harm."
+    }
+  ]
+}

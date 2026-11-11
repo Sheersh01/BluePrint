@@ -1,0 +1,33 @@
+{
+  "quiz": [
+    {
+      "question": "Which rate limiting algorithm best handles bursty traffic patterns while maintaining long-term limits?",
+      "options": ["Fixed Window Counter", "Token Bucket", "Sliding Window Counter", "Sliding Window Log"],
+      "answer": 1,
+      "explanation": "Tokens accumulate up to the bucket size, allowing short bursts while the refill rate enforces the long-term limit."
+    },
+    {
+      "question": "Which HTTP status code should be returned when a client is rate limited?",
+      "options": ["400 Bad Request", "403 Forbidden", "429 Too Many Requests", "503 Service Unavailable"],
+      "answer": 2,
+      "explanation": "429 tells the client it exceeded its quota; headers like Retry-After say when to try again."
+    },
+    {
+      "question": "Why is a centralized store such as Redis used for a distributed rate limiter?",
+      "options": [
+        "So every gateway instance sees the same counters",
+        "Because Redis stores data on disk only",
+        "To encrypt requests",
+        "To avoid using any memory"
+      ],
+      "answer": 0,
+      "explanation": "Requests from one client hit many gateway instances; shared counters keep the limit global."
+    },
+    {
+      "question": "What is the main weakness of the fixed window counter?",
+      "options": ["It needs too much memory", "Bursts at window boundaries can allow up to 2× the limit", "It cannot be implemented in Redis", "It is too precise"],
+      "answer": 1,
+      "explanation": "A client can send a full quota at the end of one window and again at the start of the next."
+    }
+  ]
+}

@@ -1,0 +1,363 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "stack-overflow",
+  "category": "Common Problems",
+  "title": "Stack Overflow",
+  "seoTitle": "Design a Q&A Platform or Forum like Stack Overflow or Quora",
+  "description": "Design a question-and-answer forum — posting questions and answers, voting and reputation, ranking answers, tags and search, and serving a read-heavy workload.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    },
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "💬",
+      "title": "What is a Q&A Platform?",
+      "text": "A question-and-answer platform (Stack Overflow, Quora, or any forum with threads and replies) lets users post questions, answer them, and vote on both. Votes decide which answers rise to the top and earn authors **reputation**, which in turn unlocks moderation privileges. Most traffic is anonymous visitors arriving from search engines to read an existing question."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to post questions with tags, and answers to questions.",
+        "Users should be able to upvote and downvote questions and answers, and the asker can accept an answer.",
+        "Users should view a question page with answers ranked by votes.",
+        "Users should be able to search questions and browse by tag.",
+        "Users earn reputation from votes on their posts."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Comments, edits and revision history (discussed briefly).",
+        "Badges, bounties and chat.",
+        "Spam and moderation queues."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Read-heavy: ~100:1 reads to writes; question pages should load in < 200 ms globally.",
+        "Vote counts and reputation can be eventually consistent (seconds).",
+        "A user can vote only once per post.",
+        "Scale to ~50M questions and ~1B page views per month."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Real-time updates to an open question page (nice to have)."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- post questions + answers",
+        "- vote, accept answer",
+        "- question page ranked by votes",
+        "- search + tags",
+        "- reputation",
+        "",
+        "Non-functional",
+        "- 100:1 reads, < 200ms pages",
+        "- counts eventually consistent",
+        "- one vote per user per post",
+        "- 1B views / month"
+      ],
+      "caption": "Q&A Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**User**: profile and reputation.",
+        "**Question**: title, body, tags, author, score, answer count, accepted answer.",
+        "**Answer**: question, body, author, score.",
+        "**Vote**: user, post, direction (+1/-1).",
+        "**Tag**: name, question count."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /questions { title, body, tags[] }\nPOST /questions/:id/answers { body }\nGET  /questions/:id -> { question, answers[] (sorted) }\nPOST /posts/:id/votes { direction: up|down|none }\nPOST /questions/:id/accept { answerId }\nGET  /search?q=&tags=&sort=relevance|votes|newest\nGET  /tags/:tag/questions?sort=&cursor="
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-posting-questions-and-answers",
+      "text": "1) Posting questions and answers"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Post Service** writes questions and answers to a relational database (Postgres or SQL Server). Posts are small text documents, and the data is highly relational (questions → answers → votes → users), which suits SQL well."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-voting-and-accepting",
+      "text": "2) Voting and accepting"
+    },
+    {
+      "type": "paragraph",
+      "text": "A vote is a row in `votes` with a unique key `(userId, postId)`, so each user votes once; changing a vote updates that row. Each vote also adjusts the post's `score` and enqueues a **reputation event** for the author."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-viewing-a-question-page",
+      "text": "3) Viewing a question page"
+    },
+    {
+      "type": "paragraph",
+      "text": "The page needs the question, its answers sorted by accepted-first then score, and author names. That's one indexed query on `answers(questionId, score)`. Since most visitors are anonymous, the **rendered page is cached** at the CDN and in Redis for a short time and invalidated when the question changes."
+    },
+    {
+      "type": "diagram",
+      "file": "01-question-page.svg",
+      "caption": "Question page"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-search-and-tags",
+      "text": "4) Search and tags"
+    },
+    {
+      "type": "paragraph",
+      "text": "Posts are indexed into **Elasticsearch** via CDC, with title, body, tags and score as fields. Searches combine text relevance with score and recency. Tag pages are served from an index on `(tag, createdAt)` / `(tag, score)`."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-serve-a-read-heavy-workload-cheaply",
+      "text": "1) How do we serve a read-heavy workload cheaply?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Query the database for every page view",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Render each question page from the database on every request."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A popular question linked from a search engine gets thousands of identical queries a second."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Cache data in Redis",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Cache question and answer data in Redis, with short TTLs, and render per request."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Still renders every page and serves everything from origin servers."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Edge-cached pages for anonymous users",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "The vast majority of views are logged-out readers who all see the same page. Serve them **fully rendered HTML from the CDN** with a TTL of a minute or so, purged when the question changes. Logged-in users get the same cached page plus a small personalised fragment (their vote state, reputation) loaded separately. Database load becomes proportional to writes, not reads."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Vote counts on cached pages can be a minute stale — acceptable for this product."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-keep-vote-counts-and-reputation-correct",
+      "text": "2) How do we keep vote counts and reputation correct?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Store votes as rows (source of truth) and **denormalised counters** (`score` on posts, `reputation` on users) for fast reads. The vote insert and score change happen in one transaction. Reputation is updated **asynchronously** from vote events, since a popular answer may receive many votes and the author's row would otherwise be a hot spot. A nightly job recomputes reputation from the votes table to correct any drift."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention vote fraud: detect voting rings (users who repeatedly upvote each other) in a batch job and reverse those votes and their reputation."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-rank-answers",
+      "text": "3) How do we rank answers?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Default order is **accepted answer first, then score, then age**. Score alone favours early answers, so offer \"newest\" and \"trending\" (recent votes weighted more). On Quora-like feeds, a ranking model also considers the answerer's expertise on the topic and reader engagement."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "How do we enforce one vote per user per post?",
+      "options": [
+        "Client-side checks",
+        "A unique key on (userId, postId) in the votes table",
+        "Rate limiting",
+        "Cookies"
+      ],
+      "answer": 1,
+      "explanation": "The database rejects duplicates; changing a vote updates the row."
+    },
+    {
+      "question": "Why cache fully rendered pages at the CDN?",
+      "options": [
+        "Search engines require it",
+        "Most views are anonymous readers who all see the same page",
+        "It's more secure",
+        "It reduces writes"
+      ],
+      "answer": 1,
+      "explanation": "Edge caching makes database load depend on writes, not reads."
+    },
+    {
+      "question": "Why update reputation asynchronously?",
+      "options": [
+        "Reputation doesn't matter",
+        "To avoid a hot row when a popular answer gets many votes",
+        "It's required by SQL",
+        "To save storage"
+      ],
+      "answer": 1,
+      "explanation": "Events batch updates; a nightly recompute corrects drift."
+    },
+    {
+      "question": "What's the default answer order?",
+      "options": [
+        "Alphabetical",
+        "Accepted first, then by score",
+        "Random",
+        "Newest first only"
+      ],
+      "answer": 1,
+      "explanation": "Other sorts are offered because score favours early answers."
+    }
+  ]
+}

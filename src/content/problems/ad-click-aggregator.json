@@ -1,0 +1,446 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "ad-click-aggregator",
+  "category": "Common Problems",
+  "title": "Ad Click Aggregator",
+  "seoTitle": "Design an Ad Click Aggregator",
+  "description": "Learn how to design Ad Click Aggregator: requirements, core entities, API, high-level design and deep dives.",
+  "tags": [
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Evan King",
+  "published": "Jul 7, 2024",
+  "updated": "Feb 15, 2026",
+  "updatedLabel": "Updated",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Rippling",
+      "W"
+    ],
+    "more": 4
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🖱️",
+      "title": "What is an Ad Click Aggregator",
+      "text": "An Ad Click Aggregator is a system that collects and aggregates data on ad clicks. It is used by advertisers to track the performance of their ads and optimize their campaigns. For our purposes, we will assume these are ads displayed on a website or app, like Facebook."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users can click on an ad and be redirected to the advertiser's website",
+        "Advertisers can query ad click metrics over time with a minimum granularity of 1 minute"
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Ad targeting",
+        "Ad serving",
+        "Cross device tracking",
+        "Integration with offline marketing channels"
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements of the system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "paragraph",
+      "text": "Before we jump into our non-functional requirements, it's important to ask your interviewer about the scale of the system. For this design in particular, the scale will have a large impact on the database design and the overall architecture."
+    },
+    {
+      "type": "paragraph",
+      "text": "We are going to design for a system that has 10M active ads and a peak of 10k clicks per second. Since traffic varies throughout the day and 10k is our peak (not sustained) rate, the average throughput will be much lower. If we assume the average is roughly 1k clicks per second (a common heuristic is peak ≈ 10x average), that gives us about 1k * 86,400 seconds/day ≈ 100M clicks per day."
+    },
+    {
+      "type": "paragraph",
+      "text": "With that in mind, let's document the non-functional requirements:"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Scalable to support a peak of 10k clicks per second",
+        "Low latency analytics queries for advertisers (sub-second response time)",
+        "Fault tolerant and accurate data collection. We should not lose any click data.",
+        "As realtime as possible. Advertisers should be able to query data as soon as possible after the click.",
+        "Idempotent click tracking. We should not count the same click multiple times."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Fraud or spam detection",
+        "Demographic and geo profiling of users",
+        "Conversion tracking"
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Here's how it might look on your whiteboard:"
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Scale",
+        "10M ads at any given time",
+        "10k ad clicks per second at peak"
+      ],
+      "caption": "Functional Requirements"
+    },
+    {
+      "type": "paragraph",
+      "text": "- Users click an ad and get redirected to the advertiser's website"
+    },
+    {
+      "type": "paragraph",
+      "text": "- Advertisers can query click metrics over time w/ 1 minute min granularity"
+    },
+    {
+      "type": "diagram",
+      "file": "01-requirements.svg",
+      "caption": "Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "For this question, which is less of a user-facing product and more focused on data processing, we're going to follow the delivery framework outlined here, focusing on the system interface and the data flow."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "system-interface",
+      "text": "System Interface"
+    },
+    {
+      "type": "paragraph",
+      "text": "For data processing questions like this one, it helps to start by defining the system's interface. This includes clearly outline what data the system receives and what it outputs, establishing a clear boundary of the system's functionality. The inputs and outputs of this system are very simple, but it's important to get these right!"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Input**: Ad click data from users.",
+        "**Output**: Ad click metrics for advertisers."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "data-flow",
+      "text": "Data Flow"
+    },
+    {
+      "type": "paragraph",
+      "text": "The data flow is the sequential series of steps we'll cover in order to get from the inputs to our system to the outputs. Clarifying this flow early will help to align with our interviewer before the high-level design. For the ad click aggregator:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "User clicks on an ad on a website.",
+        "The click is tracked and stored in the system.",
+        "The user is redirected to the advertiser's website.",
+        "Advertisers query the system for aggregated click metrics."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Note that this is simple, we will improve upon as we go, but it's important to start simple and build up from there."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-can-click-on-ads-and-be-redirected-to-the-target",
+      "text": "1) Users can click on ads and be redirected to the target"
+    },
+    {
+      "type": "paragraph",
+      "text": "Let's start with the easy part, when a user clicks on an ad in their browser, we need to make sure that they're redirected to the advertiser's website. We'll introduce an Ad Placement Service which will be responsible for placing ads on the website and associating them with the correct redirect URL. Think of this as the service that decides which ad to show a user and delivers the ad creative (image, text, etc.) along with metadata like the redirect URL. We're treating it as a black box since ad targeting and serving are out of scope. We just need to know that it exists and provides the ads that users see."
+    },
+    {
+      "type": "paragraph",
+      "text": "When a user clicks on an ad which was placed by the Ad Placement Service, we will send a request to our /click endpoint, which will track the click and then redirect the user to the advertiser's website."
+    },
+    {
+      "type": "paragraph",
+      "text": "Handle Redirect"
+    },
+    {
+      "type": "paragraph",
+      "text": "There are two ways we can handle this redirect, with one being simpler and the other being more robust."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-advertisers-can-query-ad-click-metrics-over-time-at-1-minute-intervals",
+      "text": "2) Advertisers can query ad click metrics over time at 1 minute intervals"
+    },
+    {
+      "type": "paragraph",
+      "text": "Our users were successfully redirected, now let's focus on the advertisers. They need to be able to quickly query metrics about their ads to see how they're performing. We'll expand on the click processor path that we introduced above by breaking down some options for how a click is processed and stored."
+    },
+    {
+      "type": "paragraph",
+      "text": "Once our /click endpoint receives a request what happens next?"
+    },
+    {
+      "type": "pattern",
+      "title": "Pattern: Scaling Writes",
+      "text": "Ad click aggregation is a textbook scaling writes problem. We're ingesting 10k clicks per second at peak, which dwarfs the read load from advertisers querying metrics. The entire architecture (stream buffering with Kafka/Kinesis, pre-aggregation in Flink, and partitioning by AdId) is driven by the need to handle high write throughput without losing data.",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-can-we-scale-to-support-10k-clicks-per-second",
+      "text": "1) How can we scale to support 10k clicks per second?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Let's walk through each bottleneck the system could face from the moment a click is captured and how we can overcome it:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Click Processor Service**: We can easily scale this service horizontally by adding more instances. Most modern cloud providers like AWS, Azure, and GCP provide managed services that automatically scale services based on CPU or memory usage. We'll need a load balancer in front of the service to distribute the load across instances.",
+        "**Stream**: Both Kafka and Kinesis are distributed and can handle a large number of events per second but need to be properly configured. Kinesis, for example, has a limit of 1MB/s or 1000 records/s per shard, so we'll need to add some sharding. Sharding by AdId is a natural choice, this way, the stream processor can read from multiple shards in parallel since they will be independent of each other (all events for a given AdId will be in the same shard).",
+        "**Stream Processor**: The stream processor, like Flink, can also be scaled horizontally by adding more tasks or jobs. We'll have a separate Flink job reading from each shard doing the aggregation for the AdIds in that shard.",
+        "**OLAP Database**: Managed OLAP warehouses like Snowflake or BigQuery handle scaling automatically—you don't control data placement directly. For self-managed solutions like ClickHouse, you can shard by AdvertiserId so all data for a given advertiser lives on the same node, making queries for that advertiser's ads faster. This is in anticipation of advertisers querying for all of their active ads in a single view. Of course, it's important to monitor query performance to ensure it's meeting SLAs."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "With the above scaling strategies, we should be able to handle a peak of 10k clicks per second. **There is just one remaining issue, hot shards.** Consider the case where Nike just launched a new Ad with Lebron James. This Ad is getting a lot of clicks and all of them are going to the same shard. This shard is now overwhelmed, which increases latency and, in the worst case, could even cause data loss."
+    },
+    {
+      "type": "paragraph",
+      "text": "To solve the hot shard problem, we need a way of further partitioning the data. One popular approach is to update the partition key by appending a random number to the AdId. We could do this only for the popular ads as determined by ad spend or previous click volume. This way, the partition key becomes AdId:0-N where N is the number of additional partitions for that AdId."
+    },
+    {
+      "type": "paragraph",
+      "text": "When writing to the OLAP database, Flink strips the suffix and uses the original AdId as the key. Since we're doing upserts with SUM aggregation, concurrent writes from different partitions combine correctly. Alternatively, you could store with sub-keys and aggregate at query time, but stripping the suffix before writing is cleaner for query performance."
+    },
+    {
+      "type": "paragraph",
+      "text": "Scaling"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-can-we-ensure-that-we-don-t-lose-any-click-data",
+      "text": "2) How can we ensure that we don't lose any click data?"
+    },
+    {
+      "type": "paragraph",
+      "text": "The first thing to note is that we are already using a stream like Kafka or Kinesis to store the click data. By default, these streams are distributed, fault-tolerant, and highly available. Kafka replicates data across multiple brokers within a cluster, and Kinesis replicates across multiple availability zones within a region. Even if a node goes down, the data is not lost. Importantly for our system, they also allow us to enable persistent storage, so even if the data is consumed by the stream processor, it is still stored in the stream for a certain period of time."
+    },
+    {
+      "type": "paragraph",
+      "text": "We can configure a retention period of 7 days, for example, so that if, for some reason, our stream processor goes down, it will come back up and can read the data that it lost from the stream again."
+    },
+    {
+      "type": "diagram",
+      "file": "02-stream-retention-policy.svg",
+      "caption": "Stream Retention Policy"
+    },
+    {
+      "type": "paragraph",
+      "text": "Stream processors like Flink also have a feature called checkpointing. This is where the processor periodically writes its state to a persistent storage like S3. If it goes down, it can read the last checkpoint and resume processing from where it left off. This is particularly useful when the aggregation windows are large, like a day or a week. You can imagine we have a week's worth of data in memory being aggregated and if the processor goes down, we don't want to lose all that work."
+    },
+    {
+      "type": "paragraph",
+      "text": "For our case, however, our aggregation windows are very small. Candidates often propose using checkpointing when I ask this question in interview, but I'll usually push back and ask if it really makes sense given the small aggregation windows. If Flink were to go down, we would have lost, at most, a minute's worth of aggregated data. Given persistence is enabled on the stream, we can replay from a known timestamp and re-aggregate."
+    },
+    {
+      "type": "paragraph",
+      "text": "These types of identifications that somewhat go against the grain are really effective ways to show seniority. A well-studied candidate may remember reading about checkpointing and propose it as a solution, but an experienced candidate will instead think critically about whether it's actually necessary given the context of the problem."
+    },
+    {
+      "type": "paragraph",
+      "text": "Click data matters, a lot. If we lose click data, we lose money. So we need to make sure that our data is correct. This is a tough balance, because guaranteeing correctness and low latency are often at odds. We can balance the two by introducing periodic reconciliation."
+    },
+    {
+      "type": "paragraph",
+      "text": "Despite our best efforts with the above measures, things could still go wrong. Transient processing errors in Flink, bad code pushes, out-of-order events in the stream, etc., could all lead to slight inaccuracies in our data. To catch these, we can introduce a periodic reconciliation job that runs every hour or day."
+    },
+    {
+      "type": "paragraph",
+      "text": "At the end of the stream, alongside the stream processors, we can also dump the raw click events to a data lake like S3. Both Kafka and Kinesis support this natively — Kafka through Kafka Connect S3 Sink Connector, and Kinesis through Kinesis Data Firehose — making it straightforward to continuously archive raw events without adding load to Flink. Then, as with the \"good\" answer in \"Advertisers can query ad click metrics over time at 1-minute intervals\" above, we can run a periodic batch job (e.g. daily with Spark) that reads all the raw click events from the data lake and re-aggregates them. This way, we can compare the results of the batch job to the results of the stream processor and ensure that they match. If they don't, we can investigate the discrepancies and fix the root cause while updating the data in the OLAP DB with the correct values."
+    },
+    {
+      "type": "diagram",
+      "file": "03-reconciliation.svg",
+      "caption": "Reconciliation"
+    },
+    {
+      "type": "paragraph",
+      "text": "This essentially combines our two solutions, real-time stream processing and periodic batch processing, to ensure that our data is not only fast but also accurate. You may hear this referred to as a Lambda architecture. It consists of a speed layer (Flink) for low-latency results and a batch layer (Spark) for correctness. The batch layer acts as a source of truth that periodically corrects any inaccuracies from the speed layer."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-can-we-prevent-abuse-from-users-clicking-on-ads-multiple-times",
+      "text": "3) How can we prevent abuse from users clicking on ads multiple times?"
+    },
+    {
+      "type": "paragraph",
+      "text": "While modern systems have advanced fraud detection systems, which we have considered out of scope, we still want to come up with a way to enforce ad click idempotency. ie. if a user clicks on an ad multiple times, we only count it as one click."
+    },
+    {
+      "type": "paragraph",
+      "text": "Let's breakdown a couple of ways to do this:"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-how-can-we-ensure-that-advertisers-can-query-metrics-at-low-latency",
+      "text": "4) How can we ensure that advertisers can query metrics at low latency?"
+    },
+    {
+      "type": "paragraph",
+      "text": "This was largely solved by the pre-processing of the data in real-time. Whether using the \"good\" solution with periodic batch processing or the \"great\" solution with real-time stream processing, the data is already aggregated and stored in the OLAP database making the queries fast."
+    },
+    {
+      "type": "paragraph",
+      "text": "Where this query can still be slow is when we are aggregating over larger time windows, like days, weeks, or even years. In this case, we can pre-aggregate the data in the OLAP database. This can be done by creating a new table that stores the aggregated data at a higher level of granularity, like daily or weekly. This can be via a nightly cron job that runs a query to aggregate the data and store it in the new table. When an advertiser queries the data, they can query the pre-aggregated table for the higher level of granularity and then drill down to the lower level of granularity if needed."
+    },
+    {
+      "type": "paragraph",
+      "text": "Pre-aggregating the data in the OLAP database is a common technique to improve query performance. It can be thought of similar to a form of caching. We are trading off storage space for query performance for the most common queries."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "paragraph",
+      "text": "Putting it all together, one final design could look like this:"
+    },
+    {
+      "type": "diagram",
+      "file": "04-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Which processing model provides the lowest latency for real-time analytics?",
+      "options": [
+        "Batch processing with periodic scheduled jobs",
+        "Stream processing",
+        "Hybrid processing",
+        "Manual processing"
+      ],
+      "answer": 1,
+      "explanation": "Stream processors (e.g. Flink) aggregate events continuously as they arrive instead of waiting for a batch window."
+    },
+    {
+      "question": "Why redirect the user to the advertiser through our own click endpoint?",
+      "options": [
+        "To compress the page",
+        "So every click is recorded before the redirect",
+        "To bypass the advertiser's CDN",
+        "To cache the ad image"
+      ],
+      "answer": 1,
+      "explanation": "A server-side redirect guarantees the click is captured — client-side tracking can be blocked or lost."
+    },
+    {
+      "question": "What does a periodic batch reconciliation job protect against?",
+      "options": [
+        "Slow page loads",
+        "Inaccuracies in the real-time stream aggregates",
+        "Too many advertisers",
+        "Expired TLS certificates"
+      ],
+      "answer": 1,
+      "explanation": "Re-computing from raw events catches anything the streaming path dropped or double-counted, since clicks are billed."
+    },
+    {
+      "question": "How do you prevent the same user's click from being counted twice?",
+      "options": [
+        "Rate limit the advertiser",
+        "Deduplicate using a unique impression/click ID",
+        "Store clicks in a CDN",
+        "Use a bigger Kafka cluster"
+      ],
+      "answer": 1,
+      "explanation": "Tagging each ad impression with a unique ID lets the system drop repeated clicks for the same impression."
+    }
+  ]
+}

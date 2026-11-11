@@ -1,0 +1,771 @@
+{
+  "section": "code-review",
+  "slug": "money-transfer",
+  "category": "Code Review",
+  "title": "Money Transfer",
+  "subtitle": "A naive Python transfer function. Find what breaks — validation, partial failures, races, retries, timeouts — and fix it.",
+  "seoTitle": "Code Review Interview — Fix a Naive Money Transfer Function",
+  "description": "A code-review interview question — a naive Python money transfer function with partial failures, race conditions, duplicate retries and external timeouts, and how to fix each one.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Validation, DB transactions, concurrency control, idempotency, external service timeouts, reconciliation, async notifications."
+        }
+      ],
+      "title": "Core focus"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "quick-reference-learn-this-first",
+      "text": "Quick Reference (Learn This First)"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Problem",
+          "Wrong Instinct",
+          "Correct Solution"
+        ],
+        [
+          "Same request retried (client retry)",
+          "—",
+          "**Idempotency key**"
+        ],
+        [
+          "Two different requests racing on same balance",
+          "Idempotency key",
+          "**Row lock / atomic DB update**"
+        ],
+        [
+          "Debit + credit + transaction record must stay consistent",
+          "Try/catch everywhere",
+          "**DB transaction (BEGIN … COMMIT / ROLLBACK)**"
+        ],
+        [
+          "Notification fails",
+          "Roll back transfer",
+          "**Async queue/event + retry after commit**"
+        ],
+        [
+          "External bank API times out",
+          "Retry transfer blindly",
+          "**Query status by reference ID + reconciliation**"
+        ]
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Mental model (decision tree)"
+    },
+    {
+      "type": "code",
+      "code": "Same request repeated?\n        ↓\n   Idempotency key\n\nDifferent requests racing?\n        ↓\n  DB locking / atomic update\n\nDebit + credit + transaction record?\n        ↓\n   DB transaction\n\nNotification?\n        ↓\n Async queue after commit\n\nExternal service timeout?\n        ↓\n Query status → reconcile (never blind retry)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "1-the-starting-point-naive-python-transfer-code",
+      "text": "1. The Starting Point — Naive Python Transfer Code"
+    },
+    {
+      "type": "paragraph",
+      "text": "The function you're handed in the interview:"
+    },
+    {
+      "type": "code",
+      "code": "def transfer(sender_id, receiver_id, amount):\n    sender = get_user(sender_id)\n    receiver = get_user(receiver_id)\n\n    if not sender or not receiver:\n        return {\"error\": \"User not found\"}\n\n    if sender.balance >= amount:\n        sender.balance -= amount\n        receiver.balance += amount\n\n        save_user(sender)       # can succeed\n        save_user(receiver)     # can fail → money lost\n        create_transaction(sender_id, receiver_id, amount)  # can fail → no record\n        send_notification(receiver_id, amount)                # can fail → should NOT rollback\n\n        return {\"status\": \"success\"}\n    return {\"error\": \"Insufficient balance\"}"
+    },
+    {
+      "type": "label",
+      "text": "Flow (what goes wrong step by step)"
+    },
+    {
+      "type": "code",
+      "code": "sender.balance -= amount\nreceiver.balance += amount\n        ↓\nsave sender\n        ↓\nsave receiver\n        ↓\ncreate transaction\n        ↓\nsend notification\n        ↓\nreturn"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Why this matters in interviews**: A simple \"transfer money\" function is a gateway into distributed systems thinking — validation, consistency, concurrency, idempotency, and external dependencies."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "2-what-most-candidates-catch",
+      "text": "2. What Most Candidates Catch ✅"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-1-validate-both-users",
+      "text": "2.1 Validate Both Users"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Sender exists",
+        "Receiver exists"
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "**Also add**:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Sender ≠ receiver",
+        "Sender is active",
+        "Account is allowed to transfer"
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-2-don-t-permanently-update-balances-before-safe-commit",
+      "text": "2.2 Don't Permanently Update Balances Before Safe Commit"
+    },
+    {
+      "type": "paragraph",
+      "text": "Correct instinct. The current code updates balances and saves them in separate steps — multiple failure points can leave money inconsistent."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-3-handle-failures",
+      "text": "2.3 Handle Failures"
+    },
+    {
+      "type": "paragraph",
+      "text": "Correct direction, but **\"add try/catch everywhere\" is not enough**."
+    },
+    {
+      "type": "paragraph",
+      "text": "The interviewer will ask: **\"What exactly do you do inside the catch?\"**"
+    },
+    {
+      "type": "paragraph",
+      "text": "That's where system-design thinking matters — rollback, atomicity, reconciliation, not just logging."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "3-what-most-candidates-miss",
+      "text": "3. What Most Candidates Miss ⚠️"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-1-race-condition-concurrent-transfers",
+      "text": "3.1 Race Condition / Concurrent Transfers"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Scenario**: Sender has ₹1,000. Two requests arrive simultaneously:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Request A: transfer ₹800",
+        "Request B: transfer ₹800"
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Both read `balance = ₹1000`, both pass `if sender.balance >= amount`, and the user effectively transfers ₹1,600 despite having ₹1,000."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Atomic balance updates / concurrency control (see Section 5)."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-2-partial-failure-sender-saved-receiver-failed",
+      "text": "3.2 Partial Failure — Sender Saved, Receiver Failed"
+    },
+    {
+      "type": "code",
+      "code": "Sender:   ₹2000 → ₹1200  ✅\nReceiver: unchanged      ❌"
+    },
+    {
+      "type": "paragraph",
+      "text": "Money disappeared. **This is arguably the biggest flaw.**"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Database transaction so balance changes happen together (all-or-nothing)."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-3-transaction-record-fails-after-balances-change",
+      "text": "3.3 Transaction Record Fails After Balances Change"
+    },
+    {
+      "type": "paragraph",
+      "text": "Even worse:"
+    },
+    {
+      "type": "code",
+      "code": "sender updated ✅\nreceiver updated ✅\ntransaction creation ❌"
+    },
+    {
+      "type": "paragraph",
+      "text": "Money moved, but no reliable transaction record. Serious consistency issue for financial systems."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Include transaction record creation inside the same DB transaction as debit/credit."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-4-duplicate-requests-retries",
+      "text": "3.4 Duplicate Requests / Retries"
+    },
+    {
+      "type": "paragraph",
+      "text": "Client sends `POST /transfer`. Server succeeds, but response is lost. Client retries → ₹500 transferred twice."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Idempotency key / transaction ID (see Section 6)."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-5-amount-validation",
+      "text": "3.5 Amount Validation"
+    },
+    {
+      "type": "paragraph",
+      "text": "Code doesn't check `amount > 0`. Someone could send `amount = -500`."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Also consider**: maximum transfer limits, decimal precision, currency."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-6-notification-should-not-determine-transaction-success",
+      "text": "3.6 Notification Should Not Determine Transaction Success"
+    },
+    {
+      "type": "paragraph",
+      "text": "Current flow ties notification to success. If notification fails — should the transfer roll back?"
+    },
+    {
+      "type": "paragraph",
+      "text": "**No.** Notification is a secondary operation."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Better flow**:"
+    },
+    {
+      "type": "code",
+      "code": "Transfer committed\n       ↓\nReturn success\n       ↓\npublish event\n       ↓\nnotification service (retry on failure)"
+    },
+    {
+      "type": "paragraph",
+      "text": "This is where **message queues/events** enter your HLD."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "4-important-correction-how-to-phrase-atomicity",
+      "text": "4. Important Correction — How to Phrase Atomicity"
+    },
+    {
+      "type": "callout",
+      "variant": "warning",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"First the transaction needs to be successful, only then the amount goes to receiver.\""
+        }
+      ],
+      "title": "Imprecise"
+    },
+    {
+      "type": "label",
+      "text": "✅ Precise"
+    },
+    {
+      "type": "paragraph",
+      "text": "There isn't a separate mysterious \"transaction\" before changing balances. The balance updates and transaction record should be **one atomic unit**:"
+    },
+    {
+      "type": "code",
+      "code": "BEGIN DB TRANSACTION\n\nvalidate balance\nlock/check sender balance\ndebit sender\ncredit receiver\ncreate transaction record\n\nCOMMIT"
+    },
+    {
+      "type": "paragraph",
+      "text": "If anything critical fails → **ROLLBACK**."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "5-concurrency-control-two-different-requests-racing",
+      "text": "5. Concurrency Control — Two Different Requests Racing"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Assume we're using a relational database and your transfer operation is atomic. Now two requests from the same sender arrive simultaneously. How exactly would you prevent the sender from spending the same balance twice?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "common-mistake",
+      "text": "⚠️ Common Mistake"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Idempotency key** — good instinct, but solves a **different** problem."
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Request",
+          "Amount",
+          "Idempotency Key"
+        ],
+        [
+          "A",
+          "₹800",
+          "key-A"
+        ],
+        [
+          "B",
+          "₹800",
+          "key-B"
+        ]
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "These are two **different legitimate requests**. Idempotency keys don't stop them. Both can read `balance = ₹1000` and proceed."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "correct-answer-database-concurrency-control",
+      "text": "✅ Correct Answer — Database Concurrency Control"
+    },
+    {
+      "type": "label",
+      "text": "Approach 1: Row Lock (`SELECT … FOR UPDATE`)"
+    },
+    {
+      "type": "code",
+      "code": "BEGIN;\n\nSELECT balance\nFROM users\nWHERE id = ?\nFOR UPDATE;"
+    },
+    {
+      "type": "paragraph",
+      "text": "Now the sender's row is locked."
+    },
+    {
+      "type": "code",
+      "code": "Request A:\n  read ₹1000 → debit ₹800 → balance ₹200 → commit\n\nRequest B:\n  waits for A → reads ₹200 → insufficient balance → rollback"
+    },
+    {
+      "type": "label",
+      "text": "Approach 2: Atomic Update"
+    },
+    {
+      "type": "code",
+      "code": "UPDATE users\nSET balance = balance - ?\nWHERE id = ?\nAND balance >= ?;"
+    },
+    {
+      "type": "paragraph",
+      "text": "Verify that **exactly one row** was updated. If 0 rows updated → insufficient balance."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Idempotency keys prevent duplicate processing of the same request, but they don't prevent two different concurrent transfers. For that, I'd use a database transaction with row-level locking or an atomic balance update, so only one transfer can successfully consume the available balance.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "6-idempotency-same-request-retried",
+      "text": "6. Idempotency — Same Request Retried"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"The debit, credit, and transaction record are all inside one database transaction. But the service crashes after COMMIT and before the client receives the response. The client retries. How do you make sure the user doesn't get charged twice?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "**This is where idempotency key is exactly the right answer.** ✅"
+    },
+    {
+      "type": "label",
+      "text": "Flow"
+    },
+    {
+      "type": "code",
+      "code": "Client\n  ↓\nPOST /transfer\nIdempotency-Key: ABC123\n  ↓\nTransfer Service\n  ↓\nCheck ABC123 in DB"
+    },
+    {
+      "type": "paragraph",
+      "text": "**First request**:"
+    },
+    {
+      "type": "code",
+      "code": "ABC123 doesn't exist\n      ↓\nperform transfer\n      ↓\nCOMMIT\n      ↓\nsave ABC123 → SUCCESS + transaction_id\n      ↓\nreturn transaction_id"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Client retries (response was lost)**:"
+    },
+    {
+      "type": "code",
+      "code": "ABC123 already exists\n      ↓\nDO NOT transfer again\n      ↓\nreturn the existing transaction result"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "critical-detail-enforce-at-db-level",
+      "text": "Critical Detail — Enforce at DB Level"
+    },
+    {
+      "type": "paragraph",
+      "text": "Say in the interview:"
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"I'd enforce uniqueness of the idempotency key at the database level, not just check it in application code.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Why?** This is unsafe:"
+    },
+    {
+      "type": "code",
+      "code": "if not exists(key):\n    perform_transfer()\n    save(key)"
+    },
+    {
+      "type": "paragraph",
+      "text": "Two concurrent requests can both see the key as absent."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: `idempotency_key UNIQUE` and persist request/result atomically."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "7-external-bank-timeout-ambiguous-outcome",
+      "text": "7. External Bank Timeout — Ambiguous Outcome"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Now assume your transfer service calls an external bank/payment service. The request times out. You don't know whether the bank actually processed the transfer or not. What would you do?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Saying \"I don't know\" is better than inventing an answer.** This is one of the harder distributed-systems problems."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "the-situation",
+      "text": "The Situation"
+    },
+    {
+      "type": "code",
+      "code": "Your service → Bank API → Transfer ₹500"
+    },
+    {
+      "type": "paragraph",
+      "text": "Bank processes it ✅, but HTTP response times out:"
+    },
+    {
+      "type": "code",
+      "code": "Bank → response\n          X\n       timeout"
+    },
+    {
+      "type": "paragraph",
+      "text": "Your service asks: **\"Did the transfer happen or not?\"**"
+    },
+    {
+      "type": "paragraph",
+      "text": "You **cannot safely assume failure**. This is called an **ambiguous outcome**."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "what-to-do",
+      "text": "What To Do"
+    },
+    {
+      "type": "label",
+      "text": "Step 1: Use Idempotency / Reference ID for External Transfer"
+    },
+    {
+      "type": "code",
+      "code": "transaction_id = TX123\n\nBank.transfer(amount=500, reference_id=\"TX123\")"
+    },
+    {
+      "type": "paragraph",
+      "text": "If request times out → **don't blindly send another transfer**."
+    },
+    {
+      "type": "label",
+      "text": "Step 2: Query the Bank"
+    },
+    {
+      "type": "code",
+      "code": "GET /transfer/TX123"
+    },
+    {
+      "type": "paragraph",
+      "text": "Possible results:"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Status",
+          "Action"
+        ],
+        [
+          "SUCCESS",
+          "Mark our transaction SUCCESS"
+        ],
+        [
+          "FAILED",
+          "Mark FAILED"
+        ],
+        [
+          "PENDING",
+          "Keep checking / reconcile later"
+        ]
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Step 3: If Bank Doesn't Support Idempotency → Reconciliation"
+    },
+    {
+      "type": "code",
+      "code": "TRANSFER_PENDING\n       ↓\nBank timeout\n       ↓\nReconciliation worker\n       ↓\nQuery bank\n       ↓\nUpdate our DB"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Golden rule for payment systems**:"
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "**Never retry an uncertain financial operation blindly.**"
+        }
+      ]
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"If the external payment service times out, I can't assume the transaction failed because it may already have succeeded. I'd use a unique transaction/reference ID with the external provider and query the transaction status before retrying. If the provider supports idempotency, I'd reuse the same idempotency key. Otherwise, I'd mark the transaction as pending and use a reconciliation process to determine the final state.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "8-master-interview-answer-put-it-all-together",
+      "text": "8. Master Interview Answer (Put It All Together)"
+    },
+    {
+      "type": "paragraph",
+      "text": "Use this when asked to review the naive transfer code:"
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"First I'd validate that both users exist, the amount is positive, the sender isn't the receiver, and the sender has sufficient balance. The biggest issue is that the current implementation can leave the system inconsistent if one database update succeeds and another fails. I'd make the debit, credit, and transaction-record creation atomic using a database transaction. I'd also handle concurrent transfers using row-level locking or an atomic balance update. Finally, I'd make the transfer API idempotent so retries don't result in duplicate transfers. Notifications should happen asynchronously after the transaction commits, so a notification failure doesn't roll back a successful transfer.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "label",
+      "text": "This is much stronger than \"I'll add try-catch.\""
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "9-the-fixed-code",
+      "text": "9. The Fixed Code"
+    },
+    {
+      "type": "paragraph",
+      "text": "One way to write it, with every fix from above in place:"
+    },
+    {
+      "type": "code",
+      "code": "import json\nfrom decimal import Decimal\n\nMAX_TRANSFER = Decimal(\"100000\")\n\ndef transfer(sender_id, receiver_id, amount: Decimal, idempotency_key: str):\n    # 1. Validate input before touching the database\n    if sender_id == receiver_id:\n        return {\"error\": \"Cannot transfer to yourself\"}\n    if amount <= 0 or amount > MAX_TRANSFER:\n        return {\"error\": \"Invalid amount\"}\n\n    with db.transaction():                       # BEGIN … COMMIT / ROLLBACK\n        # 2. Idempotency: a UNIQUE key; a retry returns the first result\n        existing = db.query_one(\n            \"SELECT result FROM idempotency_keys WHERE key = %s\", idempotency_key)\n        if existing:\n            return existing.result\n\n        # 3. Atomic debit: the balance check and the update are one statement\n        debited = db.execute(\n            \"UPDATE accounts SET balance = balance - %s \"\n            \"WHERE id = %s AND balance >= %s AND status = 'ACTIVE'\",\n            amount, sender_id, amount)\n        if debited.rowcount == 0:\n            return {\"error\": \"Insufficient balance or inactive account\"}\n\n        credited = db.execute(\n            \"UPDATE accounts SET balance = balance + %s \"\n            \"WHERE id = %s AND status = 'ACTIVE'\",\n            amount, receiver_id)\n        if credited.rowcount == 0:\n            raise TransferError(\"Receiver not found or inactive\")   # → ROLLBACK\n\n        # 4. The record is part of the same atomic unit\n        tx_id = db.insert(\n            \"INSERT INTO transactions (sender_id, receiver_id, amount, status) \"\n            \"VALUES (%s, %s, %s, 'SUCCESS') RETURNING id\",\n            sender_id, receiver_id, amount)\n\n        result = {\"status\": \"success\", \"transaction_id\": tx_id}\n        db.execute(\n            \"INSERT INTO idempotency_keys (key, result) VALUES (%s, %s)\",\n            idempotency_key, json.dumps(result))       # UNIQUE(key)\n\n        # 5. Notification as an outbox event, committed with the transfer\n        db.execute(\n            \"INSERT INTO outbox (type, payload) VALUES ('TRANSFER_COMPLETED', %s)\",\n            json.dumps({\"transaction_id\": tx_id, \"receiver_id\": receiver_id}))\n\n    return result   # a worker publishes the outbox event and sends the notification"
+    },
+    {
+      "type": "paragraph",
+      "text": "If two retries with the same key race each other, both may pass the `SELECT`, but the second one's `INSERT` hits the `UNIQUE` constraint and its whole transaction rolls back — the database, not the `if`, guarantees one transfer."
+    },
+    {
+      "type": "paragraph",
+      "text": "**What changed:** validation up front; one DB transaction; an atomic conditional debit instead of read-then-write; the idempotency key stored in the same transaction; the notification turned into an outbox event so it can't fail the transfer. `Decimal`, not `float`, for money."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "10-the-full-learning-escalation",
+      "text": "10. The Full Learning Escalation"
+    },
+    {
+      "type": "paragraph",
+      "text": "What started as a simple Python question expands into:"
+    },
+    {
+      "type": "code",
+      "code": "Validation\n    ↓\nConcurrency\n    ↓\nDatabase transaction\n    ↓\nIdempotency\n    ↓\nExternal service timeout\n    ↓\nReconciliation\n    ↓\nAsync processing"
+    },
+    {
+      "type": "paragraph",
+      "text": "This is the kind of thinking expected in system design interviews (e.g., Scaler round)."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "11-next-challenge-hld",
+      "text": "11. Next Challenge — HLD"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Okay. Now design the HLD for this money-transfer system. Draw the major components and explain the flow.\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Give your first HLD attempt (even if rough) — components to think about:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Transfer API / service",
+        "User/account DB (with row locking)",
+        "Transaction ledger",
+        "Idempotency store (unique keys)",
+        "Message queue / event bus (notifications, async jobs)",
+        "Reconciliation worker (external bank timeouts)",
+        "External payment/bank gateway"
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Worked HLDs for this: [Digital Wallet](/learn/system-design/problem-breakdowns/digital-wallet) and [Payment System](/learn/system-design/problem-breakdowns/payment-system). The failure cases in depth: [Payment Failure Scenarios](/learn/system-design/tips/payment-failure-scenarios)."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "appendix-problem-solution-cheat-sheet",
+      "text": "Appendix: Problem → Solution Cheat Sheet"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Problem",
+          "Solution"
+        ],
+        [
+          "Same request retried",
+          "Idempotency key"
+        ],
+        [
+          "Two different requests race",
+          "Locking / atomic DB update"
+        ],
+        [
+          "Debit + credit must stay consistent",
+          "DB transaction"
+        ],
+        [
+          "Notification fails",
+          "Async queue/event + retry"
+        ],
+        [
+          "External API timeout",
+          "Reference ID + status query + reconciliation"
+        ]
+      ]
+    }
+  ],
+  "quiz": []
+}

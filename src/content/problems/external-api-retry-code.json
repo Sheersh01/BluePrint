@@ -1,0 +1,448 @@
+{
+  "section": "code-review",
+  "slug": "external-api-retry-code",
+  "category": "Code Review",
+  "title": "Retrying an External API",
+  "subtitle": "Two helper functions that call third-party APIs \"with retries\". One can hang forever; the other can pay someone five times.",
+  "seoTitle": "Code Review Interview — Fix Unsafe Retries Around an External API",
+  "description": "A code-review interview question — Python helpers that retry external API calls with no timeout, no backoff, retries on bad requests and non-idempotent POSTs, and how to fix them.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "easy",
+  "blocks": [
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Timeouts, which errors are retryable, exponential backoff with jitter, retry budgets, idempotency for writes, circuit breakers."
+        }
+      ],
+      "title": "Core focus"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "quick-reference-learn-this-first",
+      "text": "Quick Reference (Learn This First)"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Problem",
+          "Wrong Instinct",
+          "Correct Solution"
+        ],
+        [
+          "A call hangs forever",
+          "Retry more",
+          "**Connect + read timeouts on every call**"
+        ],
+        [
+          "Retrying errors that will never succeed",
+          "Retry everything",
+          "**Retry only timeouts, connection errors, 5xx, 429**"
+        ],
+        [
+          "All clients retry in sync",
+          "Sleep 1 s",
+          "**Exponential backoff + jitter**"
+        ],
+        [
+          "Retries never stop",
+          "`while True`",
+          "**Max attempts and an overall deadline**"
+        ],
+        [
+          "Retrying a payout pays twice",
+          "Fewer retries",
+          "**Idempotency key on the POST**"
+        ],
+        [
+          "A dependency is down for minutes",
+          "Keep retrying",
+          "**Circuit breaker + fallback**"
+        ]
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Mental model (decision tree)"
+    },
+    {
+      "type": "code",
+      "code": "Network call?\n        ↓\n  Timeout, always\n\nIt failed — will retrying help?\n        ↓\n  Only for transient errors (timeout, 5xx, 429)\n\nHow often?\n        ↓\n  Exponential backoff + jitter, bounded\n\nDoes the call change something?\n        ↓\n  Idempotency key (or don't retry)\n\nFailing for a long time?\n        ↓\n  Circuit breaker"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "1-the-starting-point",
+      "text": "1. The Starting Point"
+    },
+    {
+      "type": "code",
+      "code": "import time\nimport requests\n\ndef get_exchange_rate(currency):\n    while True:\n        try:\n            resp = requests.get(f\"https://rates.example.com/v1/rates/{currency}\")\n            return resp.json()[\"rate\"]\n        except Exception:\n            time.sleep(1)\n\n\ndef send_payout(account_id, amount):\n    for attempt in range(5):\n        try:\n            resp = requests.post(\"https://payouts.example.com/v1/payouts\",\n                                 json={\"account\": account_id, \"amount\": amount})\n            if resp.status_code == 200:\n                return resp.json()\n        except Exception:\n            pass\n        time.sleep(1)\n    raise Exception(\"Payout failed\")"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "2-what-most-candidates-catch",
+      "text": "2. What Most Candidates Catch ✅"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-1-while-true-never-gives-up",
+      "text": "2.1 `while True` Never Gives Up"
+    },
+    {
+      "type": "paragraph",
+      "text": "If the rates service is down for an hour, every request that calls `get_exchange_rate` hangs for an hour, tying up a worker each."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Bound the attempts and the total time."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-2-except-exception-hides-bugs",
+      "text": "2.2 `except Exception` Hides Bugs"
+    },
+    {
+      "type": "paragraph",
+      "text": "A typo, a `KeyError` because the response format changed, or a `TypeError` in our own code is silently retried forever instead of surfacing as an error."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Catch the specific network exceptions you mean to retry."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "3-what-most-candidates-miss",
+      "text": "3. What Most Candidates Miss ⚠️"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-1-no-timeout-at-all",
+      "text": "3.1 No Timeout at All"
+    },
+    {
+      "type": "paragraph",
+      "text": "`requests` has **no default timeout**. A server that accepts the connection and never responds blocks the call forever — retries never even start."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: `timeout=(connect, read)` on every call, e.g. `(2, 5)`."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-2-retrying-things-that-will-never-work",
+      "text": "3.2 Retrying Things That Will Never Work"
+    },
+    {
+      "type": "paragraph",
+      "text": "`send_payout` retries any non-200: a `400 Invalid account` or `401 Unauthorized` is retried five times and will fail five times."
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Response",
+          "Retry?"
+        ],
+        [
+          "Timeout / connection error",
+          "Yes (but see 3.4 for POSTs)"
+        ],
+        [
+          "500, 502, 503, 504",
+          "Yes"
+        ],
+        [
+          "429 Too Many Requests",
+          "Yes, after `Retry-After`"
+        ],
+        [
+          "400, 401, 403, 404, 409, 422",
+          "**No** — fix the request"
+        ]
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-3-synchronized-retries",
+      "text": "3.3 Synchronized Retries"
+    },
+    {
+      "type": "paragraph",
+      "text": "Every client sleeps exactly 1 second, so after an outage they all retry at the same moment — a thundering herd that can knock the recovering service over again."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Exponential backoff (0.2 s, 0.4 s, 0.8 s…) with random jitter."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-4-retrying-a-payout-can-pay-twice",
+      "text": "3.4 Retrying a Payout Can Pay Twice"
+    },
+    {
+      "type": "code",
+      "code": "POST /payouts  → payout created ✅ → response lost (timeout)\nPOST /payouts  → second payout created ✅"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Send an `Idempotency-Key` that stays the same across retries of the same payout, so the provider returns the first result instead of paying again. If the provider doesn't support idempotency, don't blindly retry: query the payout status first."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-5-resp-json-on-an-error-page",
+      "text": "3.5 `resp.json()` on an Error Page"
+    },
+    {
+      "type": "paragraph",
+      "text": "A 502 from a proxy returns HTML; `.json()` raises, the broad `except` swallows it, and the real cause (the 502) is lost."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Check the status code before parsing; log what actually happened."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-6-the-exchange-rate-doesn-t-need-a-live-call-every-time",
+      "text": "3.6 The Exchange Rate Doesn't Need a Live Call Every Time"
+    },
+    {
+      "type": "paragraph",
+      "text": "Rates change slowly. Calling the API per request multiplies load and latency."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Fix**: Cache the rate for a short time (say 60 s) and fall back to the last known value if the provider is down, if the business allows it."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "4-which-errors-should-be-retried",
+      "text": "4. Which Errors Should Be Retried?"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Your retry wrapper retries on any failure. What's wrong with that?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "common-mistake",
+      "text": "⚠️ Common Mistake"
+    },
+    {
+      "type": "paragraph",
+      "text": "\"Retries make the system more reliable, so retry everything.\" Retrying permanent errors wastes time, multiplies load during outages, and delays the real error."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "correct-answer",
+      "text": "✅ Correct Answer"
+    },
+    {
+      "type": "paragraph",
+      "text": "Retry only **transient** failures — timeouts, connection resets, 5xx, 429 — with backoff, and fail fast on client errors."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"I'd retry only transient errors — timeouts, connection failures, 5xx and 429 — with exponential backoff and jitter, a maximum number of attempts and an overall deadline. Client errors like 400 or 401 won't succeed on retry, so I'd fail fast and surface them.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "5-retrying-writes",
+      "text": "5. Retrying Writes"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"The payout request timed out. Is it safe to retry?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Only if the request is idempotent. A timeout means **unknown** — the payout may have been created."
+    },
+    {
+      "type": "code",
+      "code": "payout_id = \"PO-8231\"   (generated by us, before the first attempt)\n\nPOST /payouts  Idempotency-Key: PO-8231   → timeout\nPOST /payouts  Idempotency-Key: PO-8231   → 200, the original payout (not a new one)"
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"A timeout on a write means the outcome is unknown. I generate the payout id before the first attempt and send it as an idempotency key, so a retry returns the original result instead of paying twice. If the provider doesn't support that, I query the payout's status before deciding to retry, and reconcile anything still unknown.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "6-the-provider-is-down-for-20-minutes",
+      "text": "6. The Provider Is Down for 20 Minutes"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"The rates provider is down for 20 minutes. What happens to our service with your retry logic?\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Every request spends its full retry budget waiting on a dead dependency, so latency spikes and workers pile up. Add a **circuit breaker**: after N consecutive failures, stop calling the provider for a cool-down period and fail immediately (or serve the cached rate), then let a single trial request through to see whether it has recovered."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "7-master-interview-answer",
+      "text": "7. Master Interview Answer"
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Neither call has a timeout, so a hung server blocks forever. The rate fetch retries forever and the payout retries every non-200, including errors that can never succeed. Both catch every exception, which hides bugs, and both sleep a fixed second, so clients retry in lockstep. Worst of all, the payout POST is retried without an idempotency key, so a lost response can pay someone twice. I'd add connect and read timeouts, retry only transient errors with exponential backoff and jitter under an attempt and time budget, send an idempotency key with the payout, cache the exchange rate, and put a circuit breaker around each provider.\""
+        }
+      ],
+      "title": "Say this"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "8-the-fixed-code",
+      "text": "8. The Fixed Code"
+    },
+    {
+      "type": "code",
+      "code": "import random\nimport time\nimport uuid\nimport requests\n\nTIMEOUT = (2, 5)                              # connect, read (seconds)\nRETRYABLE_STATUS = {429, 500, 502, 503, 504}\n\ndef call_with_retries(method, url, *, max_attempts=4, deadline_s=10, **kwargs):\n    start = time.monotonic()\n    for attempt in range(1, max_attempts + 1):\n        try:\n            resp = requests.request(method, url, timeout=TIMEOUT, **kwargs)\n            if resp.status_code not in RETRYABLE_STATUS:\n                resp.raise_for_status()       # 4xx → raise immediately, no retry\n                return resp\n            retry_after = float(resp.headers.get(\"Retry-After\", 0))\n        except (requests.ConnectionError, requests.Timeout):\n            retry_after = 0\n        if attempt == max_attempts or time.monotonic() - start > deadline_s:\n            raise ProviderUnavailable(url)\n        backoff = min(0.2 * 2 ** attempt, 3.0)\n        time.sleep(max(retry_after, random.uniform(0, backoff)))   # full jitter\n\n\n@cached(ttl_s=60)                             # rates change slowly\n@circuit_breaker(name=\"rates\", failure_threshold=5, reset_after_s=30)\ndef get_exchange_rate(currency):\n    resp = call_with_retries(\"GET\", f\"https://rates.example.com/v1/rates/{currency}\")\n    return resp.json()[\"rate\"]\n\n\ndef send_payout(account_id, amount, payout_id=None):\n    payout_id = payout_id or str(uuid.uuid4())   # stored with our record before calling\n    resp = call_with_retries(\n        \"POST\", \"https://payouts.example.com/v1/payouts\",\n        json={\"account\": account_id, \"amount\": str(amount)},\n        headers={\"Idempotency-Key\": payout_id})\n    return resp.json()"
+    },
+    {
+      "type": "paragraph",
+      "text": "**What changed:** timeouts on every call; retries only for transient errors; exponential backoff with jitter; attempt and time limits; `Retry-After` respected; an idempotency key on the payout; caching and a circuit breaker for the rates provider; money sent as a string, not a float."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "9-the-full-learning-escalation",
+      "text": "9. The Full Learning Escalation"
+    },
+    {
+      "type": "code",
+      "code": "Infinite loop / broad except\n    ↓\nTimeouts\n    ↓\nRetryable vs permanent errors\n    ↓\nBackoff + jitter\n    ↓\nIdempotent writes (\"timeout = unknown\")\n    ↓\nCircuit breakers + caching"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "10-next-challenge-hld",
+      "text": "10. Next Challenge — HLD"
+    },
+    {
+      "type": "callout",
+      "variant": "info",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "\"Design the payouts system that sits behind this API — it must never pay anyone twice.\""
+        }
+      ],
+      "title": "Interviewer asks"
+    },
+    {
+      "type": "paragraph",
+      "text": "See [Payment System](/learn/system-design/problem-breakdowns/payment-system), [Payment Failure Scenarios](/learn/system-design/tips/payment-failure-scenarios) and the [API Design Cheat Sheet](/learn/system-design/tips/api-design-cheat-sheet)."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "appendix-problem-solution-cheat-sheet",
+      "text": "Appendix: Problem → Solution Cheat Sheet"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Problem",
+          "Solution"
+        ],
+        [
+          "Hangs forever",
+          "Connect + read timeouts"
+        ],
+        [
+          "Retries forever",
+          "Max attempts + deadline"
+        ],
+        [
+          "Hides bugs",
+          "Catch only network exceptions"
+        ],
+        [
+          "Retries 4xx",
+          "Retry only timeouts, 5xx, 429"
+        ],
+        [
+          "Thundering herd",
+          "Exponential backoff + jitter"
+        ],
+        [
+          "Duplicate writes",
+          "Idempotency key / status query"
+        ],
+        [
+          "Long outage",
+          "Circuit breaker + cached fallback"
+        ]
+      ]
+    }
+  ],
+  "quiz": []
+}

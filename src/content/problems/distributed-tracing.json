@@ -1,0 +1,341 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "distributed-tracing",
+  "category": "Common Problems",
+  "title": "Distributed Tracing",
+  "seoTitle": "Design a Distributed Tracing System Like Jaeger or Zipkin",
+  "description": "Design distributed tracing — propagating trace context across services, collecting spans, sampling strategies, storage, and assembling traces for debugging.",
+  "tags": [
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Uber",
+      "Amazon"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🧵",
+      "title": "What is Distributed Tracing?",
+      "text": "In a microservice system, one user request may touch dozens of services. Distributed tracing records each hop as a **span** and links them into a **trace**, so engineers can see exactly where time was spent and where errors occurred — like Jaeger, Zipkin or Datadog APM."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Services should record spans (operation, start/end time, tags, errors) for the work they do.",
+        "Spans from all services involved in one request should be linked into a single trace.",
+        "Engineers should be able to look up a trace by ID and view it as a timeline.",
+        "Engineers should be able to search traces by service, operation, duration and error status."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Metrics and log aggregation.",
+        "Automatic root-cause analysis."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Negligible overhead on instrumented services (< 1% CPU, no added request latency).",
+        "Handle millions of spans per second across the fleet.",
+        "Traces queryable within ~1 minute of the request completing.",
+        "Losing some spans is acceptable; tracing must never break production traffic."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Long-term retention beyond a few weeks."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- record spans",
+        "- link spans into traces",
+        "- view trace timeline",
+        "- search traces",
+        "",
+        "Non-functional",
+        "- < 1% overhead",
+        "- millions of spans/s",
+        "- queryable within ~1 min",
+        "- lossy is ok, never break prod"
+      ],
+      "caption": "Tracing Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Trace**: all spans sharing a trace ID.",
+        "**Span**: spanId, parentSpanId, traceId, service, operation, start, duration, tags, status.",
+        "**Trace context**: traceId + parent spanId + sampling flag, propagated between services."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "// In-process SDK\nspan = tracer.startSpan(\"charge-card\", { parent: ctx })\nspan.setTag(\"amount\", 4999); span.end()\n\n// Propagation header (W3C Trace Context)\ntraceparent: 00-<traceId>-<parentSpanId>-01\n\n// Query\nGET /traces/:traceId\nGET /traces?service=checkout&minDuration=500ms&error=true&from&to"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-services-record-spans",
+      "text": "1) Services record spans"
+    },
+    {
+      "type": "paragraph",
+      "text": "A tracing SDK (e.g. OpenTelemetry) creates spans around incoming requests and outgoing calls, buffering finished spans in memory and exporting them asynchronously in batches to a local **agent**. Export never blocks the request; if buffers fill, spans are dropped."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-spans-are-linked-into-traces",
+      "text": "2) Spans are linked into traces"
+    },
+    {
+      "type": "paragraph",
+      "text": "When service A calls service B, it injects the trace context into request headers. B continues the trace with A's span as its parent. Every span carries the same trace ID, so the backend can reassemble the tree."
+    },
+    {
+      "type": "diagram",
+      "file": "01-trace-propagation-and-collection.svg",
+      "caption": "Trace propagation and collection"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-look-up-a-trace-by-id",
+      "text": "3) Look up a trace by ID"
+    },
+    {
+      "type": "paragraph",
+      "text": "Collectors write spans to storage keyed by trace ID (e.g. Cassandra partitioned by traceId, or columnar object storage). Fetching a trace is one partition read; the UI builds the tree from parent IDs and renders a timeline."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-search-traces",
+      "text": "4) Search traces"
+    },
+    {
+      "type": "paragraph",
+      "text": "An index stores per-trace summaries (root service, operation, duration, error flag, timestamps) for filtering; matching trace IDs are then fetched from span storage."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-keep-overhead-and-volume-manageable",
+      "text": "1) How do we keep overhead and volume manageable?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Trace every request fully",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Record and store 100% of spans."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Millions of spans per second costs a fortune to store, and most traces are boring successes."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Head-based sampling",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Decide at the root (e.g. keep 1%) and propagate the decision in the trace context so all services agree."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Cheap and consistent, but rare errors and slow outliers are mostly discarded before anyone knows they're interesting."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Tail-based sampling",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Services send all spans to collectors; collectors buffer spans grouped by trace ID for a short window (~10-30s), then decide: keep every trace with errors or high latency, plus a small random sample of normal ones. Route spans for the same trace to the same collector (hash on traceId)."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Collectors need memory to buffer, and late-arriving spans may miss the decision window."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-store-and-query-spans-efficiently",
+      "text": "2) How do we store and query spans efficiently?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Write spans to a store optimised for appends with TTL-based expiry (e.g. 7-14 days). Partition by trace ID for whole-trace reads. Maintain a separate summary index (service, operation, duration buckets, error, time) — often a columnar store — for search. Derive service dependency graphs and latency histograms with a streaming job over the span stream."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "How do spans from different services end up in the same trace?",
+      "options": [
+        "Matching timestamps",
+        "Propagating trace context (traceId, parent spanId) in request headers",
+        "Same host",
+        "Random chance"
+      ],
+      "answer": 1,
+      "explanation": "Each downstream span inherits the trace ID and records its parent."
+    },
+    {
+      "question": "What is the weakness of head-based sampling?",
+      "options": [
+        "It's expensive",
+        "The keep/drop decision happens before you know whether the trace is interesting",
+        "It breaks propagation",
+        "It requires tail collectors"
+      ],
+      "answer": 1,
+      "explanation": "Rare errors and slow traces are mostly dropped."
+    },
+    {
+      "question": "Why route all spans of a trace to the same collector for tail sampling?",
+      "options": [
+        "Security",
+        "The collector needs the complete trace to decide whether to keep it",
+        "Lower latency",
+        "It's required by Kafka"
+      ],
+      "answer": 1,
+      "explanation": "Decisions require seeing every span of the trace."
+    },
+    {
+      "question": "What should the SDK do if its export buffer fills up?",
+      "options": [
+        "Block the request",
+        "Drop spans",
+        "Crash the service",
+        "Retry synchronously"
+      ],
+      "answer": 1,
+      "explanation": "Tracing must never degrade production traffic."
+    }
+  ]
+}

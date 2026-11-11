@@ -1,0 +1,33 @@
+{
+  "quiz": [
+    {
+      "question": "Which data structure maps each keyword to the posts that contain it?",
+      "options": ["Inverted index", "Linked list", "Bloom filter", "Binary heap"],
+      "answer": 0,
+      "explanation": "An inverted index stores keyword → post IDs, so search is a lookup rather than a scan of every post."
+    },
+    {
+      "question": "Why is post search a write-heavy problem as well as a read-heavy one?",
+      "options": [
+        "Every new post and every like updates the index",
+        "Users search more than they post",
+        "Search results are never cached",
+        "Posts are deleted constantly"
+      ],
+      "answer": 0,
+      "explanation": "Posts and likes arrive at huge rates, and each one must be reflected in the index."
+    },
+    {
+      "question": "How can very frequent like-count updates be made cheaper?",
+      "options": ["Batch them and update the index periodically", "Rebuild the whole index per like", "Store likes only on clients", "Disable likes"],
+      "answer": 0,
+      "explanation": "Approximate, batched like counts are good enough for ranking and cut write load dramatically."
+    },
+    {
+      "question": "What is a good way to serve repeated popular queries quickly?",
+      "options": ["Cache search results, e.g. at a CDN or cache layer", "Add more columns to the posts table", "Use synchronous replication", "Shard by query length"],
+      "answer": 0,
+      "explanation": "Popular queries repeat, so caching their results avoids recomputing them on every request."
+    }
+  ]
+}

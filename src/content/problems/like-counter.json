@@ -1,0 +1,341 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "like-counter",
+  "category": "Common Problems",
+  "title": "Like Counter",
+  "seoTitle": "Design Facebook Likes with Live Counts for Viral Posts",
+  "description": "Design a like system — recording likes, counting at massive scale for celebrity posts, and pushing live count updates to viewers.",
+  "tags": [
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    },
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Facebook",
+      "Amazon",
+      "Twitter",
+      "Coinbase"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "👍",
+      "title": "What is a Like Counter?",
+      "text": "Every post on a social network shows a like button and a count. The system must record who liked what, show accurate-enough counts, and — for live features — update counts on screen as new likes arrive, even when a celebrity post gets millions of likes in minutes."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to like and unlike a post (at most one like per user per post).",
+        "Users should see the like count on each post, and whether they liked it.",
+        "Viewers of a post should see the count update live."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Reactions beyond a single like.",
+        "Showing the list of likers."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Handle bursts of 100k+ likes per second on a single viral post.",
+        "Counts may be approximate in real time (lag of a few seconds is fine) but must converge to the exact value.",
+        "\"Did I like this?\" must be accurate for the user (read-your-writes).",
+        "Reading counts must be fast (< 50ms) because they appear on every feed item."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Fraud and bot-like detection."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- like / unlike (once per user)",
+        "- show count + my like",
+        "- live count updates",
+        "",
+        "Non-functional",
+        "- 100k likes/s on one post",
+        "- counts converge, lag ok",
+        "- my like is accurate",
+        "- reads < 50ms"
+      ],
+      "caption": "Like Counter Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Like**: (postId, userId, createdAt) — the source of truth.",
+        "**Like count**: an aggregated counter per post.",
+        "**Post**: the content being liked."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "PUT    /posts/:id/like\nDELETE /posts/:id/like\nGET    /posts/:id/likes/summary -> { count, likedByMe }\nSSE    /posts/:id/likes/stream   -> { count } updates"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-should-be-able-to-like-and-unlike",
+      "text": "1) Users should be able to like and unlike"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Like Service** writes the like edge to a wide-column store keyed by `(postId, userId)` — the primary key makes a like idempotent and enforces one per user. It also emits a `liked`/`unliked` event."
+    },
+    {
+      "type": "diagram",
+      "file": "01-likes-and-counts.svg",
+      "caption": "Likes and counts"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-should-see-counts-and-their-own-like",
+      "text": "2) Users should see counts and their own like"
+    },
+    {
+      "type": "paragraph",
+      "text": "Counts come from a counter cache (Redis), backed by a durable counts table. \"Liked by me\" is a point lookup on the likes table, which is accurate immediately after the user's write."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-viewers-should-see-live-updates",
+      "text": "3) Viewers should see live updates"
+    },
+    {
+      "type": "paragraph",
+      "text": "Viewers subscribe over SSE. When a post's count changes, the aggregator publishes the new total to a pub/sub channel for that post; connection servers forward it to subscribed viewers, at most once every second or two."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-count-likes-on-a-viral-post",
+      "text": "1) How do we count likes on a viral post?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Increment the post row on every like",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "`UPDATE posts SET likes = likes + 1` per like."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "100k updates per second on one row serialise on its lock and overwhelm the database."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Atomic increments in Redis",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "`INCR post:123:likes` per like, persisted periodically."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Much faster, but one key still lives on one Redis node — a single hot post can saturate it."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Aggregate events, then shard hot counters",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Like events go to Kafka, partitioned by postId. Aggregators sum deltas in memory and flush `+N` every second, turning 100k writes into one. For extremely hot posts, also split the counter across shards (`post:123:likes:0..15`) and sum them on read (or cache the sum for a second). A periodic reconciliation job recounts from the likes table so the counter converges to the truth."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Counts lag by about a second and unlike/like flips must be handled as signed deltas."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-push-live-updates-to-millions-of-viewers",
+      "text": "2) How do we push live updates to millions of viewers?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Don't send an event per like — that would be 100k messages per second per viewer. Coalesce: emit the latest count per post at most once per second. Fan out hierarchically through pub/sub to connection servers, each of which forwards to its own viewers. For huge audiences, approximate (\"1.2M\") rather than exact digits."
+    },
+    {
+      "type": "pattern",
+      "title": "Pattern: Real-time Updates",
+      "text": "Coalescing updates and fanning out to connection servers (not to individual users) is what keeps live counts affordable.",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "How do you enforce one like per user per post?",
+      "options": [
+        "Client-side checks",
+        "A primary key on (postId, userId)",
+        "Rate limiting",
+        "A cache"
+      ],
+      "answer": 1,
+      "explanation": "The key makes likes idempotent."
+    },
+    {
+      "question": "What turns 100k likes per second into a manageable write rate?",
+      "options": [
+        "Bigger databases",
+        "Aggregating deltas in memory and flushing once per second",
+        "Dropping likes",
+        "Client batching only"
+      ],
+      "answer": 1,
+      "explanation": "Batching collapses many increments into one."
+    },
+    {
+      "question": "Why shard a single post's counter?",
+      "options": [
+        "To hide counts",
+        "One key on one node can't absorb a celebrity post's write rate",
+        "For backups",
+        "To support unlikes"
+      ],
+      "answer": 1,
+      "explanation": "Splitting spreads writes across nodes; reads sum the shards."
+    },
+    {
+      "question": "How should live counts be pushed to viewers?",
+      "options": [
+        "One message per like",
+        "Coalesced updates at most once per second",
+        "Email",
+        "Hourly"
+      ],
+      "answer": 1,
+      "explanation": "Viewers only need the latest number."
+    }
+  ]
+}

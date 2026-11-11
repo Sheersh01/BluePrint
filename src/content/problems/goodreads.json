@@ -1,0 +1,363 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "goodreads",
+  "category": "Common Problems",
+  "title": "Goodreads",
+  "seoTitle": "Design an Online Book Review System that Aggregates Reviews",
+  "description": "Design a book review platform like Goodreads that also aggregates reviews from other sources — canonical book records, matching external books to editions, rating aggregation, and read-heavy book pages.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    },
+    {
+      "label": "Managing Long Running Tasks",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📖",
+      "title": "What is Goodreads?",
+      "text": "Goodreads lets readers rate and review books, track what they're reading, and see a book's average rating. This version also **aggregates reviews from other sources** — retailers, review sites and publisher feeds — so a book page shows reviews and ratings from across the web. The tricky part is that the same book appears under many editions, titles and identifiers, and every source describes it differently."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to rate (1-5 stars) and review books, and keep shelves (want to read, reading, read).",
+        "Book pages should show the average rating, rating distribution and reviews.",
+        "The system should import reviews and ratings from external sources and attach them to the right book.",
+        "Users should be able to search for books by title, author or ISBN."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Social feed of friends' activity.",
+        "Recommendations.",
+        "Buying books."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Book pages load in < 300 ms; the workload is very read-heavy.",
+        "External imports should be accurate: a review must not be attached to the wrong book.",
+        "Ratings can update within minutes; consistency isn't critical.",
+        "Scale to ~20M books, ~100M users and hundreds of millions of reviews.",
+        "Respect each source's terms and rate limits."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Real-time review updates."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- rate, review, shelves",
+        "- book page: avg, distribution, reviews",
+        "- import external reviews",
+        "- search",
+        "",
+        "Non-functional",
+        "- pages < 300ms, read-heavy",
+        "- attach to the right book",
+        "- ratings fresh in minutes",
+        "- 20M books, 100M users",
+        "- polite to sources"
+      ],
+      "caption": "Book Review Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Work**: the abstract book (\"Dune\"), grouping all its editions.",
+        "**Edition**: a specific publication with ISBN, format, language, publisher.",
+        "**Review**: work, edition, author (user or external source), rating, text, source, external ID.",
+        "**Rating summary**: per work, count and distribution of stars per source.",
+        "**Source**: an external provider with credentials, schedule and rate limits."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /works/:id -> { work, editions[], ratingSummary, reviews (paged, filter by source) }\nPOST /works/:id/ratings { stars }\nPOST /works/:id/reviews { text, stars, editionId? }\nPUT  /me/shelves/:shelf { workId }\nGET  /search?q=\n(internal) importers write to /ingest/reviews"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-rate-and-review",
+      "text": "1) Users rate and review"
+    },
+    {
+      "type": "paragraph",
+      "text": "Ratings and reviews are stored in a database sharded by work ID (so a book's reviews live together). Each user can have one rating per work, enforced by a unique key. Writes publish an event that updates the work's **rating summary**."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-book-pages",
+      "text": "2) Book pages"
+    },
+    {
+      "type": "paragraph",
+      "text": "A book page needs the work, its rating summary and the first page of reviews. The summary is a precomputed row (`count`, `sum`, histogram per source), and the page is cached in a CDN/Redis with a short TTL. Reviews are paged by helpfulness or date."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-importing-external-reviews",
+      "text": "3) Importing external reviews"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Importers** per source (APIs, feeds or licensed data dumps) fetch new reviews on a schedule, normalise them into a common format, and pass them to a **matcher** that maps each external book reference to one of our works. Matched reviews are stored with `source` and `externalId` (so re-imports update rather than duplicate) and update the rating summary."
+    },
+    {
+      "type": "diagram",
+      "file": "01-import-pipeline.svg",
+      "caption": "Import pipeline"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-search",
+      "text": "4) Search"
+    },
+    {
+      "type": "paragraph",
+      "text": "Works and editions are indexed in **Elasticsearch** with title, author, series and ISBNs; results are grouped by work so users don't see 40 editions of the same novel."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-match-external-books-to-the-right-work",
+      "text": "1) How do we match external books to the right work?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Match by title",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Find a work with the same title."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Thousands of books share titles (\"Home\", \"Untitled\"), and sources format titles differently (\"Dune (Deluxe Edition)\")."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Match by ISBN",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Use the ISBN when the source provides one, mapping the edition to its work."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Many sources don't include ISBNs, some use internal IDs or ASINs, and ISBN data has errors."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Identifier first, then scored fuzzy matching",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Try **strong identifiers** first (ISBN-10/13, ASIN, known cross-references). Otherwise compute a **match score** from normalised title (stripping subtitles and edition words), author names (with aliases), publication year and language, using a search index to fetch candidates. High-confidence matches are accepted automatically; borderline ones go to a **manual review queue**, and confirmed mappings are cached so the same external book never needs matching again."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Thresholds must favour precision: an unmatched review is better than a review on the wrong book."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-keep-rating-summaries-correct-and-fast",
+      "text": "2) How do we keep rating summaries correct and fast?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Updating a popular book's summary row on every rating creates a hot row. Instead, rating events are **aggregated in short batches** (per work per minute) and applied as increments. Because users can change or delete ratings, events carry the old and new values. A periodic job recomputes summaries from raw ratings to fix any drift. Summaries are kept **per source**, so the page can show \"4.2 from readers here · 4.5 across retailers\" rather than mixing different scales."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention normalisation: some sources rate out of 10 or use thumbs up/down; convert to a common scale and label the source clearly."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-import-politely-and-reliably",
+      "text": "3) How do we import politely and reliably?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each source has its own **scheduler** with rate limits, backoff and incremental fetching (since the last cursor or timestamp). Imports are idempotent by `(source, externalId)`. If a source changes its format, its importer fails in isolation and alerts, without affecting others. Licensing rules decide what we can display (some sources allow only ratings plus a link to the full review)."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why separate works from editions?",
+      "options": [
+        "It saves storage",
+        "Reviews and ratings belong to the book, while editions have different ISBNs and formats",
+        "Editions are secret",
+        "Search engines require it"
+      ],
+      "answer": 1,
+      "explanation": "Grouping editions under a work combines their reviews."
+    },
+    {
+      "question": "What should the matcher try first?",
+      "options": [
+        "Title only",
+        "Strong identifiers like ISBN or ASIN",
+        "Random matching",
+        "The cover image"
+      ],
+      "answer": 1,
+      "explanation": "Identifiers are precise; fuzzy matching is the fallback."
+    },
+    {
+      "question": "What happens to low-confidence matches?",
+      "options": [
+        "Accepted anyway",
+        "Sent to a manual review queue",
+        "Deleted",
+        "Attached to the most popular book"
+      ],
+      "answer": 1,
+      "explanation": "Precision matters more than coverage."
+    },
+    {
+      "question": "How do we avoid duplicate reviews when re-importing?",
+      "options": [
+        "Delete all and reimport",
+        "Upsert by (source, externalId)",
+        "Compare text",
+        "Ignore duplicates"
+      ],
+      "answer": 1,
+      "explanation": "The source's ID makes imports idempotent."
+    }
+  ]
+}

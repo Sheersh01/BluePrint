@@ -1,0 +1,361 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "bluesky",
+  "category": "Common Problems",
+  "title": "Bluesky",
+  "seoTitle": "Design a Decentralised Social Network like Bluesky",
+  "description": "Design a decentralised social network like Bluesky — user-owned data repositories on personal data servers, a relay firehose, AppView indexing, portable identity, and custom feeds.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    },
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🦋",
+      "title": "What is Bluesky?",
+      "text": "Bluesky is a Twitter-like social network built on an open protocol (the AT Protocol). Instead of one company owning everyone's data, each user's posts live in a **signed data repository** on a Personal Data Server (PDS) they can choose and move between. Other services crawl all repositories to build timelines, search and custom feeds. The design question is how to get a familiar, fast social experience out of a decentralised architecture."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to post, follow, like and repost.",
+        "Users should see a home timeline of posts from people they follow.",
+        "Users should be able to move their account to a different server without losing followers or posts.",
+        "Anyone should be able to build and offer **custom feeds** (e.g. \"science posts\") that users can subscribe to."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Direct messages.",
+        "Detailed moderation (labelling services, mentioned briefly).",
+        "Media storage details."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Timelines load in < 500 ms, just like a centralised app.",
+        "Posts appear for followers within a few seconds.",
+        "Data integrity: anyone can verify a post really came from its author.",
+        "Scale to ~30M users and thousands of posts and likes per second, with many independently run servers."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Full peer-to-peer operation without any large services."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- post, follow, like, repost",
+        "- home timeline",
+        "- portable accounts",
+        "- custom feeds by anyone",
+        "",
+        "Non-functional",
+        "- timeline < 500ms",
+        "- followers see posts in seconds",
+        "- verifiable authorship",
+        "- 30M users, many servers"
+      ],
+      "caption": "Bluesky Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**DID (decentralised identifier)**: a permanent account ID that points to the user's current PDS and signing key.",
+        "**Handle**: a human-readable name (like `alice.example.com`) mapped to the DID via DNS.",
+        "**Repository**: a user's signed collection of records — posts, likes, follows — stored as a Merkle tree.",
+        "**Record**: one item, such as `app.bsky.feed.post`.",
+        "**Firehose event**: a commit to any repository, streamed by relays."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "(PDS)     POST /xrpc/com.atproto.repo.createRecord { collection, record }\n(Relay)   WS   /xrpc/com.atproto.sync.subscribeRepos      -> firehose of commits\n(AppView) GET  /xrpc/app.bsky.feed.getTimeline?cursor=\n(AppView) GET  /xrpc/app.bsky.feed.getFeed?feed=<feed generator>\n(Feed gen) GET /xrpc/app.bsky.feed.getFeedSkeleton -> [postUris]"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-write-to-their-own-repository",
+      "text": "1) Users write to their own repository"
+    },
+    {
+      "type": "paragraph",
+      "text": "A post is a new record written to the user's repository on their **PDS**, which signs the new repository root with the user's key. The PDS only stores its own users' data; it doesn't need to know about the rest of the network."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-relays-aggregate-everything-into-a-firehose",
+      "text": "2) Relays aggregate everything into a firehose"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Relays** subscribe to every PDS they know and merge all commits into one ordered stream: the **firehose**. Anyone can consume it. Because commits are signed, consumers can verify each event without trusting the relay."
+    },
+    {
+      "type": "diagram",
+      "file": "01-write-path.svg",
+      "caption": "Write path"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-the-appview-builds-the-social-experience",
+      "text": "3) The AppView builds the social experience"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **AppView** consumes the firehose and builds the indexes a social app needs: follower graphs, like counts, threads and **home timelines**. Clients read from the AppView, which works much like a centralised Twitter backend — it's just fed by an open stream instead of private writes."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-portable-identity-and-custom-feeds",
+      "text": "4) Portable identity and custom feeds"
+    },
+    {
+      "type": "paragraph",
+      "text": "A user's **DID document** lists their current PDS. Moving servers means copying the repository to a new PDS and updating the DID document; followers follow the DID, not the server, so nothing breaks. **Feed generators** are independent services that consume the firehose, pick posts by their own logic, and return a list of post IDs; the AppView fills in the post content."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-build-home-timelines-from-the-firehose",
+      "text": "1) How do we build home timelines from the firehose?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Query each followed user's PDS on read",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "When a user opens the app, fetch recent posts from every followed account's PDS."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Hundreds of requests to independently run servers per timeline load — slow and unreliable."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Fan-out on read in the AppView",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "The AppView indexes all posts by author; a timeline query merges recent posts from followed authors."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Users following thousands of accounts make each read expensive."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Hybrid fan-out",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "For most authors, **fan out on write** inside the AppView: when a post arrives from the firehose, insert its ID into each follower's timeline cache. For accounts with huge follower counts, skip fan-out and **merge their recent posts at read time**. Timelines are lists of post IDs in a wide-column store (ScyllaDB/Cassandra), hydrated from a post cache."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Same trade-offs as Twitter, plus handling firehose bursts and replays after outages."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-why-separate-pds-relay-and-appview",
+      "text": "2) Why separate PDS, Relay and AppView?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each scales differently. PDSes are numerous and small (many people can run one). Relays need high bandwidth but simple logic. AppViews need large indexes and heavy read capacity. Separating them lets independent operators run each piece, while a big AppView still gives users a fast experience. Because data is signed and public, a competing AppView can be built from the same firehose — users aren't locked in."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Make the trade-off explicit: decentralisation adds hops and duplicate storage, but buys data portability and the freedom to switch apps, feeds and moderation providers."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-does-moderation-work-without-a-single-owner",
+      "text": "3) How does moderation work without a single owner?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Moderation is layered: PDS operators can take down content they host, AppViews can choose not to show it, and independent **labelling services** publish labels (\"spam\", \"graphic\") that users subscribe to and clients apply. Users pick which labellers and feeds they trust."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Where does a Bluesky user's data live?",
+      "options": [
+        "Only in the AppView",
+        "In a signed repository on their Personal Data Server",
+        "On the client only",
+        "In the relay"
+      ],
+      "answer": 1,
+      "explanation": "The PDS stores the user's records; others index copies."
+    },
+    {
+      "question": "What does the relay provide?",
+      "options": [
+        "Timelines",
+        "A firehose of commits from all repositories",
+        "User login",
+        "Image storage"
+      ],
+      "answer": 1,
+      "explanation": "Relays aggregate every PDS into one stream anyone can consume."
+    },
+    {
+      "question": "How can a user change servers without losing followers?",
+      "options": [
+        "They can't",
+        "Followers follow a permanent DID that is updated to point to the new PDS",
+        "By emailing followers",
+        "By re-posting everything"
+      ],
+      "answer": 1,
+      "explanation": "Identity is decoupled from hosting."
+    },
+    {
+      "question": "Why can anyone verify a post's authorship?",
+      "options": [
+        "Relays vouch for it",
+        "Repository commits are signed with the user's key",
+        "Posts include a password",
+        "AppViews check IDs"
+      ],
+      "answer": 1,
+      "explanation": "Signatures make the data trustworthy no matter who serves it."
+    }
+  ]
+}

@@ -1,0 +1,376 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "ecommerce-checkout",
+  "category": "Common Problems",
+  "title": "E-commerce Checkout",
+  "seoTitle": "Design an E-commerce Checkout System",
+  "description": "Design checkout for an online store — carts, inventory reservation, idempotent order placement, payment, and an orchestrated order workflow.",
+  "tags": [
+    {
+      "label": "Multi-step Processes",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    },
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🛒",
+      "title": "What is an E-commerce Checkout?",
+      "text": "Checkout is the path from \"items in my cart\" to \"order confirmed\": pricing the cart, reserving stock, charging the customer and creating the order — reliably, even when payments fail or users double-click."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to add and remove items in a cart that persists across devices.",
+        "At checkout, users should see the final price (items, tax, shipping, discounts).",
+        "Placing an order should reserve inventory, charge payment and create the order.",
+        "Users should get a confirmation and see the order status."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Fulfilment and shipping logistics.",
+        "Product search and recommendations."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Never charge without creating an order, and never create duplicate orders or charges.",
+        "No overselling of limited stock.",
+        "Checkout completes in a couple of seconds and is highly available — it's where revenue happens.",
+        "Handle peak sales events (10× normal traffic)."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Multi-currency and tax calculation internals."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- persistent cart",
+        "- final price",
+        "- place order: reserve, charge, create",
+        "- confirmation + status",
+        "",
+        "Non-functional",
+        "- no duplicate orders / charges",
+        "- no overselling",
+        "- fast, highly available",
+        "- 10x peak traffic"
+      ],
+      "caption": "Checkout Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Cart**: user, line items (SKU, quantity).",
+        "**Inventory**: available and reserved quantity per SKU (per warehouse).",
+        "**Order**: items, prices, totals, status, idempotency key.",
+        "**Payment**: authorisation/capture status with the payment provider."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "PUT  /cart/items/:sku { quantity }\nGET  /cart -> { items, subtotal }\nPOST /checkout/quote -> { quoteId, total, tax, shipping, expiresAt }\nPOST /orders { quoteId, paymentMethodToken } (Idempotency-Key header) -> { orderId, status }\nGET  /orders/:id"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-manage-a-cart",
+      "text": "1) Users manage a cart"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Cart Service** stores carts in a key-value store keyed by user ID (fast reads and writes, simple shape). Carts don't reserve stock — that would let abandoned carts lock inventory."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-see-the-final-price",
+      "text": "2) Users see the final price"
+    },
+    {
+      "type": "paragraph",
+      "text": "`POST /checkout/quote` calls pricing, promotions, tax and shipping services, then stores a short-lived **quote** with the exact totals. The order references the quote, so the customer is charged what they saw."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-placing-an-order",
+      "text": "3) Placing an order"
+    },
+    {
+      "type": "diagram",
+      "file": "01-order-placement-saga.svg",
+      "caption": "Order placement saga"
+    },
+    {
+      "type": "paragraph",
+      "text": "An **Order Orchestrator** runs the steps as a saga:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Reserve inventory for every line item (with an expiry).",
+        "Authorise the payment.",
+        "Create the order as `CONFIRMED` and commit the inventory reservation.",
+        "Emit `order.placed` for fulfilment, email and analytics."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "If any step fails, compensations run in reverse: void the authorisation, release the reservation."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-confirmation-and-status",
+      "text": "4) Confirmation and status"
+    },
+    {
+      "type": "paragraph",
+      "text": "The client receives the order ID immediately; status updates (paid, shipped) come from events and are visible via `GET /orders/:id`."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-prevent-duplicate-orders-and-charges",
+      "text": "1) How do we prevent duplicate orders and charges?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Disable the button on the client",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Prevent double clicks in the UI."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Network retries, page refreshes and mobile reconnects still send duplicates."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Idempotency keys end to end",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "The client generates an idempotency key per checkout attempt. The Order Service stores it with a unique constraint; a repeated request returns the existing order instead of creating another. The orchestrator passes deterministic keys (orderId + step) to the payment provider, so retries never double-charge."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Keys must be scoped per user and retained long enough to cover retries."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-avoid-overselling",
+      "text": "2) How do we avoid overselling?"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Decrement stock at order time with a conditional update",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "`UPDATE inventory SET available = available - :qty WHERE sku = ? AND available >= :qty`."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Correct, but if payment then fails we must add the stock back."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Reservations with expiry, committed on success",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Move quantity from `available` to `reserved` atomically, with a reservation expiry. On success the reservation is committed; on failure or timeout it's released by the saga or an expiry job. For flash-sale-level contention, see [Flash Sale](/learn/system-design/problem-breakdowns/flash-sale)."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Multi-warehouse stock needs allocation logic to choose where to reserve."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-what-if-a-step-s-outcome-is-unknown",
+      "text": "3) What if a step's outcome is unknown?"
+    },
+    {
+      "type": "paragraph",
+      "text": "If the payment call times out, don't assume failure. The orchestrator persists state after every step, retries with the same idempotency key, and queries the provider for the transaction status. A periodic reconciliation compares orders, reservations and payments to catch anything stuck."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why shouldn't adding to cart reserve inventory?",
+      "options": [
+        "It's slow",
+        "Abandoned carts would lock up stock",
+        "Carts can't store SKUs",
+        "Payment requires it"
+      ],
+      "answer": 1,
+      "explanation": "Reserve only at checkout, with an expiry."
+    },
+    {
+      "question": "What prevents a retried order request from creating a second order?",
+      "options": [
+        "Disabling the button",
+        "An idempotency key with a unique constraint",
+        "Rate limiting",
+        "Caching the cart"
+      ],
+      "answer": 1,
+      "explanation": "The repeat request returns the original order."
+    },
+    {
+      "question": "If authorising payment fails after inventory was reserved, what happens?",
+      "options": [
+        "Keep the reservation",
+        "A compensating action releases the reservation",
+        "Charge again",
+        "Ship anyway"
+      ],
+      "answer": 1,
+      "explanation": "Sagas undo completed steps on failure."
+    },
+    {
+      "question": "Why does the order reference a quote?",
+      "options": [
+        "For SEO",
+        "So the customer is charged exactly the total they saw",
+        "To skip taxes",
+        "To cache the cart"
+      ],
+      "answer": 1,
+      "explanation": "The quote locks pricing for a short window."
+    }
+  ]
+}

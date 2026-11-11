@@ -1,0 +1,223 @@
+{
+  "section": "patterns",
+  "slug": "managing-long-running-tasks",
+  "category": "Patterns",
+  "title": "Managing Long Running Tasks",
+  "subtitle": "Work that takes seconds to hours — async job queues, workers, status tracking, retries, and progress reporting.",
+  "seoTitle": "Design Managing Long Running Tasks | System Design Interview Breakdown",
+  "description": "Work that takes seconds to hours — async job queues, workers, status tracking, retries, and progress reporting.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "blocks": [
+    {
+      "type": "paragraph",
+      "text": "Transcoding a video, generating a report, running user-submitted code, sending a million emails — some work simply takes too long to do inside an HTTP request. This pattern decouples **accepting** work from **doing** it, so users get an immediate response and the work completes reliably in the background."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-problem",
+      "text": "The Problem"
+    },
+    {
+      "type": "paragraph",
+      "text": "If a request handler does a 5-minute job synchronously:"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Clients and load balancers time out (often after 30-60 seconds).",
+        "A server crash loses the work with no record it was ever requested.",
+        "Spiky demand ties up web servers, so even fast endpoints slow down.",
+        "You can't scale the heavy work independently of the API."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-solution",
+      "text": "The Solution"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Do it inline and raise the timeout",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Increase every timeout to 10 minutes and process the job in the request."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Doesn't survive crashes or deploys, holds connections and threads hostage, and still fails for jobs longer than the new limit."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Background threads on the web server",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Accept the request, spawn a background thread, and return immediately."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Work is lost if the server restarts, and web and worker load still compete for the same machines."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Async job queue with workers",
+      "approach": [
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "The API validates the request, writes a **Job** record (`status = PENDING`), enqueues a message, and returns `202 Accepted` with a job ID.",
+            "A separate pool of **workers** consumes the queue, marks the job `RUNNING`, does the work, and stores the result (often in blob storage) with `status = SUCCEEDED` or `FAILED`.",
+            "The client polls `GET /jobs/:id`, or is notified via webhook, SSE or push when it finishes."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "Workers scale independently on queue depth, and the queue's **visibility timeout** redelivers work if a worker crashes."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "At-least-once delivery means jobs may run twice — make them idempotent. Very long jobs need heartbeats to extend their visibility timeout."
+        }
+      ]
+    },
+    {
+      "type": "diagram",
+      "file": "01-async-job-processing.svg",
+      "caption": "Async job processing"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "when-to-use-in-interviews",
+      "text": "When to Use in Interviews"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "[YouTube](/learn/system-design/problem-breakdowns/youtube) — transcoding uploaded videos.",
+        "[LeetCode](/learn/system-design/problem-breakdowns/leetcode) — running and judging submissions.",
+        "[Job Scheduler](/learn/system-design/problem-breakdowns/job-scheduler) — executing scheduled jobs reliably.",
+        "[ChatGPT](/learn/system-design/problem-breakdowns/chatgpt) — long LLM generations decoupled from the connection.",
+        "[Web Crawler](/learn/system-design/problem-breakdowns/web-crawler) — fetching and parsing pages at scale."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "common-deep-dives",
+      "text": "Common Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "how-do-you-report-progress",
+      "text": "How do you report progress?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Workers periodically write progress (percent complete, current stage) to the job record or a fast store like Redis. Clients poll or subscribe via SSE. For multi-stage pipelines, model stages explicitly so progress is meaningful."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "how-do-you-handle-failures-and-retries",
+      "text": "How do you handle failures and retries?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Retry transient failures with exponential backoff and jitter, up to a maximum attempt count, then move the job to a dead-letter queue and mark it `FAILED` with an error message. Distinguish retryable errors (timeouts) from permanent ones (invalid input) so you don't retry hopeless jobs."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "how-do-you-prevent-one-tenant-or-a-burst-from-starving-others",
+      "text": "How do you prevent one tenant or a burst from starving others?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Use separate queues or priorities (interactive vs. batch), per-tenant concurrency limits, and autoscaling on queue age rather than just depth."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "conclusion",
+      "text": "Conclusion"
+    },
+    {
+      "type": "paragraph",
+      "text": "Accept quickly, process asynchronously. Persist a job record, enqueue the work, let an independently scalable worker pool process it with retries and idempotency, and give clients a way to check status or be notified."
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What should an API return when it accepts a long-running job?",
+      "options": [
+        "200 with the final result after waiting",
+        "202 Accepted with a job ID",
+        "500",
+        "A redirect to the worker"
+      ],
+      "answer": 1,
+      "explanation": "The client gets an immediate acknowledgement and tracks the job by ID."
+    },
+    {
+      "question": "What redelivers a job if its worker crashes?",
+      "options": [
+        "The client",
+        "The queue's visibility timeout",
+        "The load balancer",
+        "DNS"
+      ],
+      "answer": 1,
+      "explanation": "Unacknowledged messages become visible again for another worker."
+    },
+    {
+      "question": "Why must jobs be idempotent?",
+      "options": [
+        "To run faster",
+        "At-least-once delivery means a job may execute more than once",
+        "To save storage",
+        "Queues require JSON"
+      ],
+      "answer": 1,
+      "explanation": "Idempotency makes duplicate executions harmless."
+    },
+    {
+      "question": "Why run workers separately from web servers?",
+      "options": [
+        "Workers need GPUs always",
+        "So heavy work scales independently and doesn't slow the API",
+        "Web servers can't connect to queues",
+        "For security only"
+      ],
+      "answer": 1,
+      "explanation": "Independent pools let each side scale on its own load signal."
+    }
+  ]
+}

@@ -1,0 +1,361 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "large-scale-sorting",
+  "category": "Common Problems",
+  "title": "Sorting Large Data Sets",
+  "seoTitle": "Design a System to Sort Terabytes of Data",
+  "description": "Design a system to sort data far larger than memory — external merge sort, distributed range partitioning with sampling, and fault-tolerant execution.",
+  "tags": [
+    {
+      "label": "Managing Long Running Tasks",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "easy",
+  "askedAt": {
+    "companies": [
+      "Google",
+      "Microsoft"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🗂️",
+      "title": "What is Large-Scale Sorting?",
+      "text": "Sorting a dataset that doesn't fit in one machine's memory — say 10TB of log records sorted by timestamp — requires splitting the work across disk and many machines, then combining the results."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Given an input dataset (files in blob storage), produce output files sorted by a key.",
+        "Output should be globally sorted: concatenating output files in order yields a sorted dataset.",
+        "Users should be able to submit a sort job and track its progress."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Streaming (continuously arriving) data.",
+        "Custom user code beyond a key extractor."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Handle datasets of 10TB+ with machines that have, say, 64GB of RAM.",
+        "Finish in reasonable time by scaling out to hundreds of workers.",
+        "Tolerate worker failures without restarting the whole job."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Sub-second latency."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- sort files by key",
+        "- globally sorted output",
+        "- submit + track jobs",
+        "",
+        "Non-functional",
+        "- 10TB+ input, 64GB RAM nodes",
+        "- scale out to 100s of workers",
+        "- tolerate worker failures"
+      ],
+      "caption": "Sorting Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Job**: input location, key, output location, status.",
+        "**Task**: a unit of work (sort a chunk, or merge a partition) assigned to a worker.",
+        "**Run**: a sorted intermediate file written by a task."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /sort-jobs { \"input\": \"s3://logs/2026/\", \"key\": \"timestamp\", \"output\": \"s3://sorted/\" } -> { jobId }\nGET  /sort-jobs/:id -> { status, progress }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-sort-data-larger-than-one-machine-s-memory",
+      "text": "1) Sort data larger than one machine's memory"
+    },
+    {
+      "type": "paragraph",
+      "text": "On a single machine, use **external merge sort**:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Read the input in chunks that fit in memory (e.g. 50GB), sort each chunk in memory, and write it to disk as a sorted **run**.",
+        "Merge all runs with a k-way merge using a min-heap: repeatedly emit the smallest head among the runs."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "This reads and writes the data a small number of times and never needs it all in memory."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-produce-globally-sorted-output-across-many-machines",
+      "text": "2) Produce globally sorted output across many machines"
+    },
+    {
+      "type": "paragraph",
+      "text": "Split the work into two phases, like MapReduce:"
+    },
+    {
+      "type": "diagram",
+      "file": "01-distributed-sort-with-range-partitioning.svg",
+      "caption": "Distributed sort with range partitioning"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Sample** the input to choose N−1 split points that divide the key space into N ranges of roughly equal size.",
+        "**Map**: workers read input chunks and send each record to the reducer responsible for its key range.",
+        "**Reduce**: each reducer sorts (external merge) the records it received and writes `part-i`. Because ranges don't overlap, `part-0, part-1, ...` concatenated is globally sorted."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-track-progress",
+      "text": "3) Track progress"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **coordinator** splits the job into tasks, assigns them to workers, and records task status, which the status API reports."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-keep-partitions-balanced",
+      "text": "1) How do we keep partitions balanced?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Fixed key ranges",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Divide the key space evenly (e.g. by first letter)."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Real data is skewed — most keys may start with \"s\" — so one reducer gets most of the work and the job is as slow as that straggler."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Sample-based split points",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Take a random sample of keys (e.g. 0.1%), sort it, and pick evenly spaced quantiles as split points. Ranges then hold roughly equal record counts."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Heavily duplicated keys can still overload one range; break ties with a secondary key."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-handle-worker-failures-and-stragglers",
+      "text": "2) How do we handle worker failures and stragglers?"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Restart the whole job",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "If anything fails, start over."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "On a multi-hour job with hundreds of workers, some failure is almost guaranteed."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Task-level retries and speculative execution",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "The coordinator tracks each task; if a worker stops heartbeating, its task is rescheduled elsewhere. Intermediate outputs are written durably, so completed map tasks aren't redone. Near the end, slow tasks are **speculatively** duplicated on other workers and whichever finishes first wins."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Task outputs must be written atomically (write to a temp path, then rename) so duplicates don't corrupt results."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What is external merge sort?",
+      "options": [
+        "Sorting entirely in memory",
+        "Sorting memory-sized chunks into runs on disk, then k-way merging them",
+        "Sorting on GPUs",
+        "Using a hash table"
+      ],
+      "answer": 1,
+      "explanation": "It handles data larger than RAM with a few sequential passes."
+    },
+    {
+      "question": "Why is output part-0..part-N globally sorted when concatenated?",
+      "options": [
+        "Reducers coordinate constantly",
+        "Each reducer owns a non-overlapping key range, and ranges are ordered",
+        "Files are sorted again afterwards",
+        "Luck"
+      ],
+      "answer": 1,
+      "explanation": "Range partitioning guarantees every key in part-i precedes every key in part-(i+1)."
+    },
+    {
+      "question": "How are balanced split points chosen?",
+      "options": [
+        "Evenly across the alphabet",
+        "From quantiles of a random sample of keys",
+        "Randomly",
+        "By file size"
+      ],
+      "answer": 1,
+      "explanation": "Sampling reflects the real key distribution, including skew."
+    },
+    {
+      "question": "What is speculative execution?",
+      "options": [
+        "Guessing results",
+        "Running duplicate copies of slow tasks and using whichever finishes first",
+        "Skipping failed tasks",
+        "Sorting twice"
+      ],
+      "answer": 1,
+      "explanation": "It reduces the impact of straggling workers on total job time."
+    }
+  ]
+}

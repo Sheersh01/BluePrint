@@ -1,0 +1,371 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "hotel-booking",
+  "category": "Common Problems",
+  "title": "Hotel Booking",
+  "seoTitle": "Design a Hotel Reservation System Like Booking.com",
+  "description": "Design a hotel booking system — searching availability by date range, holding rooms during checkout, preventing double booking, and overbooking policies.",
+  "tags": [
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "askedAt": {
+    "companies": [
+      "Amazon",
+      "Square",
+      "Booking.com"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🏨",
+      "title": "What is a Hotel Booking System?",
+      "text": "A hotel booking system (like Booking.com or a hotel chain's site) lets guests search for available rooms by location and dates, reserve one, and pay — while hotels manage their inventory."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to search hotels by location and date range and see available room types with prices.",
+        "Users should be able to reserve a room type for a date range.",
+        "Users should be able to cancel a reservation.",
+        "Hotels should be able to update room inventory and rates."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Reviews and loyalty programs.",
+        "Dynamic pricing algorithms."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "No double booking — never confirm more rooms than exist (unless overbooking is explicitly allowed).",
+        "Search is highly available and fast (< 500ms); availability may be slightly stale in search results.",
+        "Booking is strongly consistent.",
+        "Scale to 1M+ hotels and peaks of thousands of bookings per second."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Channel manager integrations."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- search by location + dates",
+        "- reserve room type",
+        "- cancel",
+        "- hotels manage inventory",
+        "",
+        "Non-functional",
+        "- no double booking",
+        "- fast, available search",
+        "- consistent booking",
+        "- 1M hotels"
+      ],
+      "caption": "Hotel Booking Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Hotel**: location, details.",
+        "**Room type**: e.g. \"Deluxe King\", with a total count.",
+        "**Inventory**: per room type **per night** — total and reserved counts.",
+        "**Reservation**: guest, room type, check-in/out dates, status, price."
+      ]
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Guests book a room *type*, not a specific room number. Model inventory as counts per room type per night — room numbers are assigned at check-in."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /hotels?lat&lng&checkIn&checkOut&guests -> Hotel[] (with available room types)\nPOST /reservations { \"roomTypeId\", \"checkIn\", \"checkOut\", \"idempotencyKey\" } -> Reservation (HELD)\nPOST /reservations/:id/confirm { \"paymentToken\" } -> Reservation (CONFIRMED)\nDELETE /reservations/:id"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-users-should-be-able-to-search",
+      "text": "1) Users should be able to search"
+    },
+    {
+      "type": "paragraph",
+      "text": "Hotel details and locations are indexed in a search engine (geo + filters). Availability for a date range comes from the Inventory table; for search we read a **cached availability summary** that tolerates slight staleness, and we always re-check during booking."
+    },
+    {
+      "type": "diagram",
+      "file": "01-search-and-reserve.svg",
+      "caption": "Search and reserve"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-users-should-be-able-to-reserve-a-room",
+      "text": "2) Users should be able to reserve a room"
+    },
+    {
+      "type": "paragraph",
+      "text": "A stay covers several nights, so a reservation must decrement inventory for **every night** in the range atomically. The Reservation Service does this in one transaction and creates a reservation in `HELD` state with a short expiry while the guest pays."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-users-should-be-able-to-cancel",
+      "text": "3) Users should be able to cancel"
+    },
+    {
+      "type": "paragraph",
+      "text": "Cancellation marks the reservation cancelled and increments the reserved counts back for each night, in one transaction."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-hotels-should-update-inventory",
+      "text": "4) Hotels should update inventory"
+    },
+    {
+      "type": "paragraph",
+      "text": "Hotel staff update totals and rates; changes write to the Inventory table and invalidate the availability cache for that hotel."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-prevent-double-booking",
+      "text": "1) How do we prevent double booking?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Check availability, then insert",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Query free rooms for each night, then insert the reservation."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Concurrent bookings both see the last room free and both succeed."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Lock inventory rows for the stay",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "In a transaction, `SELECT ... FOR UPDATE` the inventory rows for each night (in date order, to avoid deadlocks), verify `reserved < total`, increment, insert the reservation, commit."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Correct; contention is limited to the same room type and nights, which is usually fine."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Conditional updates per night",
+      "approach": [
+        {
+          "type": "code",
+          "code": "UPDATE inventory SET reserved = reserved + 1\nWHERE room_type_id = ? AND date BETWEEN ? AND ? AND reserved < total;\n-- succeed only if rows_updated == number_of_nights, else roll back"
+        },
+        {
+          "type": "paragraph",
+          "text": "All nights update together or the transaction rolls back. A `CHECK (reserved <= total)` constraint is the final safety net. To allow controlled overbooking, compare against `total * 1.1` instead."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Must handle the partial-update case by rolling back; idempotency keys stop retries from double-reserving."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-hold-a-room-while-the-guest-pays",
+      "text": "2) How do we hold a room while the guest pays?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Create the reservation as `HELD` with `expiresAt = now + 10 min`, already counted in `reserved`. Confirming payment flips it to `CONFIRMED`. A scheduled job (or delayed message) releases expired holds by decrementing `reserved`. This avoids holding database locks during user think-time."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-keep-search-fast-without-stale-bookings",
+      "text": "3) How do we keep search fast without stale bookings?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Search reads a precomputed availability index (per hotel, room type and date) that is updated asynchronously from inventory changes via change data capture. Small staleness in search is acceptable; the booking path always checks the source of truth and returns a clear \"just sold out\" message if needed."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why model inventory per room type per night?",
+      "options": [
+        "It's easier to display",
+        "Guests book types for date ranges; each night's availability is independent",
+        "Room numbers are secret",
+        "To reduce rows"
+      ],
+      "answer": 1,
+      "explanation": "Counting per night lets multi-night stays check every night."
+    },
+    {
+      "question": "How do you make a 3-night reservation atomic?",
+      "options": [
+        "Reserve each night separately without a transaction",
+        "Update all three nights in one transaction and roll back unless all succeed",
+        "Reserve only the first night",
+        "Use the cache"
+      ],
+      "answer": 1,
+      "explanation": "Either every night is reserved or none is."
+    },
+    {
+      "question": "Why use a HELD reservation with an expiry during payment?",
+      "options": [
+        "To charge twice",
+        "To reserve inventory without holding database locks during user think-time",
+        "To skip payment",
+        "For search"
+      ],
+      "answer": 1,
+      "explanation": "Expired holds are released by a background job."
+    },
+    {
+      "question": "Why can search show slightly stale availability?",
+      "options": [
+        "Users don't care",
+        "Booking always re-checks the source of truth",
+        "Search is never cached",
+        "Inventory never changes"
+      ],
+      "answer": 1,
+      "explanation": "Staleness in search is safe because the booking path is consistent."
+    }
+  ]
+}

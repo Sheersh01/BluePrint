@@ -1,0 +1,363 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "crowdfunding",
+  "category": "Common Problems",
+  "title": "Crowdfunding",
+  "seoTitle": "Design a Crowdfunding Platform like Kickstarter",
+  "description": "Design a crowdfunding platform — campaigns with goals and deadlines, pledges authorised up front and captured only on success, live funding totals, and the deadline-day surge.",
+  "tags": [
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "label": "Multi-step Processes",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    },
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🎯",
+      "title": "What is a Crowdfunding Platform?",
+      "text": "A crowdfunding platform (Kickstarter, GoFundMe, Indiegogo) lets creators run campaigns with a funding goal and deadline, and lets backers pledge money, often in exchange for rewards. In the \"all-or-nothing\" model, backers are only charged if the campaign reaches its goal by the deadline."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Creators should be able to create a campaign with a goal, deadline and reward tiers (some with limited quantity).",
+        "Backers should be able to pledge an amount and optionally pick a reward.",
+        "Everyone should see the campaign's live total and backer count.",
+        "When the deadline passes, successful campaigns charge all backers; failed campaigns charge no one."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Payouts to creators and fraud review.",
+        "Campaign discovery and search.",
+        "Comments and updates."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "No backer is charged twice or charged for a failed campaign.",
+        "Limited rewards must never be oversold.",
+        "Totals should update within a few seconds.",
+        "Handle viral campaigns: thousands of pledges per second on a single campaign and a huge surge in the final hours."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Strong consistency of the displayed total (a few seconds stale is fine)."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- campaigns: goal, deadline, rewards",
+        "- pledge + pick reward",
+        "- live total + backers",
+        "- charge only if goal reached",
+        "",
+        "Non-functional",
+        "- no double / wrong charges",
+        "- no overselling limited rewards",
+        "- totals fresh within seconds",
+        "- viral hot campaigns"
+      ],
+      "caption": "Crowdfunding Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Campaign**: creator, goal, currency, deadline, status (`live`, `succeeded`, `failed`).",
+        "**Reward tier**: price, description, quantity limit, quantity claimed.",
+        "**Pledge**: backer, campaign, amount, reward, payment method, status (`authorised`, `captured`, `cancelled`, `failed`)."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /campaigns { goal, deadline, rewards[] }\nGET  /campaigns/:id -> { totalPledged, backers, rewards[], deadline }\nPOST /campaigns/:id/pledges { amount, rewardId?, paymentMethodId, idempotencyKey }\nDELETE /pledges/:id          (cancel before the deadline)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-creating-campaigns",
+      "text": "1) Creating campaigns"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Campaign Service** stores campaigns and reward tiers in a relational database. Campaign pages are mostly static and served through a CDN, except the live total."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-pledging",
+      "text": "2) Pledging"
+    },
+    {
+      "type": "paragraph",
+      "text": "Since charges only happen after the deadline, the **Pledge Service** saves the backer's payment method with the payment processor (a stored card or setup intent) and records the pledge. If a reward is limited, it's claimed in the same transaction (below). The pledge is idempotent by key, so a double-clicked button creates one pledge."
+    },
+    {
+      "type": "diagram",
+      "file": "01-pledging.svg",
+      "caption": "Pledging"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-live-totals",
+      "text": "3) Live totals"
+    },
+    {
+      "type": "paragraph",
+      "text": "Every pledge (and cancellation) is published as an event. An **aggregator** keeps `totalPledged` and `backers` per campaign in Redis, and pages poll it every few seconds (or receive updates via SSE). The database remains the source of truth."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-settling-at-the-deadline",
+      "text": "4) Settling at the deadline"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **settlement job** runs when a campaign's deadline passes. It locks the campaign, computes the final total from the database, and marks it `succeeded` or `failed`. For success, it enqueues a **charge job per pledge**; for failure, it cancels them. Each charge uses the pledge ID as the idempotency key. Failed charges get a few retries and a message asking the backer to update their card."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-avoid-overselling-limited-rewards",
+      "text": "1) How do we avoid overselling limited rewards?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Check then insert",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Read `claimed < limit`, then insert the pledge."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Two backers racing for the last reward both pass the check."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Conditional update in a transaction",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "`UPDATE rewards SET claimed = claimed + 1 WHERE id = ? AND claimed < limit` in the same transaction as the pledge insert; zero rows updated means sold out."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A hugely popular reward makes that single row a hot spot."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Pre-split counters for hot rewards",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "For a hot reward, split the remaining quantity into **N buckets** (e.g. 10 rows of 100 for 1,000 units) and have each pledge decrement a random bucket with a conditional update, trying another bucket if one is empty. Contention drops by N while still never overselling. Alternatively, an atomic decrement in Redis gates entry before the database write."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "When buckets run low, more retries are needed — fall back to scanning remaining buckets."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-handle-a-hot-campaign-s-total",
+      "text": "2) How do we handle a hot campaign's total?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Thousands of pledges per second all updating `campaign.total` would serialise on one row. Instead, never update the total synchronously: pledges are inserted (which parallelises well), and the aggregator **increments counters asynchronously**, batching events per second. The exact total is computed from the pledge table at settlement time."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Separate the \"display\" total (approximate, fast, async) from the \"settlement\" total (exact, computed once from the source of truth)."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-charge-100k-backers-reliably-at-the-deadline",
+      "text": "3) How do we charge 100k backers reliably at the deadline?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Treat settlement as a **batch workflow**: the job writes a charge task per pledge to a queue, workers charge with idempotency keys, and pledge status records the outcome. Rate-limit calls to the payment processor, and make the whole job resumable — rerunning it only picks up pledges that aren't `captured` yet."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "In all-or-nothing crowdfunding, when are backers charged?",
+      "options": [
+        "Immediately",
+        "Only after the campaign reaches its goal at the deadline",
+        "Monthly",
+        "When rewards ship"
+      ],
+      "answer": 1,
+      "explanation": "Cards are saved at pledge time and charged only on success."
+    },
+    {
+      "question": "How do we avoid overselling a limited reward?",
+      "options": [
+        "Check in the UI",
+        "A conditional update that only increments while claimed < limit",
+        "Allow overselling and refund",
+        "Cache the count"
+      ],
+      "answer": 1,
+      "explanation": "The database enforces the limit atomically."
+    },
+    {
+      "question": "Why update the displayed total asynchronously?",
+      "options": [
+        "It's more accurate",
+        "To avoid every pledge contending on a single row",
+        "Regulations",
+        "It's required by Redis"
+      ],
+      "answer": 1,
+      "explanation": "The exact total is computed from pledges at settlement."
+    },
+    {
+      "question": "What makes the deadline settlement safe to rerun?",
+      "options": [
+        "Running it at night",
+        "Per-pledge idempotency keys and status checks",
+        "Bigger servers",
+        "Deleting failed pledges"
+      ],
+      "answer": 1,
+      "explanation": "Reruns only process pledges that aren't already captured."
+    }
+  ]
+}

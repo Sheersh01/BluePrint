@@ -1,0 +1,367 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "google-maps",
+  "category": "Common Problems",
+  "title": "Google Maps",
+  "seoTitle": "Design Google Maps — Map Tiles, Routing and Live Traffic",
+  "description": "Design Google Maps — serving map tiles through CDNs, place search, fast routing on a road graph with precomputation, live traffic from phone location data, and ETA prediction.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    },
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    },
+    {
+      "label": "Handling Large Blobs",
+      "href": "/learn/system-design/patterns/handling-large-blobs"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🗺️",
+      "title": "What is Google Maps?",
+      "text": "Google Maps shows an interactive map of the world, finds places, and gives directions with travel times that account for live traffic. It's really three systems: a **map rendering** system (tiles), a **search** system for places and addresses, and a **routing** system that finds the fastest path on a road network of hundreds of millions of segments, using traffic data collected from phones."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to view and pan/zoom a map of any area.",
+        "Users should be able to search for places and addresses.",
+        "Users should get a route between two points with an ETA, for driving (and walking/cycling).",
+        "ETAs and routes should reflect current traffic, and navigation should reroute when conditions change."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Street View and satellite imagery capture.",
+        "Reviews and business listings (see Yelp).",
+        "Public transit scheduling."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Map panning is smooth: tiles load in < 100 ms.",
+        "Routes computed in < 1 second, even across a continent.",
+        "Traffic reflects reality within a couple of minutes.",
+        "Scale to ~1B monthly users, millions of route requests per minute, and location updates from hundreds of millions of devices.",
+        "Accurate ETAs (within ~10% most of the time)."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Real-time map edits by users."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- view map, pan + zoom",
+        "- search places",
+        "- routes + ETAs",
+        "- live traffic + rerouting",
+        "",
+        "Non-functional",
+        "- tiles < 100ms",
+        "- routes < 1s",
+        "- traffic fresh in ~2 min",
+        "- 1B users",
+        "- accurate ETAs"
+      ],
+      "caption": "Maps Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Tile**: a square image or vector data for zoom level z and coordinates (x, y).",
+        "**Road graph**: nodes (intersections) and edges (road segments) with length, speed limit, restrictions.",
+        "**Place**: name, location, category, address.",
+        "**Traffic speed**: current average speed per road segment, with timestamp.",
+        "**Location ping**: anonymised device position and speed, used to derive traffic."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /tiles/{z}/{x}/{y}.pbf            (via CDN, vector tiles)\nGET  /search?q=&near=lat,lng\nGET  /directions?from=&to=&mode=driving&depart=now -> { routes: [{ polyline, eta, steps }] }\nPOST /navigation/:sessionId/location { lat, lng, speed }   (during navigation)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-viewing-the-map",
+      "text": "1) Viewing the map"
+    },
+    {
+      "type": "paragraph",
+      "text": "The world is divided into **tiles** at each zoom level (a quadtree: level z has 4^z tiles). Tiles are pre-generated from map data as **vector tiles** (roads, labels, shapes) that the client renders, so one tile works at any screen resolution and style. Tiles are static and served from a **CDN**, with clients caching them heavily."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-searching-places",
+      "text": "2) Searching places"
+    },
+    {
+      "type": "paragraph",
+      "text": "Places and addresses are indexed in a search system with text fields and a **geo field**, so queries rank by text match, popularity and distance from the user or viewport. Address queries use a **geocoder** that parses the address and finds the matching point."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-routing",
+      "text": "3) Routing"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Routing Service** loads the road graph into memory. A plain Dijkstra search across a continent explores millions of nodes and takes too long, so the graph is **preprocessed** (see deep dive) to answer queries in milliseconds. Edge weights are travel times from the current traffic data."
+    },
+    {
+      "type": "diagram",
+      "file": "01-routing.svg",
+      "caption": "Routing"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-live-traffic",
+      "text": "4) Live traffic"
+    },
+    {
+      "type": "paragraph",
+      "text": "Phones with location sharing send anonymised speed and position. A streaming pipeline **map-matches** each ping to a road segment and computes current average speed per segment over the last few minutes. Speeds update the routing weights and the traffic colours on map tiles (as a separate overlay layer, refreshed every minute)."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-compute-routes-in-milliseconds",
+      "text": "1) How do we compute routes in milliseconds?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Dijkstra on the full graph",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Run Dijkstra from origin to destination over the whole road network."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A cross-country route explores tens of millions of nodes — seconds of CPU per request."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "A* with partitioning",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Use A* with a distance heuristic and split the map into regions, searching only regions between origin and destination."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Faster, but long routes still explore huge areas, and traffic changes require care."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Contraction hierarchies / customisable route planning",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Preprocess the graph into a hierarchy: **contraction hierarchies** add shortcut edges so a query only climbs to \"important\" roads and back down, exploring a few thousand nodes. For live traffic, use **customisable route planning (CRP)**: the graph is partitioned into cells once, and only the cheap \"customisation\" step (recomputing shortcut costs inside cells) runs when traffic weights change — every minute or so. Queries then take milliseconds."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Preprocessing is heavy and memory-hungry; graph data is replicated across many routing servers per region."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-turn-location-pings-into-traffic",
+      "text": "2) How do we turn location pings into traffic?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Hundreds of millions of devices send pings, partitioned by **region/tile** in Kafka. A stream processor map-matches pings to segments (using a hidden Markov model over the road graph), filters outliers (a parked car, a cyclist on a road), and aggregates speeds per segment per minute, requiring a minimum number of devices for privacy. Segments without live data fall back to **historical speed profiles** for that time of week."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention that ETA isn't just sum of current speeds: traffic will change during a long trip, so an ETA model predicts future segment speeds from historical patterns plus current conditions."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-serve-tiles-at-this-scale",
+      "text": "3) How do we serve tiles at this scale?"
+    },
+    {
+      "type": "paragraph",
+      "text": "There are trillions of possible tiles, but traffic is extremely skewed toward cities and common zoom levels. Pre-render popular tiles; generate rare ones **on demand** and cache them. Vector tiles are small and compress well; the CDN handles almost all requests, and clients cache tiles locally (also enabling **offline maps** by downloading a region's tiles and graph)."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why are map tiles served from a CDN?",
+      "options": [
+        "They're secret",
+        "Tiles are static and heavily reused, so edge caching handles almost all requests",
+        "CDNs compute routes",
+        "Browsers require it"
+      ],
+      "answer": 1,
+      "explanation": "Tiles change rarely and are requested enormously often."
+    },
+    {
+      "question": "Why isn't plain Dijkstra used for long routes?",
+      "options": [
+        "It gives wrong answers",
+        "It explores far too many nodes for millisecond responses",
+        "It ignores distance",
+        "It can't handle one-way roads"
+      ],
+      "answer": 1,
+      "explanation": "Preprocessed hierarchies make queries orders of magnitude faster."
+    },
+    {
+      "question": "What does customisable route planning make cheap?",
+      "options": [
+        "Tile rendering",
+        "Updating route weights when traffic changes",
+        "Search",
+        "Storing places"
+      ],
+      "answer": 1,
+      "explanation": "Only the customisation step reruns, not full preprocessing."
+    },
+    {
+      "question": "What is map-matching?",
+      "options": [
+        "Matching map colours",
+        "Assigning noisy GPS pings to the road segment the device is actually on",
+        "Comparing maps",
+        "Geocoding addresses"
+      ],
+      "answer": 1,
+      "explanation": "It's the first step in turning pings into segment speeds."
+    }
+  ]
+}

@@ -1,0 +1,360 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "voting-system",
+  "category": "Common Problems",
+  "title": "Online Voting System",
+  "seoTitle": "Design an Online Voting System",
+  "description": "Design an online voting system — verifying eligible voters, one vote per person, durable and auditable ballots, live tallies, and handling peak load.",
+  "tags": [
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "medium",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🗳️",
+      "title": "What is an Online Voting System?",
+      "text": "An online voting system lets eligible people cast a vote in a poll or election — anything from a TV talent show to an organisation's board election — and produces trustworthy results."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Only eligible, authenticated voters should be able to vote.",
+        "Each voter should be able to vote at most once per election.",
+        "Voters should receive confirmation that their vote was recorded.",
+        "Organisers should see live or final tallies."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Government-grade elections (which require far stronger guarantees than any web system — paper trails, in-person verification).",
+        "Ranked-choice counting algorithms."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Correctness: no lost votes and no double votes.",
+        "Durability and auditability: every accepted vote can be verified later.",
+        "Handle bursts — e.g. 10M votes in the final 10 minutes of a TV vote.",
+        "Ballot secrecy where required: tallies shouldn't reveal how an individual voted."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Coercion resistance."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- eligible, authenticated voters",
+        "- one vote per voter",
+        "- confirmation receipt",
+        "- live / final tallies",
+        "",
+        "Non-functional",
+        "- no lost or double votes",
+        "- durable + auditable",
+        "- 10M votes in 10 minutes",
+        "- ballot secrecy"
+      ],
+      "caption": "Voting Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Election**: options, eligibility rules, open/close times.",
+        "**Voter**: an eligible identity (verified account, member ID).",
+        "**Participation record**: (electionId, voterId) — proves someone voted, without the choice when secrecy matters.",
+        "**Ballot**: the choice, stored separately from identity for secret ballots.",
+        "**Tally**: aggregated counts per option."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /elections/:id -> { options, opensAt, closesAt }\nPOST /elections/:id/votes { optionId } (authenticated, Idempotency-Key) -> { receiptId }\nGET  /elections/:id/results -> { counts }\nGET  /receipts/:receiptId -> { recorded: true }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-only-eligible-voters-vote",
+      "text": "1) Only eligible voters vote"
+    },
+    {
+      "type": "paragraph",
+      "text": "Voters authenticate (account login, emailed token, or membership credentials). The **Vote Service** checks eligibility rules for the election before accepting a ballot."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-one-vote-per-voter",
+      "text": "2) One vote per voter"
+    },
+    {
+      "type": "diagram",
+      "file": "01-casting-a-vote.svg",
+      "caption": "Casting a vote"
+    },
+    {
+      "type": "paragraph",
+      "text": "The Vote Service inserts a participation record with a **unique constraint on (electionId, voterId)**. Only if that insert succeeds does it append the ballot. Both happen in one transaction (or the ballot write is driven from the participation commit via an outbox), so a vote is never counted without the record, and never twice."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-confirm-the-vote",
+      "text": "3) Confirm the vote"
+    },
+    {
+      "type": "paragraph",
+      "text": "The response returns a receipt ID; the voter can later check that the receipt exists in the recorded set."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-tallies",
+      "text": "4) Tallies"
+    },
+    {
+      "type": "paragraph",
+      "text": "Ballots stream from the append-only log to **tally workers** that aggregate counts per option. Live results read the aggregated counters; final results are recomputed from the full ballot log for verification."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-prevent-double-voting-under-load",
+      "text": "1) How do we prevent double voting under load?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Check \"has voted?\" then insert",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Query for an existing vote, then insert if none."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Two concurrent requests (double-click, retry) both pass the check."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Unique constraint on (election, voter)",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Let the database reject the second insert atomically, and return the original receipt for retries using an idempotency key."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Correct. At massive bursts, a single database may need partitioning by voter ID."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Partitioned participation store + durable ballot log",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Partition participation records by `hash(voterId)` across shards, each enforcing uniqueness for its voters. Ballots are appended to a replicated log (Kafka) only after the participation write commits, and acknowledged to the voter only once durable. Tallying is asynchronous."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "More components; the outbox pattern keeps participation and ballot writes consistent."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-handle-the-final-minutes-surge",
+      "text": "2) How do we handle the final-minutes surge?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Accept votes fast and count later: the write path only does an eligibility check, a unique insert and a log append. Pre-scale for the known close time, rate-limit abusive clients, and use a queue in front of the vote service if needed (returning \"vote received\" only after it's durably stored). Tally counters are updated in batches rather than per vote."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-keep-ballots-secret-but-auditable",
+      "text": "3) How do we keep ballots secret but auditable?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Store participation (who voted) and ballots (what was chosen) separately, with no direct link — ballots carry only a random receipt ID given to the voter. Voters can verify their receipt is counted, auditors can recount the ballot log, and neither table alone reveals individual choices."
+    },
+    {
+      "type": "callout",
+      "variant": "warning",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "For public-office elections, online systems face threats (coercion, compromised devices, insider attacks) that software design alone can't solve. This design fits polls, contests and organisational votes."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What prevents the same voter voting twice under concurrency?",
+      "options": [
+        "Client-side checks",
+        "A unique constraint on (electionId, voterId)",
+        "Caching",
+        "CAPTCHA"
+      ],
+      "answer": 1,
+      "explanation": "The database rejects the second insert atomically."
+    },
+    {
+      "question": "How can ballots stay secret while still being auditable?",
+      "options": [
+        "Store choices with voter IDs",
+        "Keep participation and ballots separate, linked only by a voter-held receipt",
+        "Delete ballots after counting",
+        "Encrypt the whole database"
+      ],
+      "answer": 1,
+      "explanation": "Neither table alone reveals individual choices."
+    },
+    {
+      "question": "Why tally asynchronously from a ballot log?",
+      "options": [
+        "It's more secure",
+        "The write path stays fast during bursts and results can be recomputed for audits",
+        "Counters are illegal",
+        "To hide results"
+      ],
+      "answer": 1,
+      "explanation": "Durable logging first, aggregation later."
+    },
+    {
+      "question": "When should the voter be told their vote is recorded?",
+      "options": [
+        "Immediately on request",
+        "Only after the ballot is durably stored",
+        "After tallying",
+        "Never"
+      ],
+      "answer": 1,
+      "explanation": "Acknowledging before durability risks lost votes."
+    }
+  ]
+}

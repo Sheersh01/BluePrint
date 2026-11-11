@@ -1,0 +1,348 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "distributed-file-system",
+  "category": "Common Problems",
+  "title": "Distributed File System",
+  "seoTitle": "Design a Distributed File System like GFS or HDFS",
+  "description": "Design a distributed file system — splitting huge files into replicated chunks, a metadata master, write pipelines, failure detection and re-replication.",
+  "tags": [
+    {
+      "label": "Handling Large Blobs",
+      "href": "/learn/system-design/patterns/handling-large-blobs"
+    },
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🗄️",
+      "title": "What is a Distributed File System?",
+      "text": "A distributed file system (like Google File System or HDFS) stores files far larger than any single disk across thousands of commodity machines, and presents them as one namespace of directories and files. It's built for big data workloads: huge files, mostly sequential reads, and appends rather than random overwrites."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Clients should be able to create, read and delete files in a hierarchical namespace.",
+        "Clients should be able to append data to files, including several writers appending concurrently.",
+        "Files can be terabytes in size and should be readable in parallel by many machines."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "POSIX semantics (random in-place overwrites, file locks).",
+        "Small-file optimisation.",
+        "Access control beyond simple permissions."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Durability: no data loss when disks or machines fail (they fail daily at this scale).",
+        "High aggregate throughput for large sequential reads and appends, rather than low latency.",
+        "Scale to petabytes and thousands of nodes.",
+        "Automatic recovery without operator involvement."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Geo-replication across data centres."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- namespace: create / read / delete",
+        "- append, concurrent appenders",
+        "- TB-sized files, parallel reads",
+        "",
+        "Non-functional",
+        "- durable despite daily failures",
+        "- throughput over latency",
+        "- petabytes, thousands of nodes",
+        "- self-healing"
+      ],
+      "caption": "DFS Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**File**: a path in the namespace, made of an ordered list of chunks.",
+        "**Chunk**: a fixed-size piece of a file (64-128 MB) with a globally unique ID and a version number.",
+        "**Chunk server**: a machine storing chunk replicas on its local disks.",
+        "**Master (NameNode)**: holds the namespace and the file → chunks → locations mapping."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "create(path) / delete(path) / list(dir)\nopen(path) -> handle\nread(handle, offset, length) -> bytes\nappend(handle, bytes) -> offset          (record append, at-least-once)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-files-are-split-into-replicated-chunks",
+      "text": "1) Files are split into replicated chunks"
+    },
+    {
+      "type": "paragraph",
+      "text": "Each file is split into **large fixed-size chunks**, and each chunk is stored on **three chunk servers**, ideally in different racks. Large chunks keep the metadata small (a petabyte is only ~10 million 100 MB chunks) and make reads mostly sequential."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-a-master-holds-metadata-data-never-flows-through-it",
+      "text": "2) A master holds metadata; data never flows through it"
+    },
+    {
+      "type": "paragraph",
+      "text": "To read, the client asks the **master** which chunks hold a byte range and where their replicas live, caches the answer, and then reads **directly from a chunk server**. The master only serves small metadata requests, so one master can coordinate thousands of servers."
+    },
+    {
+      "type": "diagram",
+      "file": "01-reads.svg",
+      "caption": "Reads"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-appends-flow-through-a-replica-pipeline",
+      "text": "3) Appends flow through a replica pipeline"
+    },
+    {
+      "type": "paragraph",
+      "text": "For a write, the master grants a **lease** to one replica, making it the **primary** for that chunk. The client pushes data along a **pipeline** of the replicas (each forwards to the next, using full network bandwidth), then asks the primary to commit. The primary picks the offset, applies the write, and tells the secondaries to apply it in the same order. Concurrent appenders are serialised by the primary."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-keep-the-master-from-being-a-single-point-of-failure",
+      "text": "1) How do we keep the master from being a single point of failure?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "A single in-memory master",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Keep all metadata in the master's memory and nothing else."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A crash loses the namespace — and with it every file."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Operation log plus checkpoints",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Every namespace change is written to an **operation log** on local disk and remote replicas before it's acknowledged. Periodic **checkpoints** keep recovery fast. Chunk locations are *not* persisted: the master rebuilds them by asking chunk servers on startup."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Recovery still means downtime while a new master starts and replays the log."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Hot standby with shared log",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Run a **standby master** that tails the replicated edit log (HDFS uses a quorum of journal nodes) and keeps its state current. **ZooKeeper** handles leader election and fencing so only one master is active. Failover takes seconds. For very large namespaces, **federate** the namespace across several masters by directory."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Fencing must be strict, or two masters could both accept writes."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-detect-and-repair-failures",
+      "text": "2) How do we detect and repair failures?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Chunk servers send **heartbeats** with the chunks they hold. When a server misses heartbeats, the master marks its replicas lost and schedules **re-replication** from surviving copies, prioritising chunks with the fewest replicas left. Each chunk stores **checksums** per 64 KB block, so silent disk corruption is detected on read and the replica is replaced. **Version numbers** let the master spot stale replicas that missed writes while a server was down."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention rack awareness: two replicas in one rack and one in another tolerates a full rack loss without sending every write across racks."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-what-consistency-do-appends-offer",
+      "text": "3) What consistency do appends offer?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Record append is **at-least-once**: if a replica fails mid-write, the client retries, so some replicas may contain duplicates or padding. Applications cope by writing self-describing records with checksums and unique IDs, and readers skip duplicates. This relaxed model is what lets many producers append to one file without distributed locking."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why does a distributed file system use large chunks (64-128 MB)?",
+      "options": [
+        "Disks require it",
+        "To keep master metadata small and make reads sequential",
+        "To improve random writes",
+        "For encryption"
+      ],
+      "answer": 1,
+      "explanation": "Fewer, larger chunks mean less metadata and efficient streaming I/O."
+    },
+    {
+      "question": "Why doesn't file data flow through the master?",
+      "options": [
+        "Security",
+        "So one master can coordinate thousands of servers without becoming a bandwidth bottleneck",
+        "The master has no disk",
+        "It's illegal"
+      ],
+      "answer": 1,
+      "explanation": "Clients fetch locations from the master, then talk to chunk servers directly."
+    },
+    {
+      "question": "What does the primary replica's lease provide?",
+      "options": [
+        "Faster reads",
+        "A single replica that decides the order of writes to a chunk",
+        "Encryption keys",
+        "Billing"
+      ],
+      "answer": 1,
+      "explanation": "The primary serialises mutations so all replicas apply them in the same order."
+    },
+    {
+      "question": "How is silent disk corruption detected?",
+      "options": [
+        "It isn't",
+        "Per-block checksums verified on read",
+        "Heartbeats",
+        "Comparing file names"
+      ],
+      "answer": 1,
+      "explanation": "Checksums catch corrupt blocks so the replica can be re-copied from a healthy one."
+    }
+  ]
+}

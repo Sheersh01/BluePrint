@@ -1,0 +1,314 @@
+{
+  "section": "patterns",
+  "slug": "real-time-updates",
+  "category": "Patterns",
+  "title": "Real-time Updates",
+  "subtitle": "How to push changes to users the moment they happen — polling, long polling, SSE, WebSockets and the pub/sub layer behind them.",
+  "seoTitle": "Design Real-time Updates | System Design Interview Breakdown",
+  "description": "How to push changes to users the moment they happen — polling, long polling, SSE, WebSockets and the pub/sub layer behind them.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 4, 2026",
+  "updated": "Nov 4, 2026",
+  "updatedLabel": "Published",
+  "blocks": [
+    {
+      "type": "paragraph",
+      "text": "Chat messages, live scores, collaborative cursors, ride locations, stock prices — a huge share of interview questions need the server to tell clients about something *as it happens*. HTTP was built for the client to ask and the server to answer, so real-time updates require deliberate design on two hops: **server → client** (how the update reaches the device) and **source → server** (how the server holding the connection learns about the update)."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-problem",
+      "text": "The Problem"
+    },
+    {
+      "type": "paragraph",
+      "text": "Imagine a chat app. Alice sends a message; it lands on server A. Bob is connected to server B. Two things must happen:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Server B must find out a message for Bob exists.",
+        "Server B must deliver it to Bob's device without Bob asking."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Most candidates only think about the second hop. Interviewers are usually more interested in the first."
+    },
+    {
+      "type": "diagram",
+      "file": "01-the-two-hops-of-real-time-delivery.svg",
+      "caption": "The two hops of real-time delivery"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-solution",
+      "text": "The Solution"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "hop-2-getting-updates-to-the-client",
+      "text": "Hop 2: getting updates to the client"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Simple polling",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "The client asks \"anything new?\" every few seconds."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Most requests return nothing, so it wastes server capacity, and updates are delayed by up to the poll interval. It is, however, dead simple and works everywhere — a perfectly good answer when updates are infrequent and a few seconds of delay is fine."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Long polling",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "The client makes a request that the server holds open until there is something to send (or a timeout, say 30s). On response, the client immediately reconnects."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Near-real-time with plain HTTP, but each message costs a full request cycle, and bursts of updates cause reconnect storms."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Server-Sent Events (SSE)",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "A single long-lived HTTP response streams events from server to client. Browsers reconnect automatically and resume using `Last-Event-ID`."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "One-directional only — clients still send data with normal requests, which is exactly right for feeds, notifications, live comments and LLM token streaming. Some proxies buffer responses and need configuration."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "WebSockets",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "A persistent, bidirectional connection over TCP. Ideal when the client sends frequent messages too: chat, multiplayer games, collaborative editing."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Stateful connections complicate load balancing and deploys (draining connections), and you must implement heartbeats and reconnection yourself."
+        }
+      ]
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Default to SSE when updates flow mostly from server to client, and WebSockets when both sides talk constantly. Say *why* in the interview — the choice signals that you understand the traffic pattern."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "hop-1-getting-updates-to-the-right-server",
+      "text": "Hop 1: getting updates to the right server"
+    },
+    {
+      "type": "paragraph",
+      "text": "With millions of connections spread across many servers, the server holding a user's connection must learn about events produced elsewhere."
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Every server polls the database",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Each connection server queries for new data for its users."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Load grows with connections × poll rate, and latency is bounded by the interval."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Consistent hashing of users to servers",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Route each user (or each chat room / document) to a deterministic server, so producers know exactly where to send updates."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Rebalancing on scale-up and failures moves connections, and a hot room can overload one server."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Pub/sub fan-out",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Connection servers subscribe to channels for the users or topics their clients care about (Redis Pub/Sub, NATS, or Kafka for durable streams). Producers publish to the channel; the broker delivers to whichever servers are subscribed."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Plain pub/sub is fire-and-forget; if a client is offline the message is missed, so pair it with durable storage (an inbox) that clients sync from on reconnect."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "when-to-use-in-interviews",
+      "text": "When to Use in Interviews"
+    },
+    {
+      "type": "paragraph",
+      "text": "Reach for this pattern whenever a requirement says \"see changes in real time\", \"live\", or \"instantly\":"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "[WhatsApp](/learn/system-design/problem-breakdowns/whatsapp) — WebSockets plus pub/sub between chat servers.",
+        "[FB Live Comments](/learn/system-design/problem-breakdowns/fb-live-comments) — SSE fan-out to many viewers.",
+        "[Uber](/learn/system-design/problem-breakdowns/uber) — streaming driver locations.",
+        "[Google Docs](/learn/system-design/problem-breakdowns/google-docs) — WebSockets for collaborative edits.",
+        "[Online Auction](/learn/system-design/problem-breakdowns/online-auction) — live highest bid."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "common-deep-dives",
+      "text": "Common Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "how-do-you-handle-reconnects-without-losing-messages",
+      "text": "How do you handle reconnects without losing messages?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Make delivery recoverable: persist messages durably, give each a sequence number or timestamp, and have clients resync from their last seen position when they reconnect. Real-time push is the fast path; the durable store is the source of truth."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "how-do-you-load-balance-persistent-connections",
+      "text": "How do you load balance persistent connections?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Use a layer-4 load balancer or a connection gateway, track connections per server, and scale on connection count rather than CPU. During deploys, drain connections gradually and let clients reconnect with jittered backoff to avoid thundering herds."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "what-about-a-single-topic-with-millions-of-subscribers",
+      "text": "What about a single topic with millions of subscribers?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Fan out hierarchically: the broker delivers to connection servers (not to individual users), and each server pushes to its own clients. Coalesce or sample updates — nobody can read 10,000 comments a second."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "conclusion",
+      "text": "Conclusion"
+    },
+    {
+      "type": "paragraph",
+      "text": "Separate the two hops. Pick the client protocol from the traffic shape (poll → long poll → SSE → WebSocket), then design how events reach the server holding the connection — usually pub/sub backed by durable storage for recovery."
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Which protocol best fits one-way server-to-client streams such as live comments?",
+      "options": [
+        "WebSockets",
+        "Server-Sent Events",
+        "FTP",
+        "SMTP"
+      ],
+      "answer": 1,
+      "explanation": "SSE streams events over one HTTP response and reconnects automatically."
+    },
+    {
+      "question": "What problem does pub/sub solve in a real-time system?",
+      "options": [
+        "Encrypting connections",
+        "Getting an event to whichever server holds the recipient's connection",
+        "Rendering the UI",
+        "Storing messages forever"
+      ],
+      "answer": 1,
+      "explanation": "Servers subscribe to the channels their clients care about; producers publish without knowing where clients are."
+    },
+    {
+      "question": "Why pair pub/sub with durable storage?",
+      "options": [
+        "Pub/sub is slow",
+        "Fire-and-forget delivery misses offline clients, who need to resync",
+        "To reduce memory",
+        "Brokers require it"
+      ],
+      "answer": 1,
+      "explanation": "Clients recover missed updates from the store on reconnect."
+    },
+    {
+      "question": "When is simple polling an acceptable answer?",
+      "options": [
+        "Never",
+        "When updates are infrequent and a few seconds of delay is fine",
+        "For multiplayer games",
+        "For collaborative editing"
+      ],
+      "answer": 1,
+      "explanation": "Polling is simple and robust when latency requirements are loose."
+    }
+  ]
+}

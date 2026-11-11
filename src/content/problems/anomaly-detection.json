@@ -1,0 +1,362 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "anomaly-detection",
+  "category": "Common Problems",
+  "title": "Anomaly Detection",
+  "seoTitle": "Design a System to Detect Anomalies in Data",
+  "description": "Design an anomaly detection system for metrics and business data — streaming ingestion, seasonal baselines per series, scoring, alert deduplication and routing, feedback loops, and scaling to millions of time series.",
+  "tags": [
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    },
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📉",
+      "title": "What is an Anomaly Detection System?",
+      "text": "An anomaly detection system watches streams of numbers — orders per minute, error rates, sign-ups by country, payment failures — and raises an alert when something behaves unusually, without anyone setting a fixed threshold for each one. \"Unusual\" depends on context: 100 orders a minute is normal at 8 p.m. and alarming at 3 a.m. The hard parts are learning what's normal for millions of series and alerting without flooding people with false alarms."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Ingest time-series data points from many sources (metrics, events aggregated into counts).",
+        "Learn a normal pattern per series, including daily and weekly seasonality and trends.",
+        "Detect anomalies (spikes, drops, level shifts) in near real time and score their severity.",
+        "Group related anomalies and send alerts to the right owners.",
+        "Users can mark alerts as true or false to tune detection."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Automatic root-cause analysis (mentioned briefly).",
+        "Dashboards (see Metrics Monitoring)."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Detection within ~1-2 minutes of the data arriving.",
+        "Scale to ~10M time series at one-minute resolution (~170k points per second).",
+        "Low false-positive rate — noisy alerts get ignored.",
+        "Robust to missing and late data and to holidays or planned events."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Sub-second detection."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- ingest time series",
+        "- learn seasonal baselines",
+        "- detect + score anomalies",
+        "- group + route alerts",
+        "- feedback",
+        "",
+        "Non-functional",
+        "- detect in 1-2 min",
+        "- 10M series, 170k pts/s",
+        "- few false positives",
+        "- robust to gaps + holidays"
+      ],
+      "caption": "Anomaly Detection Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Series**: metric name plus dimensions (e.g. `orders{country=DE, app=ios}`), owner, sensitivity.",
+        "**Data point**: series, timestamp, value.",
+        "**Baseline model**: per series — expected value and spread for each time slot, updated over time.",
+        "**Anomaly**: series, time, observed, expected, score, direction.",
+        "**Incident**: a group of related anomalies with status and feedback."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /points [{ series, ts, value }]           (or consume from Kafka)\nPUT  /series/:id/config { sensitivity, minVolume, owners, mute windows }\nGET  /anomalies?from=&to=&owner=\nPOST /incidents/:id/feedback { label: true_positive|false_positive }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-ingestion",
+      "text": "1) Ingestion"
+    },
+    {
+      "type": "paragraph",
+      "text": "Points flow into **Kafka**, partitioned by series ID, so each series' points are processed in order by one consumer. Raw points are also stored in a time-series database for history and model training."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-baselines",
+      "text": "2) Baselines"
+    },
+    {
+      "type": "paragraph",
+      "text": "For each series, a **baseline model** captures the expected value at each point in the week. A practical approach is **seasonal decomposition**: the trend plus a daily and weekly profile, with robust statistics (median and median absolute deviation) so past anomalies don't distort the baseline. Models are retrained daily in a batch job from the last few weeks of history and loaded into the scorer."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-scoring-in-the-stream",
+      "text": "3) Scoring in the stream"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **stream processor** (Flink) keeps each series' baseline in state. For each new point it computes how far the value is from the expected value relative to normal spread (a z-score-like measure), and requires the deviation to persist for a few points before declaring an anomaly, to filter out one-off noise."
+    },
+    {
+      "type": "diagram",
+      "file": "01-detection-pipeline.svg",
+      "caption": "Detection pipeline"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-alerting-and-feedback",
+      "text": "4) Alerting and feedback"
+    },
+    {
+      "type": "paragraph",
+      "text": "Anomalies go to an **alert manager** that groups related ones (same metric across many dimensions, or same time and service) into one **incident**, routes it to the series owner (Slack, pager, email by severity), and suppresses repeats. Feedback on incidents adjusts per-series sensitivity."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-model-normal",
+      "text": "1) How do we model \"normal\"?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Static thresholds",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Alert when a value crosses a fixed number set by a human."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Impossible to maintain for millions of series and blind to seasonality: a quiet night triggers false alarms, and a drop at peak time goes unnoticed."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Rolling mean and standard deviation",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Compare each point with the mean and standard deviation of the last hour or day."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Ignores daily and weekly patterns, and a big spike inflates the deviation, hiding the next anomaly."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Seasonal, robust baselines with forecasting",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Model each series with **seasonal decomposition** (or a forecasting model like Holt-Winters or Prophet for important series): the expected value for this minute is based on the same time in previous days and weeks, adjusted by recent trend. Use **robust** statistics so anomalies don't pollute the baseline, and apply **holiday calendars and mute windows** for known events. Sensitivity and minimum-volume rules per series avoid alerts on tiny counts where noise dominates."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Per-series models at 10M series must be cheap — reserve heavy models for high-value series and use simple seasonal profiles for the long tail."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-avoid-alert-floods",
+      "text": "2) How do we avoid alert floods?"
+    },
+    {
+      "type": "paragraph",
+      "text": "A single outage can make thousands of series anomalous at once (every country's orders drop). The alert manager **groups by time window and dimension hierarchy** — reporting \"orders dropped globally\" instead of 200 per-country alerts — and applies **deduplication** (one open incident per group), **rate limits** per owner and **severity ranking** by business impact (absolute deviation × importance of the metric)."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention precision over recall: an alerting system people trust with fewer, more meaningful alerts beats one that catches everything but is muted by its users."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-handle-late-and-missing-data",
+      "text": "3) How do we handle late and missing data?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Points can arrive late or not at all. The stream processor uses **event time** with a short allowed lateness, and distinguishes \"value is zero\" from \"no data\": a missing data stream is its own alert type (the pipeline may be broken) rather than an anomalous drop. When late data arrives, scores are recomputed and anomalies are retracted if no longer valid."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why are static thresholds a poor fit for most series?",
+      "options": [
+        "They're too fast",
+        "They ignore daily and weekly patterns and can't be maintained for millions of series",
+        "They're encrypted",
+        "They're illegal"
+      ],
+      "answer": 1,
+      "explanation": "Normal depends on the time of day and week."
+    },
+    {
+      "question": "Why use robust statistics like the median for baselines?",
+      "options": [
+        "They're faster",
+        "Past anomalies don't distort what's considered normal",
+        "They're required by Kafka",
+        "They use less memory"
+      ],
+      "answer": 1,
+      "explanation": "Means and standard deviations are pulled by outliers."
+    },
+    {
+      "question": "How do we avoid hundreds of alerts during one outage?",
+      "options": [
+        "Disable alerting",
+        "Group related anomalies by time and dimension into one incident",
+        "Send them all",
+        "Delay alerts by a day"
+      ],
+      "answer": 1,
+      "explanation": "One incident summarising the impact is more useful."
+    },
+    {
+      "question": "How should missing data be treated?",
+      "options": [
+        "As zero",
+        "As its own signal that the data pipeline may be broken",
+        "Ignored forever",
+        "As the previous value"
+      ],
+      "answer": 1,
+      "explanation": "A silent series is different from a series that dropped to zero."
+    }
+  ]
+}

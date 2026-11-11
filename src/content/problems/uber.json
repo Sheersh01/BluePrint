@@ -1,0 +1,574 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "uber",
+  "category": "Common Problems",
+  "title": "Uber",
+  "seoTitle": "Design a Ride-Sharing Service Like Uber",
+  "description": "Learn how to design Uber: requirements, core entities, API, high-level design and deep dives.",
+  "tags": [
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    },
+    {
+      "label": "Multi-step Processes",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    }
+  ],
+  "author": "Evan King",
+  "published": "Jul 18, 2024",
+  "updated": "Feb 15, 2026",
+  "updatedLabel": "Updated",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Amazon",
+      "Google"
+    ],
+    "more": 4
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🚗",
+      "title": "What is Uber?",
+      "text": "Uber is a ride-sharing platform that connects passengers with drivers who offer transportation services in personal vehicles. It allows users to book rides on-demand from their smartphones, matching them with a nearby driver who will take them from their location to their desired destination."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Start your interview by defining the functional and non-functional requirements. For user facing applications like this one, functional requirements are the \"Users should be able to...\" statements whereas non-functional defines the system qualities via \"The system should...\" statements.",
+        "Prioritize the top 3 functional requirements. Everything else shows your product thinking, but clearly note it as \"below the line\" so the interviewer knows you won't be including them in your design. Check in to see if your interviewer wants to move anything above the line or move anything down. Choosing just the top 3 is important to ensuring you stay focused and can execute in the limited time window."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Riders should be able to input a start location and a destination and get a fare estimate.",
+        "Riders should be able to request a ride based on the estimated fare.",
+        "Upon request, riders should be matched with a driver who is nearby and available.",
+        "Drivers should be able to accept/decline a request and navigate to pickup/drop-off."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope)"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Riders should be able to rate their ride and driver post-trip.",
+        "Drivers should be able to rate passengers.",
+        "Riders should be able to schedule rides in advance.",
+        "Riders should be able to request different categories of rides (e.g., X, XL, Comfort)."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements of the system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "The system should prioritize low latency matching (< 1 minutes to match or failure)",
+        "The system should ensure strong consistency in ride matching to prevent any driver from being assigned multiple rides simultaneously",
+        "The system should be able to handle high throughput, especially during peak hours or special events (100k requests from same location)"
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope)"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "The system should ensure the security and privacy of user and driver data, complying with regulations like GDPR.",
+        "The system should be resilient to failures, with redundancy and failover mechanisms in place.",
+        "The system should have robust monitoring, logging, and alerting to quickly identify and resolve issues.",
+        "The system should facilitate easy updates and maintenance without significant downtime (CI/CD pipelines)."
+      ]
+    },
+    {
+      "type": "diagram",
+      "file": "01-uber-requirements.svg",
+      "caption": "Uber Requirements"
+    },
+    {
+      "type": "paragraph",
+      "text": "Adding features that are out of scope is a \"nice to have\". It shows product thinking and gives your interviewer a chance to help you reprioritize based on what they want to see in the interview. That said, it's very much a nice to have. If additional features are not coming to you quickly, don't waste your time and move on."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "planning-the-approach",
+      "text": "Planning the Approach"
+    },
+    {
+      "type": "paragraph",
+      "text": "Before you move on to designing the system, it's important to start by taking a moment to plan your strategy. Fortunately, for these common users facing product-style questions, the plan should be straightforward: build your design up sequentially, going one by one through your functional requirements. This will help you stay focused and ensure you don't get lost in the weeds as you go. Once you've satisfied the functional requirements, you'll rely on your non-functional requirements to guide you through the deep dives."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "paragraph",
+      "text": "I like to begin with a broad overview of the primary entities. At this stage, it is not necessary to know every specific column or detail. We will focus on the intricacies, such as columns and fields, later when we have a clearer grasp. Initially, establishing these key entities will guide our thought process and lay a solid foundation as we progress towards defining the API."
+    },
+    {
+      "type": "paragraph",
+      "text": "To satisfy our key functional requirements, we'll need the following entities:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Rider**: This is any user who uses the platform to request rides. It includes personal information such as name and contact details, preferred payment methods for ride transactions, etc.",
+        "**Driver**: This is any users who are registered as drivers on the platform and provide transportation services. It has their personal details, vehicle information (make, model, year, etc.), and preferences, and availability status.",
+        "**Fare**: This entity represents an estimated fare for a ride. It includes the pickup and destination locations, the estimated fare, and the estimated time of arrival. This could also just be put on the ride object, but we'll keep it separate for now but there is no right or wrong answer here.",
+        "**Ride**: This entity represents an individual ride from the moment a rider confirms a fare estimate and requests a ride, all the way until its completion. It records all pertinent details of the ride, including the identities of the rider and the driver, vehicle details, state, the planned route, the actual fare charged at the end of the trip, and timestamps marking the pickup and drop-off.",
+        "**Location**: This entity stores the real-time location of drivers. It includes the latitude and longitude coordinates, as well as the timestamp of the last update. This entity is crucial for matching riders with nearby drivers and for tracking the progress of a ride."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "In the actual interview, this can be as simple as a short list like this. Just make sure you talk through the entities with your interviewer to ensure you are on the same page."
+    },
+    {
+      "type": "diagram",
+      "file": "02-uber-core-entities.svg",
+      "caption": "Uber Core Entities"
+    },
+    {
+      "type": "paragraph",
+      "text": "Now, let's proceed to design our system, tackling each functional requirement in sequence. This step-by-step approach will help us maintain focus and manage scope effectively, ensuring a cohesive build-up of the system's architecture."
+    },
+    {
+      "type": "paragraph",
+      "text": "As you move onto the design, your objective is simple: create a system that meets all functional and non-functional requirements. To do this, I recommend you start by satisfying the functional requirements and then layer in the non-functional requirements afterward. This will help you stay focused and ensure you don't get lost in the weeds as you go."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "paragraph",
+      "text": "The API for retrieving a fare estimate is straightforward. We define a simple POST endpoint that takes in the user's current location and desired destination and returns a Fare object with the estimated fare and eta. We use POST here because we will be creating a new Fare entity in the database."
+    },
+    {
+      "type": "code",
+      "code": "POST /fare -> Fare\nBody: {\n  pickupLocation,\n  destination\n}"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Request Ride Endpoint:** This endpoint is used by riders to confirm their ride request after reviewing the estimated fare. It initiates the ride matching process by signaling the backend to find a suitable driver, thus creating a new ride object."
+    },
+    {
+      "type": "code",
+      "code": "POST /rides -> Ride\nBody: {\n  fareId\n}"
+    },
+    {
+      "type": "paragraph",
+      "text": "Note that at this point in the flow, we match them with a driver who is nearby and available. However, this is all happening in the backend, so we don't need to explicitly list out an endpoint for this."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Update Driver Location Endpoint:** Before we can do any matching, we need to know where our drivers are. This endpoint is used by drivers to update their location in real-time. It is called periodically by the driver client to ensure that the driver's location is always up to date."
+    },
+    {
+      "type": "code",
+      "code": "POST /drivers/location -> Success/Error\nBody: {\n        lat, long\n    }\n\n- note the driverId is present in the session cookie or JWT and not in the body or path params"
+    },
+    {
+      "type": "paragraph",
+      "text": "Always consider the security implications of your API. I regularly see candidates passing in data like userId, timestamps, or even fareEstimate in the body or query parameters. This is a red flag as it shows a lack of understanding of security best practices. Remember that you can't trust any data sent from the client as it can be easily manipulated. User data should always be passed in the session or JWT, while timestamps should be generated by the server. Data like fareEstimate should be retrieved from the database and never passed in by the client."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Accept Ride Request Endpoint:** This endpoint allows drivers to accept a ride request. Upon acceptance, the system updates the ride status and provides the driver with the pickup location coordinates."
+    },
+    {
+      "type": "code",
+      "code": "PATCH /rides/:rideId -> Ride\nBody: {\n  accept/deny\n}"
+    },
+    {
+      "type": "paragraph",
+      "text": "The Ride object would contain information about the pickup location and destination so the client can display this information to the driver."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-riders-should-be-able-to-input-a-start-location-and-a-destination-and-get-an-estimated-fare",
+      "text": "1) Riders should be able to input a start location and a destination and get an estimated fare"
+    },
+    {
+      "type": "paragraph",
+      "text": "The first thing that users will do when they open the app to request a ride is search for their desired destination. At this point, the client will make a request to our service to get an estimated price for the ride. The user will then have a chance to request a ride with this fare or do nothing."
+    },
+    {
+      "type": "paragraph",
+      "text": "Lets lay out the necessary components for communicating between the client and our microservices, adding our first service, \"Ride Service\" which will handle fare estimations"
+    },
+    {
+      "type": "diagram",
+      "file": "03-uber-simple-fare-estimation.svg",
+      "caption": "Uber Simple Fare Estimation"
+    },
+    {
+      "type": "paragraph",
+      "text": "The core components necessary to fulfill fare estimation are:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Rider Client**: The primary touchpoint for users is the Rider Client, available on iOS and Android. This client interfaces with the system's backend services to provide a seamless user experience.",
+        "**API Gateway**: Acting as the entry point for client requests, the API Gateway routes requests to the appropriate microservices. It also manages cross-cutting concerns such as authentication and rate limiting.",
+        "**Ride Service**: This microservice is tasked with managing ride state, starting with calculating fare estimates. It interacts with third-party mapping APIs to determine the distance and travel time between locations and applies the company's pricing model to generate a fare estimate. For the sake of this interview, we abstract this complexity away.",
+        "**Third Party Mapping API**: We use a third-party service (like Google Maps) to provide mapping and routing functionality. It is used by the Ride Service to calculate the distance and travel time between locations.",
+        "**Database:** The database is, so far, responsible for storing Fare entities. In this case, it creates a fare with information about the price, eta, etc."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Let's walk through exactly how these component interact when a rider requests a fare estimate."
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "The rider enters their pickup location and desired destination into the client app, which sends a POST request to our backend system via /fare",
+        "The API gateway receives the request and handles any necessary authentication and rate limiting before forwarding the request to the Ride Service.",
+        "The Ride Service makes a request to the Third Party Mapping API to calculate the distance and travel time between the pickup and destination locations and then applies the company's pricing model to the distance and travel time to generate a fare estimate.",
+        "The Ride Service creates a new Fare entity in the Database with the details about the estimated fare.",
+        "The service then returns the Fare entity to the API Gateway, which forwards it to the Rider Client so they can make a decision about whether accept the fare and request a ride."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-riders-should-be-able-to-request-a-ride-based-on-the-estimated-fare",
+      "text": "2) Riders should be able to request a ride based on the estimated fare"
+    },
+    {
+      "type": "paragraph",
+      "text": "Once a user reviews the estimated fare and ETA, they can request a ride. By building upon our existing design, we can extend it to support ride requests pretty easily."
+    },
+    {
+      "type": "paragraph",
+      "text": "We don't need to add any new services at all, we just need to add a Ride table to our Database."
+    },
+    {
+      "type": "paragraph",
+      "text": "Riders should be able to request a ride based on the estimated fare"
+    },
+    {
+      "type": "paragraph",
+      "text": "Then, when a request comes in, this is how we handle it."
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "The user confirms their ride request in the client app, which sends a POST request to our backend system with the id of the Fare they are accepting.",
+        "The API gateway performs necessary authentication and rate limiting before forwarding the request to the Ride Service.",
+        "The Ride Service receives the request and creates a new entry in the Ride table, linking to the relevant Fare that was accepted, and initializing the Ride's status as requested.",
+        "Next, it triggers the matching flow so that we can assign a driver to the ride (see below)"
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-upon-request-riders-should-be-matched-with-a-driver-who-is-nearby-and-available",
+      "text": "3) Upon request, riders should be matched with a driver who is nearby and available"
+    },
+    {
+      "type": "paragraph",
+      "text": "Now we need to introduce some new components in order to facilitate driver matching."
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Driver Client**: In addition to the Rider Client, we introduce the Driver Client, which is the interface for drivers to receive ride requests and provide location updates. The Driver Client communicates with the Location Service to send real-time location updates.",
+        "**Location Service**: Manages the real-time location data of drivers. It is responsible for receiving location updates from drivers, storing this information in the database, and providing the Ride Matching Service with the latest location data to facilitate accurate and efficient driver matching.",
+        "**Ride Matching Service**: Handles incoming ride requests and utilizes a sophisticated algorithm (abstracted away for the purpose of this interview) to match these requests with the best available drivers based on proximity, availability, driver rating, and other relevant factors."
+      ]
+    },
+    {
+      "type": "diagram",
+      "file": "04-upon-request-riders-should-be-matched-wi.svg",
+      "caption": "Upon request, riders should be matched with a driver who is nearby and available"
+    },
+    {
+      "type": "paragraph",
+      "text": "Let's walk through the sequence of events that occur when a user requests a ride and the system matches them with a nearby driver:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "The user confirms their ride request in the client app, which sends a POST request to our backend system with the ID of the fare they are accepting.",
+        "The API gateway performs necessary authentication and rate limiting before forwarding the request to the Ride Service.",
+        "The Ride Service creates a ride object as mentioned above, and then forwards the request to the Ride Matching Service to trigger the matching workflow (we'll discuss ways to make this more robust later, keeping it simple for now).",
+        "Meanwhile, at all times, drivers are sending their current location to the location service, and we are updating our database with their latest location lat & long so we know where they are.",
+        "The matching workflow then uses these updated locations to query for the closest available drivers in an attempt to find an optimal match."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-drivers-should-be-able-to-accept-decline-a-request-and-navigate-to-pickup-drop-off",
+      "text": "4) Drivers should be able to accept/decline a request and navigate to pickup/drop-off"
+    },
+    {
+      "type": "paragraph",
+      "text": "Once a driver is matched with a rider, they can accept the ride request and navigate to the pickup location."
+    },
+    {
+      "type": "paragraph",
+      "text": "We only need to add one additional service to our existing design."
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Notification Service**: Responsible for dispatching real-time notifications to drivers when a new ride request is matched to them. It ensures that drivers are promptly informed so they can accept ride requests in a timely manner, thus maintaining a fluid user experience. Notifications are sent via APNs (Apple Push Notification service) and FCM (Firebase Cloud Messaging) for iOS and Android devices, respectively."
+      ]
+    },
+    {
+      "type": "diagram",
+      "file": "05-uber-simple-driver-accept.svg",
+      "caption": "Uber Simple Driver Accept"
+    },
+    {
+      "type": "paragraph",
+      "text": "Let's walk through the sequence of events that occur when a driver accepts a ride request and completes the ride:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "After the Ride Matching Service determines the ranked list of eligible drivers, it sends a notification to the top driver on the list via APNs or FCM.",
+        "The driver receives a notification that a new ride request is available. They open the Driver Client app and accept the ride request, which sends a PATCH request to our backend system with the rideID. a) If they decline the ride instead, the system will send a notification to the next driver on the list.",
+        "The API gateway receives the requests and routes it to the Ride Service.",
+        "The Ride Service receives the request and updates the status of the ride to \"accepted\" and updates the assigned driver accordingly. It then returns the pickup location coordinates to the Driver Client.",
+        "With the coordinates in hand, the Driver uses on client GPS to navigate to the pickup location."
+      ]
+    },
+    {
+      "type": "pattern",
+      "title": "Pattern: Real-time Updates",
+      "text": "Interviewer looking for a push notification to drivers? Our realtime updates pattern breakdown walks through the options from long-polling to SSE to Websockets.",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "paragraph",
+      "text": "With the core functional requirements met, it's time to dig into the non-functional requirements via deep dives. These are the main deep dives I like to cover for this question."
+    },
+    {
+      "type": "paragraph",
+      "text": "The degree to which a candidate should proactively lead the deep dives is a function of their seniority. For example, it is completely reasonable in a mid-level interview for the interviewer to drive the majority of the deep dives. However, in senior and staff+ interviews, the level of agency and ownership expected of the candidate increases. They should be able to proactively look around corners and identify potential issues with their design, proposing solutions to address them."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-handle-frequent-driver-location-updates-and-efficient-proximity-searches-on-location-data",
+      "text": "1) How do we handle frequent driver location updates and efficient proximity searches on location data?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Managing the high volume of location updates from drivers and performing efficient proximity searches to match them with nearby ride requests is a difficult task, and our current high-level design most definitely does not handle this well. There are two main problems with our current design that we need to solve:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**High Frequency of Writes**: Given we have around 10 million drivers, sending locations roughly every 5 seconds, that's about 2 million updates a second! Whether we choose something like DynamoDB or PostgreSQL (both great choices for the rest of the system), either one would either fall over under the write load, or need to be scaled up so much that it becomes prohibitively expensive for most companies.",
+        "**Query Efficiency**: Without any optimizations, to query a table based on lat/long we would need to perform a full table scan, calculating the distance between each driver's location and the rider's location. This would be extremely inefficient, especially with millions of drivers. Even with indexing on lat/long columns, traditional B-tree indexes are not well-suited for multi-dimensional data like geographical coordinates, leading to suboptimal query performance for proximity searches. This is essentially a non-starter."
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "For DynamoDB in particular, 2M writes a second of 100 bytes at on-demand pricing ($1.25 per million WRUs) would cost you over $200k a day. Learn more about DynamoDB and its limitations here"
+    },
+    {
+      "type": "paragraph",
+      "text": "So, what can we do to address these issues?"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-can-we-manage-system-overload-from-frequent-driver-location-updates-while-ensuring-location-accuracy",
+      "text": "2) How can we manage system overload from frequent driver location updates while ensuring location accuracy?"
+    },
+    {
+      "type": "paragraph",
+      "text": "High-frequency location updates from drivers can lead to system overload, straining server resources and network bandwidth. This overload risks slowing down the system, leading to delayed location updates and potentially impacting user experience. In most candidates original design, they have drivers ping a new location every 5 seconds or so. This follow up question is designed to see if they can intelligently reduce the number of pings while maintaining accuracy."
+    },
+    {
+      "type": "paragraph",
+      "text": "Don't neglect the client when thinking about your design. Many candidates get in a habit of drawing a small client box and moving on. In many cases, we need client side logic to improve the efficiency and scalability of our system. As you saw, we can reduce the number of pings by using ondevice sensors and algorithms to determine the optimal interval for sending location updates. Similarly, in the case of a file upload service, the client is responsible for chunking and compression."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-prevent-multiple-ride-requests-from-being-sent-to-the-same-driver-simultaneously",
+      "text": "3) How do we prevent multiple ride requests from being sent to the same driver simultaneously?"
+    },
+    {
+      "type": "paragraph",
+      "text": "We defined consistency in ride matching as a key non-functional requirement. This means that we only request one driver at a time for a given ride request AND that each driver only receives one ride request at a time. That driver would then have 10 seconds to accept or deny the request before we move on to the next driver if necessary. If you've solved Ticketmaster before, you know this problem well -- as it's almost exactly the same as ensuring that a ticket is only sold once while being reserved for a specific amount of time at checkout."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-how-can-we-ensure-no-ride-requests-are-dropped-during-peak-demand-periods",
+      "text": "4) How can we ensure no ride requests are dropped during peak demand periods?"
+    },
+    {
+      "type": "paragraph",
+      "text": "During peak demand periods, the system may receive a high volume of ride requests, which can lead to dropped requests. This is particularly problematic during special events or holidays when demand is high and the system is under stress. We also need to protect against the case where an instance of the Ride Matching Service crashes or is restarted, leading to dropped rides."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "5-what-happens-if-a-driver-fails-to-respond-in-a-timely-manner",
+      "text": "5) What happens if a driver fails to respond in a timely manner?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Our system works great when the drivers either accept or deny the ride request, but what if the drop their phone in the passenger seat and take a break? How do we ensure that the ride request continues to be processed? Ideally we'd want the system to move on to the next driver if the current driver doesn't respond in a timely manner."
+    },
+    {
+      "type": "pattern",
+      "title": "Pattern: Multi-step Processes",
+      "text": "Human-in-the-loop processes are a big signal of when to use the Multi-Step Processes pattern. In fact, Uber is the original author of the open source project Cadence which gave birth to the leading durable execution framework Temporal, built specifically for use-cases like this one.",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "6-how-can-you-further-scale-the-system-to-reduce-latency-and-improve-throughput",
+      "text": "6) How can you further scale the system to reduce latency and improve throughput?"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "paragraph",
+      "text": "After applying the \"Great\" solutions, your updated whiteboard should look something like this:"
+    },
+    {
+      "type": "paragraph",
+      "text": "Uber Final"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Which data structure efficiently partitions 2D space for proximity searches?",
+      "options": [
+        "B-tree",
+        "Linked list",
+        "Hash table",
+        "Quad-tree"
+      ],
+      "answer": 3,
+      "explanation": "A quad-tree recursively splits space into quadrants, so nearby points can be found without scanning everything."
+    },
+    {
+      "question": "Roughly how many driver location updates per second does the design need to handle?",
+      "options": [
+        "About 2,000",
+        "About 20,000",
+        "About 2 million",
+        "About 2 billion"
+      ],
+      "answer": 2,
+      "explanation": "10 million drivers each sending an update every ~5 seconds is about 2 million writes per second."
+    },
+    {
+      "question": "How do you stop the same driver from receiving two ride requests at once?",
+      "options": [
+        "Send requests to all drivers",
+        "A distributed lock with a TTL on the driver",
+        "Client-side checks only",
+        "A longer polling interval"
+      ],
+      "answer": 1,
+      "explanation": "Locking the driver while they consider a request, with a TTL for timeouts, enforces one request at a time."
+    },
+    {
+      "question": "Why use a durable queue or workflow engine for ride requests during peak demand?",
+      "options": [
+        "So no request is dropped if a matching service fails",
+        "To make fares cheaper",
+        "To encrypt locations",
+        "To skip the matching step"
+      ],
+      "answer": 0,
+      "explanation": "Requests persist until processed, so spikes or crashes don't lose rides; workflows also handle driver timeouts."
+    }
+  ]
+}

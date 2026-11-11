@@ -1,0 +1,316 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "search-engine",
+  "category": "Common Problems",
+  "title": "Web Search Engine",
+  "seoTitle": "Design a Web Search Engine",
+  "description": "Design web search — building a sharded inverted index from crawled pages, query serving with scatter-gather, ranking, snippets, and index freshness.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🔎",
+      "title": "What is a Web Search Engine?",
+      "text": "A search engine takes a query like \"best hiking boots\" and returns the most relevant web pages in a fraction of a second, from an index of billions of documents built from a web crawl."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to enter a text query and receive a ranked list of results with titles and snippets.",
+        "Results should be paginated.",
+        "Newly crawled or updated pages should become searchable."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "The crawler itself (see [Web Crawler](/learn/system-design/problem-breakdowns/web-crawler)).",
+        "Ads, images and personalisation."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Query latency < 300ms at p99.",
+        "Index tens of billions of pages.",
+        "Handle 100k+ queries per second.",
+        "Fresh: important pages updated within hours, the long tail within days."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Spam detection."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- query -> ranked results + snippets",
+        "- pagination",
+        "- new pages become searchable",
+        "",
+        "Non-functional",
+        "- < 300ms p99",
+        "- tens of billions of pages",
+        "- 100k+ QPS",
+        "- fresh within hours/days"
+      ],
+      "caption": "Search Engine Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Document**: a crawled page with URL, title, text, links and quality signals.",
+        "**Term**: a normalised word or token.",
+        "**Posting list**: for each term, the documents containing it (with positions and frequencies).",
+        "**Index shard**: a slice of the index covering a subset of documents."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET /search?q=best+hiking+boots&page=1 -> { results: [{ url, title, snippet }], nextPage }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-build-the-index",
+      "text": "1) Build the index"
+    },
+    {
+      "type": "paragraph",
+      "text": "An **indexing pipeline** consumes crawled pages: parse HTML, extract text, tokenise and normalise (lowercase, stemming), and build an **inverted index** mapping each term to a posting list of document IDs. Link analysis (PageRank) and quality signals are computed in batch and stored per document."
+    },
+    {
+      "type": "diagram",
+      "file": "01-indexing-and-serving.svg",
+      "caption": "Indexing and serving"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-serve-queries",
+      "text": "2) Serve queries"
+    },
+    {
+      "type": "paragraph",
+      "text": "The index is **sharded by document**: each leaf server holds a complete inverted index for its slice of documents. A query is sent to all shards in parallel (**scatter-gather**); each leaf finds matching documents, scores them, and returns its top results; the root merges them into the global top 10, then fetches snippets."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-make-new-pages-searchable",
+      "text": "3) Make new pages searchable"
+    },
+    {
+      "type": "paragraph",
+      "text": "A large base index is rebuilt periodically, while a small **real-time index** absorbs fresh and updated pages continuously. Queries search both and merge results."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-should-the-index-be-partitioned",
+      "text": "1) How should the index be partitioned?"
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Shard by term",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Each shard holds the full posting lists for a subset of terms."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Multi-word queries must combine posting lists across shards over the network, and popular terms create hot shards."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Shard by document with replicas",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Each shard indexes a subset of documents fully, so every query is answered locally per shard and merged at the root. Replicate each shard many times for query throughput, and add layers of aggregators to fan out to thousands of shards."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Every query touches every shard, so tail latency of the slowest shard matters — use hedged requests and timeouts that return partial results."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-rank-results",
+      "text": "2) How do we rank results?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Ranking happens in stages: a fast score on each leaf (BM25 text relevance + static quality like PageRank) selects candidates, then a more expensive machine-learned ranker re-scores the merged top few hundred using many features (term proximity, freshness, click signals). Tiered indexes keep high-quality pages in a smaller tier searched first, so most queries never need the full index."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-keep-latency-low",
+      "text": "3) How do we keep latency low?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Cache results for popular queries (a large share of traffic repeats), compress posting lists (delta + variable-length encoding) so they fit in memory, early-terminate scoring once enough high-quality matches are found, and use hedged requests to cut tail latency."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What does an inverted index map?",
+      "options": [
+        "Documents to authors",
+        "Each term to the documents containing it",
+        "URLs to IPs",
+        "Users to queries"
+      ],
+      "answer": 1,
+      "explanation": "Posting lists let queries find matching documents directly."
+    },
+    {
+      "question": "Why shard the index by document rather than by term?",
+      "options": [
+        "It uses less disk",
+        "Each shard can fully answer a query locally; results are merged at the root",
+        "Terms can't be sharded",
+        "For security"
+      ],
+      "answer": 1,
+      "explanation": "Term sharding requires cross-shard posting-list joins."
+    },
+    {
+      "question": "What makes freshly crawled pages searchable quickly?",
+      "options": [
+        "Rebuilding the whole index every minute",
+        "A small real-time index merged with the base index at query time",
+        "Caching",
+        "Manual submission"
+      ],
+      "answer": 1,
+      "explanation": "The real-time index absorbs updates between base rebuilds."
+    },
+    {
+      "question": "Why use hedged requests in scatter-gather?",
+      "options": [
+        "To save bandwidth",
+        "Sending a duplicate request to another replica cuts tail latency from slow shards",
+        "To rank better",
+        "For logging"
+      ],
+      "answer": 1,
+      "explanation": "The slowest shard determines query latency without hedging."
+    }
+  ]
+}

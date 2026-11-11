@@ -1,0 +1,141 @@
+{
+  "section": "questions",
+  "slug": "security",
+  "category": "Questions",
+  "title": "Security",
+  "subtitle": "OAuth, least privilege, encryption, common web vulnerabilities and securing service-to-service traffic.",
+  "seoTitle": "System Design Interview Questions — Security",
+  "description": "OAuth, least privilege, encryption, common web vulnerabilities and securing service-to-service traffic.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "blocks": [
+    {
+      "type": "qa",
+      "number": 76,
+      "qtype": "Define",
+      "level": "B",
+      "question": "What is OAuth 2.0 and how does it enable secure authorization?",
+      "id": "q-76",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "OAuth 2.0 is a framework that lets an application access a user's resources on another service **without receiving the user's password**. The user authenticates with the provider (e.g. Google) and grants specific **scopes**; the app receives an **access token** (and often a refresh token) limited to those permissions."
+        },
+        {
+          "type": "paragraph",
+          "text": "The common flow for web and mobile apps is **Authorization Code with PKCE**: redirect to the provider, user consents, the app exchanges a short-lived code for tokens server-side. **OpenID Connect** adds an ID token on top for authentication (\"Sign in with Google\")."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"OAuth is delegated authorization — scoped, revocable tokens instead of shared passwords; OIDC layers login on top.\""
+        },
+        {
+          "type": "paragraph",
+          "text": "**Go deeper:** [Authentication System](/learn/system-design/problem-breakdowns/authentication-system)"
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 77,
+      "qtype": "Define",
+      "level": "B",
+      "question": "What is the principle of least privilege?",
+      "id": "q-77",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Least privilege means every user, service and process gets only the minimum permissions needed to do its job, for only as long as needed. If something is compromised, the damage is limited."
+        },
+        {
+          "type": "paragraph",
+          "text": "In practice: per-service IAM roles scoped to specific resources, read-only database users for read-only services, no shared admin credentials, short-lived credentials instead of long-lived keys, network segmentation, and regular access reviews."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"The thumbnail worker can read the uploads bucket and write the thumbnails bucket — nothing else.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 78,
+      "qtype": "Compare",
+      "level": "B",
+      "question": "Encryption at rest vs encryption in transit. Why are both important?",
+      "id": "q-78",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "**Encryption in transit** protects data while it moves across networks (TLS/HTTPS, mTLS between services), preventing eavesdropping and tampering."
+        },
+        {
+          "type": "paragraph",
+          "text": "**Encryption at rest** protects stored data — disks, databases, backups, object storage — so stolen disks, snapshots or misconfigured backups don't expose plaintext. Keys are managed in a KMS, ideally with rotation and envelope encryption."
+        },
+        {
+          "type": "paragraph",
+          "text": "You need both because they defend different attack paths: network interception versus storage theft. Neither protects against a compromised application with legitimate access — that's what access control is for."
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"TLS everywhere including internal traffic, and KMS-managed encryption at rest for databases, buckets and backups.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 79,
+      "qtype": "How",
+      "level": "I",
+      "question": "What are common web app vulnerabilities and how do you mitigate them?",
+      "id": "q-79",
+      "blocks": [
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**SQL injection**: untrusted input concatenated into queries. Mitigate with parameterised queries/ORMs and least-privilege DB users.",
+            "**XSS**: injected scripts run in other users' browsers. Mitigate with output encoding, frameworks that escape by default, Content Security Policy, and HttpOnly cookies.",
+            "**CSRF**: a malicious site triggers actions with a user's cookies. Mitigate with SameSite cookies, CSRF tokens, and checking Origin headers.",
+            "**Broken authentication**: weak passwords, session fixation, credential stuffing. Mitigate with slow password hashing, MFA, rate limiting, secure session handling.",
+            "Also: broken access control (check authorization on every request), SSRF, insecure dependencies."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"Parameterised queries, escaped output plus CSP, SameSite cookies, and authorization checks on every endpoint — not just in the UI.\""
+        }
+      ]
+    },
+    {
+      "type": "qa",
+      "number": 80,
+      "qtype": "Scenario",
+      "level": "I",
+      "question": "How do you secure communication between multiple microservices?",
+      "id": "q-80",
+      "blocks": [
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**mTLS** between services: encrypts traffic and authenticates both sides with certificates — usually handled by a **service mesh** (Istio, Linkerd) that rotates certificates automatically.",
+            "**Service identity and authorization**: policies like \"only checkout may call payments\", enforced by the mesh or each service.",
+            "**Propagated user context**: the API gateway validates the user's token and passes a signed JWT (or claims) downstream, so services can authorize actions per user.",
+            "**Network segmentation**: services reachable only from where they need to be.",
+            "**Secrets management**: credentials from a vault, never in code or images."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "**In the interview:** \"The mesh gives every service mTLS identity; authorization policies allowlist callers, and user identity travels as a signed JWT from the gateway.\""
+        }
+      ]
+    }
+  ],
+  "quiz": []
+}

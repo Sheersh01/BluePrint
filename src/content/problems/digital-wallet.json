@@ -1,0 +1,361 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "digital-wallet",
+  "category": "Common Problems",
+  "title": "Digital Wallet",
+  "seoTitle": "Design a Digital Wallet like PayPal or Venmo",
+  "description": "Design a digital wallet — balances backed by a double-entry ledger, peer-to-peer transfers, top-ups and withdrawals, idempotency, and reconciliation.",
+  "tags": [
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "label": "Multi-step Processes",
+      "href": "/learn/system-design/patterns/multi-step-processes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "👛",
+      "title": "What is a Digital Wallet?",
+      "text": "A digital wallet holds a stored balance for each user and lets them add money from a card or bank account, pay friends or merchants instantly, and withdraw back to their bank. Think PayPal, Venmo or Paytm. Moving money inside the wallet is instant because it's only an internal ledger entry; moving money in or out touches external banking rails."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Users should be able to view their balance and transaction history.",
+        "Users should be able to top up from a card or bank account.",
+        "Users should be able to send money to other users instantly.",
+        "Users should be able to withdraw to their bank account."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Currency conversion.",
+        "Credit products and interest.",
+        "KYC onboarding flows."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Correctness above everything: money is never created, lost or double-spent.",
+        "Transfers complete in under a second.",
+        "Strong consistency for balances; history can lag slightly.",
+        "Scale to ~100M users and ~10k transfers per second at peak.",
+        "Full audit trail for regulators."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Sub-second withdrawals to banks (bank rails are slow by nature)."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- balance + history",
+        "- top up",
+        "- instant P2P transfers",
+        "- withdraw to bank",
+        "",
+        "Non-functional",
+        "- never lose or create money",
+        "- transfers < 1s",
+        "- strongly consistent balances",
+        "- 10k TPS, auditable"
+      ],
+      "caption": "Wallet Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Account**: a user's wallet, plus internal accounts such as \"card settlement\" and \"bank payouts\".",
+        "**Ledger entry**: an immutable debit or credit to one account.",
+        "**Transaction**: a group of entries that sum to zero (a transfer debits one account and credits another).",
+        "**Balance**: the derived sum of an account's entries, stored for fast reads."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /wallet -> { balance, currency }\nGET  /wallet/transactions?cursor=\nPOST /topups { amount, paymentMethodId, idempotencyKey }\nPOST /transfers { toUserId, amount, note, idempotencyKey }\nPOST /withdrawals { amount, bankAccountId, idempotencyKey }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-balances-and-history-come-from-a-ledger",
+      "text": "1) Balances and history come from a ledger"
+    },
+    {
+      "type": "paragraph",
+      "text": "Every money movement is recorded in a **double-entry ledger**: each transaction has entries that sum to zero, so money only ever moves between accounts. A user's balance is the sum of their entries; we also store a **balance column** updated in the same database transaction so reads don't sum history."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-top-ups",
+      "text": "2) Top-ups"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Wallet Service** creates a pending top-up and charges the card through a **payment processor**. When the processor confirms (synchronously or by webhook), a ledger transaction debits the internal \"card settlement\" account and credits the user's wallet."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-instant-transfers",
+      "text": "3) Instant transfers"
+    },
+    {
+      "type": "paragraph",
+      "text": "A transfer is one database transaction: lock the sender's balance row, check it's sufficient, insert a debit for the sender and a credit for the recipient, update both balances, and commit. Because both sides are internal accounts, it completes in milliseconds."
+    },
+    {
+      "type": "diagram",
+      "file": "01-transfer.svg",
+      "caption": "Transfer"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-withdrawals",
+      "text": "4) Withdrawals"
+    },
+    {
+      "type": "paragraph",
+      "text": "Withdrawals first move funds from the user's wallet to an internal **\"pending payouts\"** account (so they can't be spent twice), then a payout job sends them over bank rails. If the bank rejects the payout, a reversing transaction returns the funds."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-prevent-double-spending",
+      "text": "1) How do we prevent double spending?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Read balance, then write",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Read the balance in the application, check it, then write the new balance."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Two concurrent transfers both read 100, both pass the check, and the user spends 200."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Row lock or conditional update",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Inside a transaction, `SELECT ... FOR UPDATE` the sender's balance row, or use a conditional update: `UPDATE balances SET amount = amount - 50 WHERE account = A AND amount >= 50`. Zero rows updated means insufficient funds."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Correct, but a single very hot account (a big merchant) serialises all its transfers."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Conditional updates + idempotency + sub-accounts for hot spots",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Use the conditional update with an **idempotency key** stored in the same transaction, so a retried request returns the original result instead of moving money twice. For hot merchant accounts that mostly *receive* money, credit several **sub-accounts** (shards) and sweep them together periodically — credits never need a balance check."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Sharded accounts need careful reporting so the merchant still sees one balance."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-scale-the-ledger-to-100m-users",
+      "text": "2) How do we scale the ledger to 100M users?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Shard the ledger by **account ID**. A transfer between accounts on different shards can no longer be one local transaction, so run it as a **saga**: debit the sender into an internal \"in-flight\" account on shard A, then credit the recipient on shard B, each step idempotent and retried until done. The in-flight account always shows money that has left but not yet arrived, and it must net to zero once all sagas complete."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Say that ledger entries are append-only. Mistakes are fixed with reversing entries, never by editing history — that's what makes the audit trail trustworthy."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-know-the-books-are-right",
+      "text": "3) How do we know the books are right?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Run **reconciliation** continuously: the sum of all entries must be zero, stored balances must equal the sum of their entries, and internal settlement accounts must match the payment processor's and bank's reports each day. Any mismatch raises an alert for investigation."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What's the core rule of a double-entry ledger?",
+      "options": [
+        "Every entry is written twice",
+        "Each transaction's entries sum to zero, so money only moves between accounts",
+        "Balances are stored twice",
+        "Only banks can write"
+      ],
+      "answer": 1,
+      "explanation": "Zero-sum transactions make it impossible to create or lose money silently."
+    },
+    {
+      "question": "How do we stop two concurrent transfers spending the same balance?",
+      "options": [
+        "Check in the UI",
+        "A conditional update or row lock inside a transaction",
+        "Retry later",
+        "Cache the balance"
+      ],
+      "answer": 1,
+      "explanation": "The database enforces the balance check atomically."
+    },
+    {
+      "question": "What protects against a retried transfer request moving money twice?",
+      "options": [
+        "Rate limiting",
+        "An idempotency key stored with the transaction",
+        "TLS",
+        "Shorter timeouts"
+      ],
+      "answer": 1,
+      "explanation": "A repeated key returns the original result."
+    },
+    {
+      "question": "How are mistakes in the ledger corrected?",
+      "options": [
+        "Edit the original entry",
+        "Post a reversing transaction",
+        "Delete the row",
+        "Recalculate balances"
+      ],
+      "answer": 1,
+      "explanation": "Append-only history keeps the audit trail intact."
+    }
+  ]
+}

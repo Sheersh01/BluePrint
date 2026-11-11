@@ -1,0 +1,367 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "ads-management",
+  "category": "Common Problems",
+  "title": "Ads Management and Serving",
+  "seoTitle": "Design an Ads Management and Display System for a Social Feed",
+  "description": "Design ad serving for a social feed — campaign management, targeting, real-time auctions, budget pacing, and impression and click logging.",
+  "tags": [
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    },
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 10, 2026",
+  "updated": "Nov 10, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "askedAt": {
+    "companies": [
+      "Facebook",
+      "Google",
+      "Amazon",
+      "Pinterest"
+    ],
+    "more": 0
+  },
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "📣",
+      "title": "What is an Ads Management and Serving System?",
+      "text": "Advertisers create campaigns with budgets, targeting and creatives; when a user scrolls their feed, the system picks the best ad for that slot in milliseconds through an auction, shows it, and charges the advertiser — without overspending budgets."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Advertisers should be able to create campaigns with targeting (age, location, interests), budget, bid and creatives.",
+        "When a feed requests an ad, the system should choose the best eligible ad via an auction.",
+        "The system should record impressions and clicks and charge advertisers.",
+        "Campaigns should not exceed their daily budgets, and spend should be paced through the day."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Click-fraud detection.",
+        "The ML model that predicts click-through rates (we treat it as a service)."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Ad selection within ~50ms so the feed isn't slowed.",
+        "Handle millions of ad requests per second.",
+        "Budgets must not be significantly overspent; small overshoot is tolerable.",
+        "Impression and click logs must be durable — they're how advertisers are billed."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Advertiser reporting dashboards (see [Ad Click Aggregator](/learn/system-design/problem-breakdowns/ad-click-aggregator))."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- campaigns: targeting, budget, bid",
+        "- auction per ad slot",
+        "- log impressions + clicks, bill",
+        "- budget pacing",
+        "",
+        "Non-functional",
+        "- select in ~50ms",
+        "- millions req/s",
+        "- no big overspend",
+        "- durable billing logs"
+      ],
+      "caption": "Ads Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Campaign**: advertiser, budget, bid strategy, schedule, status.",
+        "**Ad**: creative, targeting criteria, belongs to a campaign.",
+        "**Ad request**: user ID, context (placement, device), timestamp.",
+        "**Impression / Click**: logged events tied to an ad request ID."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "POST /campaigns { budgetDaily, bid, targeting, creatives[] }\n\n// Internal, called by the feed service\nPOST /ads/select { userId, placement, count: 1 } -> [{ adId, creative, impressionToken }]\n\nPOST /events/impression { impressionToken }\nGET  /c/:clickToken -> 302 to advertiser URL"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-advertisers-create-campaigns",
+      "text": "1) Advertisers create campaigns"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Campaign Service** stores campaigns in a relational database. Changes are published so serving systems rebuild their in-memory **ad index** within seconds."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-choose-the-best-ad-for-a-feed-slot",
+      "text": "2) Choose the best ad for a feed slot"
+    },
+    {
+      "type": "diagram",
+      "file": "01-ad-selection.svg",
+      "caption": "Ad selection"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Retrieve**: the ad index (an inverted index from targeting attributes to ads) returns the few thousand ads eligible for this user.",
+        "**Rank**: a model predicts click probability; expected value = bid × predicted CTR (plus quality signals).",
+        "**Auction**: the highest score wins; with a second-price-style rule, the winner pays just enough to beat the runner-up.",
+        "Check that the winning campaign still has budget to spend, then return the creative with a signed impression token."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-log-impressions-and-clicks",
+      "text": "3) Log impressions and clicks"
+    },
+    {
+      "type": "paragraph",
+      "text": "The client reports impressions when the ad is actually visible; clicks go through a redirect endpoint. Events are written to Kafka, deduplicated by token, and aggregated for billing and reporting."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-pace-budgets",
+      "text": "4) Pace budgets"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **Budget Service** tracks spend per campaign and decides, for each auction, whether a campaign should participate, so spend is spread across the day instead of being exhausted in the first hour."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-pick-an-ad-within-50ms",
+      "text": "1) How do we pick an ad within 50ms?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Score every ad for every request",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Run the CTR model across all active ads."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Millions of ads × millions of requests per second is impossible."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Multi-stage retrieval and ranking",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "An in-memory inverted index (sharded across serving nodes, rebuilt from the campaign stream) narrows millions of ads to a few thousand by targeting. A cheap model trims that to hundreds; an expensive model ranks the final candidates. Cache user features close to the serving nodes."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Index freshness: paused campaigns must disappear within seconds, so updates stream in rather than waiting for a rebuild."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-avoid-overspending-budgets",
+      "text": "2) How do we avoid overspending budgets?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Check the database on every auction",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Read and update the campaign's spend in the database per impression."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "A popular campaign gets thousands of impressions per second — a hot row and slow auctions."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Distributed budget allocation with pacing",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "A central budget service hands each serving node a small **spend allowance** per campaign for the next few seconds and tracks actual spend from the impression stream. Nodes decide locally from their allowance (no network call per auction). A pacing controller throttles participation probability so spend tracks a target curve through the day."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Allowances create small overshoot when many nodes spend at once; keep allowances small near the end of a budget."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why use multi-stage retrieval and ranking?",
+      "options": [
+        "For accuracy only",
+        "Scoring every ad per request is impossible within ~50ms",
+        "Advertisers require it",
+        "To save storage"
+      ],
+      "answer": 1,
+      "explanation": "Cheap filters narrow candidates before expensive models run."
+    },
+    {
+      "question": "What score typically decides the auction?",
+      "options": [
+        "Bid only",
+        "Bid times predicted click-through rate (plus quality)",
+        "Ad age",
+        "Random"
+      ],
+      "answer": 1,
+      "explanation": "Expected value balances price and relevance."
+    },
+    {
+      "question": "How can serving nodes enforce budgets without a database call per auction?",
+      "options": [
+        "Ignore budgets",
+        "Use small spend allowances handed out by a budget service",
+        "Charge later",
+        "Cache the campaign forever"
+      ],
+      "answer": 1,
+      "explanation": "Local allowances bound overspend while avoiding hot rows."
+    },
+    {
+      "question": "What is budget pacing for?",
+      "options": [
+        "Spending faster",
+        "Spreading spend across the day instead of exhausting it early",
+        "Refunds",
+        "Fraud"
+      ],
+      "answer": 1,
+      "explanation": "Pacing gives campaigns delivery throughout the day."
+    }
+  ]
+}

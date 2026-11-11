@@ -1,0 +1,364 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "ml-platform",
+  "category": "Common Problems",
+  "title": "ML Platform",
+  "seoTitle": "Design a Machine Learning Platform and ML Data Pipeline",
+  "description": "Design an internal machine learning platform — data pipelines and a feature store, distributed training jobs, experiment tracking, a model registry, and online serving with monitoring.",
+  "tags": [
+    {
+      "label": "Managing Long Running Tasks",
+      "href": "/learn/system-design/patterns/managing-long-running-tasks"
+    },
+    {
+      "label": "Scaling Reads",
+      "href": "/learn/system-design/patterns/scaling-reads"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🧠",
+      "title": "What is an ML Platform?",
+      "text": "An ML platform (like Uber's Michelangelo or the tooling behind SageMaker and Vertex AI) gives data scientists one paved road from raw data to a model in production: pipelines that turn data into features, infrastructure to train models, a registry to version them, and serving to make predictions — with monitoring to catch when models go stale. This page also covers designing the **data pipeline for an ML application**, which is the first half of the platform."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Teams should be able to define features once and use them for both training and online prediction.",
+        "Teams should be able to launch training jobs on CPUs/GPUs and track experiments (parameters, metrics, artefacts).",
+        "Trained models should be versioned in a registry and promoted to production.",
+        "Production services should get low-latency online predictions; batch predictions should also be supported.",
+        "Models should be monitored for data drift and prediction quality."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Labelling tools.",
+        "LLM fine-tuning specifics (mentioned briefly).",
+        "AutoML."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "No training/serving skew: a feature has the same value logic offline and online.",
+        "Online prediction latency < 20 ms p99 including feature lookup.",
+        "Reproducibility: any model can be traced to its exact data, code and parameters.",
+        "Efficient use of expensive GPUs across many teams.",
+        "Scale to hundreds of models and ~100k predictions per second."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Multi-cloud training."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- define features once",
+        "- training jobs + experiment tracking",
+        "- model registry + promotion",
+        "- online + batch predictions",
+        "- drift monitoring",
+        "",
+        "Non-functional",
+        "- no training/serving skew",
+        "- predictions < 20ms p99",
+        "- reproducible models",
+        "- share GPUs efficiently"
+      ],
+      "caption": "ML Platform Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Feature**: a named, versioned transformation (e.g. `user_orders_7d`) with an entity key.",
+        "**Dataset**: a point-in-time snapshot of features and labels used for training.",
+        "**Training run**: code version, data snapshot, hyperparameters, metrics, artefacts.",
+        "**Model version**: a registered artefact with lineage and stage (`staging`, `production`).",
+        "**Endpoint**: a deployed model serving predictions."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "feature_store.register(feature_definition)\nfeature_store.get_training_data(entity_df, features, as_of)\nPOST /training-jobs { image, datasetId, resources: { gpus: 8 }, params }\nPOST /models/:name/versions/:v/promote { stage: production }\nPOST /endpoints/:name/predict { entityId, inputs } -> { prediction, modelVersion }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-data-pipelines-and-the-feature-store",
+      "text": "1) Data pipelines and the feature store"
+    },
+    {
+      "type": "paragraph",
+      "text": "Raw data arrives from service databases (via CDC) and event streams into a **data lake**. Feature pipelines — **batch** (Spark) for slow-moving features and **streaming** (Flink) for fresh ones — compute features from one shared definition. Results go to two stores: an **offline store** (the lake, keeping full history for training) and an **online store** (Redis/DynamoDB, latest value per entity for serving)."
+    },
+    {
+      "type": "diagram",
+      "file": "01-feature-pipelines.svg",
+      "caption": "Feature pipelines"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-training-and-experiment-tracking",
+      "text": "2) Training and experiment tracking"
+    },
+    {
+      "type": "paragraph",
+      "text": "A data scientist requests a training dataset with **point-in-time joins** (feature values as they were at each label's timestamp, never from the future). The **training service** schedules the job on a GPU cluster (Kubernetes with a batch scheduler), and the run logs parameters, metrics and artefacts to an **experiment tracker**."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-model-registry",
+      "text": "3) Model registry"
+    },
+    {
+      "type": "paragraph",
+      "text": "The best run is registered as a **model version** with full lineage: code commit, dataset snapshot, feature versions and metrics. Promotion to production requires passing evaluation gates."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-serving-and-monitoring",
+      "text": "4) Serving and monitoring"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **model server** loads the production version. For each request it fetches the entity's features from the online store, runs the model, and returns the prediction. Every prediction and its features are **logged**, so monitoring can compare live feature distributions to training data (drift) and join predictions with later outcomes to measure accuracy."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-prevent-training-serving-skew",
+      "text": "1) How do we prevent training/serving skew?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Separate code for training and serving",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Data scientists compute features in notebooks; engineers reimplement them in the serving service."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "The two implementations drift apart, and the model silently performs worse in production than offline."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Shared feature definitions",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Features are defined once in the feature store and the same definition generates both the offline backfill and the online pipeline."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Still possible to leak future data into training if joins aren't time-aware."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Point-in-time correctness + logged features",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Training datasets use **point-in-time joins** against the offline store's history, so each training example sees only what would have been known then. In addition, the serving layer **logs the exact features it used** for each prediction; future training data can be built from these logs, guaranteeing training matches serving exactly."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Logging every feature vector is a large data volume — sample for high-traffic models."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-share-gpus-across-teams",
+      "text": "2) How do we share GPUs across teams?"
+    },
+    {
+      "type": "paragraph",
+      "text": "GPUs are scarce and expensive. A **cluster scheduler** with per-team **quotas** and **priority** classes runs jobs; low-priority jobs can borrow idle capacity and are **preempted** when owners need it, so training code must **checkpoint** regularly. Gang scheduling makes sure a distributed job gets all its GPUs at once rather than holding half of them idle."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention that checkpointing turns preemption from a disaster into a minor delay — the job resumes from its last checkpoint."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-deploy-models-safely",
+      "text": "3) How do we deploy models safely?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Promotion goes through **shadow mode** (the new model scores live traffic but its predictions aren't used), then a **canary** taking a small share of traffic with metrics compared against the current model, then full rollout. Rollback is switching the endpoint back to the previous version, which stays loaded for a while."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "What is training/serving skew?",
+      "options": [
+        "Slow training",
+        "Features computed differently in training and production, degrading the live model",
+        "GPU shortages",
+        "Large models"
+      ],
+      "answer": 1,
+      "explanation": "Shared definitions and logged features prevent it."
+    },
+    {
+      "question": "Why use point-in-time joins for training data?",
+      "options": [
+        "They're faster",
+        "So each example only sees feature values known at that time, avoiding leakage",
+        "To reduce storage",
+        "To encrypt data"
+      ],
+      "answer": 1,
+      "explanation": "Future information in training makes offline metrics misleadingly good."
+    },
+    {
+      "question": "Why does a feature store have both offline and online stores?",
+      "options": [
+        "Redundancy",
+        "Training needs full history; serving needs the latest value in milliseconds",
+        "Regulations",
+        "Cost only"
+      ],
+      "answer": 1,
+      "explanation": "Different access patterns need different storage."
+    },
+    {
+      "question": "What makes GPU preemption tolerable for training jobs?",
+      "options": [
+        "Smaller models",
+        "Regular checkpoints so jobs resume where they left off",
+        "Faster GPUs",
+        "No preemption"
+      ],
+      "answer": 1,
+      "explanation": "Checkpointing lets the scheduler share GPUs aggressively."
+    }
+  ]
+}

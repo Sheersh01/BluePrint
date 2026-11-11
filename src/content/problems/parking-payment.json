@@ -1,0 +1,362 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "parking-payment",
+  "category": "Common Problems",
+  "title": "Parking Payment",
+  "seoTitle": "Design a Parking Payment System like ParkMobile",
+  "description": "Design a city parking payment system — zone-based rates, starting and extending sessions from a phone, enforcement lookups by licence plate, garages with gate cameras, and handling offline meters.",
+  "tags": [
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "easy",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🅿️",
+      "title": "What is a Parking Payment System?",
+      "text": "A parking payment system (ParkMobile, PayByPhone, or a city's own app) lets drivers pay for street parking or garages from their phone instead of a meter. Drivers pick a zone, enter their plate and duration, and can extend remotely. Enforcement officers check whether a plate has paid. Garages may also use cameras that read plates at the entry and exit gates."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Drivers should be able to start a parking session for a zone, plate and duration, and pay.",
+        "Drivers should be reminded before expiry and be able to extend (up to the zone's maximum).",
+        "Enforcement officers should check whether a plate has a valid session in a zone.",
+        "Garages should support pay-on-exit: entry and exit by plate recognition, charged by time spent."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Permit and residential parking management.",
+        "Dynamic pricing (mentioned briefly).",
+        "Issuing and paying fines."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Starting or extending a session takes a few seconds, even on poor mobile connections.",
+        "Enforcement lookups return in < 500 ms and must be accurate — a wrongful ticket is a serious failure.",
+        "Payments are charged exactly once per session or extension.",
+        "Garage gates must open even if the cloud is briefly unreachable.",
+        "Scale to a large city: ~1M sessions per day, with busy weekday-morning peaks."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Global multi-currency operation."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- start session: zone, plate, duration",
+        "- reminders + extend",
+        "- enforcement plate lookup",
+        "- garage pay-on-exit",
+        "",
+        "Non-functional",
+        "- fast on poor connections",
+        "- accurate lookups < 500ms",
+        "- charge exactly once",
+        "- gates work offline",
+        "- 1M sessions / day"
+      ],
+      "caption": "Parking Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Zone**: ID, geometry, rate schedule (by time of day), maximum stay.",
+        "**Vehicle**: plate number and region, owner account.",
+        "**Session**: zone, plate, start, end, amount, payment status.",
+        "**Garage visit**: garage, plate, entry time, exit time, amount."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /zones?lat=&lng= -> nearby zones + current rate\nPOST /sessions { zoneId, plate, minutes, paymentMethodId, idempotencyKey } -> session\nPOST /sessions/:id/extend { minutes, idempotencyKey }\nGET  /enforcement/check?zone=&plate= -> { valid, expiresAt }\n(garage) POST /garages/:id/entries { plate, ts }   POST /garages/:id/exits { plate, ts }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-starting-a-session",
+      "text": "1) Starting a session"
+    },
+    {
+      "type": "paragraph",
+      "text": "The app finds the zone from GPS (or a zone number on the sign), shows the rate, and posts the session. The **Session Service** computes the price from the zone's **rate schedule**, charges the card (using the idempotency key), and stores the session. Session state is the source of truth for enforcement."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-reminders-and-extensions",
+      "text": "2) Reminders and extensions"
+    },
+    {
+      "type": "paragraph",
+      "text": "A **scheduler** queues a reminder 10-15 minutes before each session ends (a delayed message or a time-indexed table scanned each minute). Extending checks the zone's maximum stay, charges the difference, and updates `end` in a transaction."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-enforcement-lookups",
+      "text": "3) Enforcement lookups"
+    },
+    {
+      "type": "paragraph",
+      "text": "Officers' handheld devices (or patrol cars with plate cameras) query by **zone and plate**. Active sessions are kept in a fast store keyed by `(zoneId, normalisedPlate)` with a TTL equal to the session end, so a lookup is a single key read."
+    },
+    {
+      "type": "diagram",
+      "file": "01-sessions-and-enforcement.svg",
+      "caption": "Sessions and enforcement"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-garages",
+      "text": "4) Garages"
+    },
+    {
+      "type": "paragraph",
+      "text": "Gate cameras read plates (**ALPR**) at entry and exit. A **garage controller** on site records the entry, opens the gate, and on exit computes the fee and charges the account linked to the plate (or prompts for payment at a kiosk)."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-how-do-we-make-enforcement-accurate",
+      "text": "1) How do we make enforcement accurate?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Query the main database by plate",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Officers' lookups query the sessions table with a time-range filter."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Slow under load, and plates are entered inconsistently (\"AB 123\", \"AB-123\", \"A8123\") leading to false negatives — and wrongful tickets."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Normalised plates in a key-value store",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Normalise plates (uppercase, strip spaces and dashes) on write and read, and keep active sessions in a key-value store with TTLs."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Camera reads still confuse similar characters (O/0, B/8, I/1)."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Normalised + fuzzy match + grace periods",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Store a **canonical form** that maps easily confused characters to the same symbol for lookups, and return near matches for the officer to confirm visually. Apply a short **grace period** after expiry, and record the lookup result with a timestamp so disputes can be resolved. If the officer's device is offline, it syncs a **zone snapshot** of active sessions before each patrol and refreshes when connected."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Fuzzy matches increase false positives slightly, so they require human confirmation."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-keep-garage-gates-working-when-the-network-drops",
+      "text": "2) How do we keep garage gates working when the network drops?"
+    },
+    {
+      "type": "paragraph",
+      "text": "The on-site **garage controller** keeps a local database of entries and a cached list of registered plates with valid payment methods. Gates open based on local decisions; events queue locally and sync to the cloud when connectivity returns, where charges are processed idempotently by visit ID."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Call out that edge autonomy is essential wherever physical access is involved: a car stuck at an exit gate because of a cloud outage is a real-world failure."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-handle-weekday-morning-peaks",
+      "text": "3) How do we handle weekday-morning peaks?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Most sessions start between 7 and 10 a.m. The session API is stateless and autoscaled; payment calls are the slowest part, so the app shows the session as **pending** and confirms within seconds. Enforcement data is written to the active-session store as soon as payment is authorised, so a driver who just paid is never ticketed."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why normalise licence plates?",
+      "options": [
+        "To save space",
+        "So inconsistently typed plates still match during enforcement",
+        "For encryption",
+        "To support colours"
+      ],
+      "answer": 1,
+      "explanation": "A missed match can produce a wrongful ticket."
+    },
+    {
+      "question": "Where should active sessions live for enforcement?",
+      "options": [
+        "Only in the main SQL table",
+        "In a key-value store keyed by zone and plate with TTLs",
+        "On the driver's phone",
+        "In email"
+      ],
+      "answer": 1,
+      "explanation": "Single-key lookups are fast and expire automatically."
+    },
+    {
+      "question": "Why does a garage controller make gate decisions locally?",
+      "options": [
+        "It's cheaper",
+        "Gates must keep working when the cloud is unreachable",
+        "To avoid payment",
+        "Cameras require it"
+      ],
+      "answer": 1,
+      "explanation": "Edge autonomy keeps physical access working."
+    },
+    {
+      "question": "What prevents an extension being charged twice on retry?",
+      "options": [
+        "Longer timeouts",
+        "An idempotency key per extension request",
+        "Rate limiting",
+        "Manual review"
+      ],
+      "answer": 1,
+      "explanation": "Retries return the original result."
+    }
+  ]
+}

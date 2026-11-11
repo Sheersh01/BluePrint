@@ -1,0 +1,368 @@
+{
+  "section": "problem-breakdowns",
+  "slug": "doordash",
+  "category": "Common Problems",
+  "title": "DoorDash",
+  "seoTitle": "Design a Food Delivery Platform like DoorDash",
+  "description": "Design a global food delivery platform like DoorDash — restaurant search by location, ordering, dispatching orders to couriers, live courier tracking, and ETA prediction across many cities.",
+  "tags": [
+    {
+      "label": "Real-time Updates",
+      "href": "/learn/system-design/patterns/real-time-updates"
+    },
+    {
+      "label": "Dealing with Contention",
+      "href": "/learn/system-design/patterns/dealing-with-contention"
+    },
+    {
+      "label": "Scaling Writes",
+      "href": "/learn/system-design/patterns/scaling-writes"
+    }
+  ],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "difficulty": "hard",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "understanding-the-problem",
+      "text": "Understanding the Problem"
+    },
+    {
+      "type": "definition",
+      "emoji": "🛵",
+      "title": "What is DoorDash?",
+      "text": "DoorDash, Uber Eats and Deliveroo connect three parties: **customers** who order food, **restaurants** that prepare it, and **couriers** (Dashers) who pick it up and deliver it. The system has to show what's available nearby, take orders, choose the right courier at the right moment so food isn't left waiting, and track delivery live — in hundreds of cities worldwide."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "functional-requirements",
+      "text": "Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Customers should be able to browse restaurants that deliver to their location, with menus and estimated delivery times.",
+        "Customers should be able to place and pay for an order.",
+        "Restaurants should receive orders and mark them as ready.",
+        "The system should assign each order to a courier, who can accept or decline.",
+        "Customers should be able to track their courier live."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Courier payouts and incentives.",
+        "Ratings and reviews.",
+        "Grocery and retail delivery."
+      ]
+    },
+    {
+      "type": "tryIt",
+      "eyebrow": "First Question",
+      "question": "What are the non-functional requirements for this system?",
+      "answerTarget": "non-functional-requirements"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "non-functional-requirements",
+      "text": "Non-Functional Requirements"
+    },
+    {
+      "type": "label",
+      "text": "Core Requirements"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "Restaurant browsing in < 500 ms.",
+        "An order is never assigned to two couriers at once.",
+        "Courier locations update every few seconds, with high write volume.",
+        "Scale to ~1M orders per hour at dinner peak and ~1M active couriers globally.",
+        "Regional isolation: an outage in one region shouldn't affect others."
+      ]
+    },
+    {
+      "type": "label",
+      "text": "Below the line (out of scope):"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Strong consistency for menus (minutes of staleness is fine)."
+      ]
+    },
+    {
+      "type": "sketch",
+      "lines": [
+        "Functional",
+        "- browse nearby restaurants + ETAs",
+        "- order + pay",
+        "- restaurants receive orders",
+        "- assign courier",
+        "- live tracking",
+        "",
+        "Non-functional",
+        "- browse < 500ms",
+        "- one courier per order",
+        "- location writes every few seconds",
+        "- 1M orders / hour peak",
+        "- regional isolation"
+      ],
+      "caption": "DoorDash Requirements"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-set-up",
+      "text": "The Set Up"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "defining-the-core-entities",
+      "text": "Defining the Core Entities"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Restaurant**: location, delivery radius or zone, hours, menu, current prep-time estimate.",
+        "**Order**: customer, restaurant, items, status (`placed`, `confirmed`, `ready`, `picked_up`, `delivered`), assigned courier.",
+        "**Courier**: status (`offline`, `available`, `on_delivery`), current location, vehicle.",
+        "**Delivery offer**: an order offered to a courier, with expiry."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "api-or-system-interface",
+      "text": "API or System Interface"
+    },
+    {
+      "type": "code",
+      "code": "GET  /restaurants?lat=&lng=&cuisine= -> [{ restaurant, etaMinutes }]\nPOST /orders { restaurantId, items[], address, paymentMethodId, idempotencyKey }\nPOST /restaurant/orders/:id/ready\nPUT  /couriers/me/location { lat, lng, ts }          (every ~4s)\nPOST /couriers/me/offers/:id/accept | decline\nWS   /orders/:id/track -> courier location + status"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "high-level-design",
+      "text": "High-Level Design"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-browsing-nearby-restaurants",
+      "text": "1) Browsing nearby restaurants"
+    },
+    {
+      "type": "paragraph",
+      "text": "Restaurants are indexed by **geohash/H3 cell**. A query takes the customer's cell and neighbouring cells, filters by open hours and delivery zone, and ranks by relevance and ETA. Menus and restaurant pages are cached heavily since they change rarely."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-placing-an-order",
+      "text": "2) Placing an order"
+    },
+    {
+      "type": "paragraph",
+      "text": "The **Order Service** validates items and prices, charges via the payment service (idempotent), stores the order and sends it to the restaurant's tablet. The order then moves through a state machine driven by events."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-assigning-couriers",
+      "text": "3) Assigning couriers"
+    },
+    {
+      "type": "paragraph",
+      "text": "Couriers' locations stream into a **Location Service** that keeps the latest position per courier in an in-memory geo index (Redis GEO or H3 buckets). The **Dispatch Service** finds available couriers near the restaurant, picks the best one, and sends an **offer** with a short expiry. On accept, the order is assigned; on decline or timeout, the next candidate is offered."
+    },
+    {
+      "type": "diagram",
+      "file": "01-dispatch.svg",
+      "caption": "Dispatch"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "4-live-tracking",
+      "text": "4) Live tracking"
+    },
+    {
+      "type": "paragraph",
+      "text": "The tracking service subscribes to the assigned courier's location updates and pushes them to the customer over a **WebSocket** or SSE, along with status changes."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "potential-deep-dives",
+      "text": "Potential Deep Dives"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "1-when-and-to-whom-should-we-dispatch",
+      "text": "1) When and to whom should we dispatch?"
+    },
+    {
+      "type": "solution",
+      "verdict": "bad",
+      "title": "Nearest courier, immediately",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "As soon as an order is placed, offer it to the closest available courier."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "The courier arrives long before the food is ready and waits, wasting capacity, while orders placed a minute later might have suited them better."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "good",
+      "title": "Time dispatch to prep time",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Predict when the food will be ready (per-restaurant prep-time model) and dispatch so the courier's travel time ends just as the food is ready."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Still greedy: each order is matched in isolation."
+        }
+      ]
+    },
+    {
+      "type": "solution",
+      "verdict": "great",
+      "title": "Batched optimisation per zone",
+      "approach": [
+        {
+          "type": "paragraph",
+          "text": "Every few seconds, for each geographic zone, solve an **assignment problem** over all pending orders and available couriers, minimising expected delivery time and courier idle time using predicted prep times and travel times. Allow **batching** two orders from the same or nearby restaurants to one courier. Offers go out from the solution, and declines feed back into the next round."
+        }
+      ],
+      "challenges": [
+        {
+          "type": "paragraph",
+          "text": "Needs accurate ETA models and enough compute per zone at peak, with a greedy fallback if the solver is late."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "2-how-do-we-avoid-assigning-an-order-to-two-couriers",
+      "text": "2) How do we avoid assigning an order to two couriers?"
+    },
+    {
+      "type": "paragraph",
+      "text": "Offers are sent one at a time per order with an expiry, and acceptance is a **conditional update**: `UPDATE orders SET courier = ? WHERE id = ? AND courier IS NULL AND status = 'awaiting_courier'`. If two couriers somehow accept, only one update succeeds; the other gets \"no longer available\". Couriers are similarly locked so they can't accept two incompatible offers."
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Mention the unhappy paths: a courier who goes offline mid-delivery triggers re-dispatch, and a restaurant that runs late shifts the dispatch time."
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "3-how-do-we-handle-1m-couriers-sending-locations-every-4-seconds",
+      "text": "3) How do we handle 1M couriers sending locations every 4 seconds?"
+    },
+    {
+      "type": "paragraph",
+      "text": "That's ~250k writes per second. Location updates go to the Location Service, which keeps only the **latest point in memory**, sharded by city or region, and streams updates to Kafka for tracking, ETAs and analytics. Nothing is written to a relational database per update. Each region runs its own stack (location, dispatch, orders) so a failure stays local, with global services only for accounts and payments."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "final-design",
+      "text": "Final Design"
+    },
+    {
+      "type": "diagram",
+      "file": "02-final-design.svg",
+      "caption": "Final Design"
+    },
+    {
+      "type": "quiz"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Why not dispatch the nearest courier immediately?",
+      "options": [
+        "It's illegal",
+        "The courier may wait a long time for food that isn't ready",
+        "Couriers prefer long trips",
+        "It's slower to compute"
+      ],
+      "answer": 1,
+      "explanation": "Dispatch timing should match predicted prep time."
+    },
+    {
+      "question": "How do we ensure one courier per order?",
+      "options": [
+        "Ask couriers to coordinate",
+        "A conditional update that only assigns if no courier is set",
+        "Send offers to everyone",
+        "Cache assignments"
+      ],
+      "answer": 1,
+      "explanation": "The database guarantees only one acceptance wins."
+    },
+    {
+      "question": "How should courier location updates be stored?",
+      "options": [
+        "A row per update in SQL",
+        "Latest position in an in-memory geo index, history streamed to Kafka",
+        "Email",
+        "In the order table"
+      ],
+      "answer": 1,
+      "explanation": "Only the latest location is needed for dispatch."
+    },
+    {
+      "question": "Why run separate regional stacks?",
+      "options": [
+        "Branding",
+        "To keep failures and latency local to each region",
+        "Couriers speak different languages",
+        "It's cheaper"
+      ],
+      "answer": 1,
+      "explanation": "Orders and couriers in one city rarely interact with another."
+    }
+  ]
+}

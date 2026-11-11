@@ -1,0 +1,1043 @@
+{
+  "section": "tips",
+  "slug": "payment-failure-scenarios",
+  "category": "Tips & Tricks",
+  "title": "Payment Failure Scenarios",
+  "subtitle": "Every place a payment can break between sender, server, database and provider — and the tool that fixes each one.",
+  "seoTitle": "Payment System Failure Scenarios and Fixes",
+  "description": "21 payment failure scenarios — timeouts, crashes, duplicate requests, webhooks, races — with the idempotency, state-machine, outbox and reconciliation fixes interviewers expect.",
+  "tags": [],
+  "author": "Editorial Team",
+  "published": "Nov 11, 2026",
+  "updated": "Nov 11, 2026",
+  "updatedLabel": "Published",
+  "blocks": [
+    {
+      "type": "paragraph",
+      "text": "Payment questions are really failure questions. The interviewer will pick a point in the flow — \"what if the server crashes *here*?\" — and watch whether you reach for the right tool. Walk through each scenario below, then use the tables at the end as a cheat sheet."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-failure-scenarios",
+      "text": "The Failure Scenarios"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-1-sender-never-reaches-server",
+      "text": "Scenario 1 — Sender never reaches Server"
+    },
+    {
+      "type": "code",
+      "code": "Sender\n   │\n   X\n   │\nServer"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Failure:** Network failure before the server receives the request."
+    },
+    {
+      "type": "paragraph",
+      "text": "**What happens?** Nothing happened from the payment system's perspective."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Sender can retry. But the request should contain:"
+    },
+    {
+      "type": "code",
+      "code": "Idempotency-Key: abc123"
+    },
+    {
+      "type": "paragraph",
+      "text": "So:"
+    },
+    {
+      "type": "code",
+      "code": "Attempt 1 → fails before server\nAttempt 2 → reaches server"
+    },
+    {
+      "type": "paragraph",
+      "text": "No problem."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Design principle:** Client retries + idempotency key."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-2-server-receives-request-but-crashes-before-db-write",
+      "text": "Scenario 2 — Server receives request but crashes before DB write"
+    },
+    {
+      "type": "code",
+      "code": "Sender\n   │\n   ▼\nServer\n   │\n   X\n   │\n  DB"
+    },
+    {
+      "type": "paragraph",
+      "text": "Server receives `Pay ₹100`, then crashes before saving anything. Sender gets a `timeout` and retries."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Idempotency key: `abc123`"
+    },
+    {
+      "type": "paragraph",
+      "text": "The server processes the retry as a new attempt only if the original wasn't durably recorded."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Important subtlety:** If the server crashes before recording the idempotency key, the retry may legitimately be processed again. That's okay only if the payment hasn't been sent to the Receiver yet."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-3-server-writes-db-but-crashes-before-calling-receiver",
+      "text": "Scenario 3 — Server writes DB but crashes before calling Receiver"
+    },
+    {
+      "type": "code",
+      "code": "Sender\n   ↓\nServer\n   ↓\n DB ✓\n   X\nReceiver"
+    },
+    {
+      "type": "paragraph",
+      "text": "DB:"
+    },
+    {
+      "type": "code",
+      "code": "payment_id = 123\nstatus = CREATED"
+    },
+    {
+      "type": "paragraph",
+      "text": "Server crashes."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Problem:** Payment exists in DB but hasn't been sent to Receiver."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Use a durable state machine + retry worker."
+    },
+    {
+      "type": "code",
+      "code": "CREATED\n   ↓\nPROCESSING\n   ↓\nSUCCESS"
+    },
+    {
+      "type": "paragraph",
+      "text": "A background worker finds `status = CREATED` and continues processing. This is much safer than relying entirely on the original HTTP request."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-4-server-calls-receiver-but-receiver-never-responds",
+      "text": "Scenario 4 — Server calls Receiver but Receiver never responds"
+    },
+    {
+      "type": "paragraph",
+      "text": "This is one of the most important scenarios."
+    },
+    {
+      "type": "code",
+      "code": "Server\n   │\n   │ \"Charge ₹100\"\n   ▼\nReceiver\n   │\n   │ SUCCESS\n   X\nServer doesn't receive response"
+    },
+    {
+      "type": "paragraph",
+      "text": "Receiver may have already charged the customer. Server sees `TIMEOUT`."
+    },
+    {
+      "type": "paragraph",
+      "text": "**❌ Wrong solution:** Immediately retry: \"Charge ₹100 again\" → Potential result: ₹100 + ₹100 = ₹200 charged."
+    },
+    {
+      "type": "paragraph",
+      "text": "**✅ Correct solution:** Use idempotency key at the Receiver boundary."
+    },
+    {
+      "type": "code",
+      "code": "payment_id = PAY123\nidempotency_key = PAY123"
+    },
+    {
+      "type": "paragraph",
+      "text": "First attempt: `Receiver: PAY123 → charge ₹100`"
+    },
+    {
+      "type": "paragraph",
+      "text": "Retry: `Receiver: PAY123 already processed → return original result`"
+    },
+    {
+      "type": "paragraph",
+      "text": "Therefore: ₹100, not ₹200."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-5-receiver-succeeds-but-server-crashes",
+      "text": "Scenario 5 — Receiver succeeds but Server crashes"
+    },
+    {
+      "type": "code",
+      "code": "Server\n   │\n   ▼\nReceiver\n   │\n   │ ₹100 SUCCESS\n   ▼\nServer\n   X"
+    },
+    {
+      "type": "paragraph",
+      "text": "The DB might say `PROCESSING` but Receiver says `SUCCESS`."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Don't blindly mark it failed. Use:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "**Idempotent retry** — Retry the same payment ID (`PAY123`). Receiver returns `SUCCESS`.",
+        "**Query payment status** — If Receiver supports `GET /payments/PAY123`, Server can ask \"What happened to PAY123?\"",
+        "**Webhook** — Receiver can asynchronously tell Server: `PAY123 → SUCCESS`",
+        "**Reconciliation** — Periodically compare your DB vs Receiver's records. This catches payments that got stuck."
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-6-db-crashes-before-payment-is-sent",
+      "text": "Scenario 6 — DB crashes before payment is sent"
+    },
+    {
+      "type": "code",
+      "code": "Server\n   │\n   X\n  DB"
+    },
+    {
+      "type": "paragraph",
+      "text": "Server hasn't called Receiver yet."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Durable payment state + retry worker."
+    },
+    {
+      "type": "code",
+      "code": "PAY123\nstatus = CREATED"
+    },
+    {
+      "type": "paragraph",
+      "text": "Worker: `CREATED → PROCESSING`, then calls Receiver."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-7-db-crashes-after-receiver-succeeds",
+      "text": "Scenario 7 — DB crashes after Receiver succeeds"
+    },
+    {
+      "type": "paragraph",
+      "text": "This is nastier."
+    },
+    {
+      "type": "code",
+      "code": "Server\n   │\n   ▼\nReceiver\n   │\n   │ ₹100 SUCCESS\n   ▼\nServer\n   │\n   X\n  DB"
+    },
+    {
+      "type": "paragraph",
+      "text": "Receiver has `SUCCESS`. Your DB doesn't."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Again: Idempotency + status query/webhook + reconciliation."
+    },
+    {
+      "type": "paragraph",
+      "text": "This is why you should never depend exclusively on the **Server response** to determine payment truth."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-8-sender-doesn-t-receive-server-response",
+      "text": "Scenario 8 — Sender doesn't receive Server response"
+    },
+    {
+      "type": "code",
+      "code": "Sender\n   │\n   ▼\nServer\n   │\n   ▼\nReceiver ✓\n   │\n   ▼\nServer ✓\n   X\nSender"
+    },
+    {
+      "type": "paragraph",
+      "text": "Sender sees `TIMEOUT` and thinks \"Payment failed.\" But it may have succeeded."
+    },
+    {
+      "type": "paragraph",
+      "text": "**❌ Wrong:** Sender creates another payment."
+    },
+    {
+      "type": "paragraph",
+      "text": "**✅ Correct:** Retry using the same idempotency key: `abc123`. Server responds `PAY123 SUCCESS`. No duplicate payment."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-9-sender-sends-the-same-request-twice",
+      "text": "Scenario 9 — Sender sends the same request twice"
+    },
+    {
+      "type": "code",
+      "code": "POST /payment\n₹100\nidempotency_key = ABC"
+    },
+    {
+      "type": "paragraph",
+      "text": "then"
+    },
+    {
+      "type": "code",
+      "code": "POST /payment\n₹100\nidempotency_key = ABC"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Store idempotency keys."
+    },
+    {
+      "type": "code",
+      "code": "idempotency_key | payment_id | status\n------------------------------------------------\nABC             | PAY123     | SUCCESS"
+    },
+    {
+      "type": "paragraph",
+      "text": "When request `ABC` comes in, check DB. If it already exists: return existing result."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-10-two-different-requests-try-to-pay-simultaneously",
+      "text": "Scenario 10 — Two different requests try to pay simultaneously"
+    },
+    {
+      "type": "paragraph",
+      "text": "Suppose the user has `Balance = ₹100`. Two requests arrive:"
+    },
+    {
+      "type": "code",
+      "code": "Request A → spend ₹100\nRequest B → spend ₹100"
+    },
+    {
+      "type": "paragraph",
+      "text": "Both read `Balance = ₹100`. Now you've spent ₹200 from ₹100."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Atomic update / row locking."
+    },
+    {
+      "type": "code",
+      "code": "UPDATE accounts\nSET balance = balance - 100\nWHERE account_id = 123\nAND balance >= 100;"
+    },
+    {
+      "type": "paragraph",
+      "text": "If `rows affected = 1`, payment can proceed. If `rows affected = 0`, insufficient balance."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-11-same-payment-processed-by-two-server-instances",
+      "text": "Scenario 11 — Same payment processed by two Server instances"
+    },
+    {
+      "type": "code",
+      "code": "              ┌─ Server A\nSender ───────┤\n              └─ Server B"
+    },
+    {
+      "type": "paragraph",
+      "text": "Both somehow receive `PAY123`."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Database uniqueness constraint: `UNIQUE(idempotency_key)` and atomic insertion."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Important:** Don't rely only on application-level checks."
+    },
+    {
+      "type": "paragraph",
+      "text": "Bad:"
+    },
+    {
+      "type": "code",
+      "code": "if not exists(key):\n    create(key)"
+    },
+    {
+      "type": "paragraph",
+      "text": "Two servers can both execute: `A → check → doesn't exist`, `B → check → doesn't exist`."
+    },
+    {
+      "type": "paragraph",
+      "text": "Instead, let the DB enforce uniqueness."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-12-receiver-is-down",
+      "text": "Scenario 12 — Receiver is down"
+    },
+    {
+      "type": "code",
+      "code": "Server → X → Receiver"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Don't continuously hammer Receiver. Use:"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Retry with exponential backoff:** `1 sec → 2 sec → 4 sec → 8 sec → 16 sec`"
+    },
+    {
+      "type": "paragraph",
+      "text": "plus **Circuit breaker:**"
+    },
+    {
+      "type": "code",
+      "code": "CLOSED\n   ↓\nOPEN"
+    },
+    {
+      "type": "paragraph",
+      "text": "Stop sending requests temporarily. After some time: `HALF-OPEN` — test Receiver. If successful: `CLOSED`."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-13-receiver-is-slow",
+      "text": "Scenario 13 — Receiver is slow"
+    },
+    {
+      "type": "code",
+      "code": "Server\n  │\n  │ request\n  ▼\nReceiver\n  │\n  │ 60 seconds..."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Problem:** Server threads/connections get exhausted."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Set connection timeout and read timeout. And move payment processing toward an asynchronous architecture."
+    },
+    {
+      "type": "paragraph",
+      "text": "Instead of:"
+    },
+    {
+      "type": "code",
+      "code": "HTTP request → wait for receiver → return response"
+    },
+    {
+      "type": "paragraph",
+      "text": "use:"
+    },
+    {
+      "type": "code",
+      "code": "HTTP request → DB → Queue → Worker → Receiver"
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-14-server-sends-request-then-retries-because-of-timeout",
+      "text": "Scenario 14 — Server sends request, then retries because of timeout"
+    },
+    {
+      "type": "paragraph",
+      "text": "This deserves special attention."
+    },
+    {
+      "type": "code",
+      "code": "Server → Receiver\n         ₹100\n        timeout\nServer → Receiver\n         ₹100"
+    },
+    {
+      "type": "paragraph",
+      "text": "Receiver may have received both."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Every payment request needs a stable identifier: `PAY123`. Receiver must treat `PAY123, PAY123, PAY123` as the same operation. This is idempotency."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-15-receiver-says-failed-but-response-is-lost",
+      "text": "Scenario 15 — Receiver says FAILED, but response is lost"
+    },
+    {
+      "type": "code",
+      "code": "Server → Receiver\n           │\n           X"
+    },
+    {
+      "type": "paragraph",
+      "text": "Server doesn't know. Retry with same payment ID: `PAY123`. Receiver: `PAY123 → FAILED`. Server can safely record `FAILED`, because it didn't create a second payment."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-16-receiver-succeeds-but-webhook-arrives-multiple-times",
+      "text": "Scenario 16 — Receiver succeeds but webhook arrives multiple times"
+    },
+    {
+      "type": "paragraph",
+      "text": "Receiver might send:"
+    },
+    {
+      "type": "code",
+      "code": "Webhook PAY123 SUCCESS\nWebhook PAY123 SUCCESS\nWebhook PAY123 SUCCESS"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Webhook processing must also be idempotent. Store `event_id` with `UNIQUE(event_id)`. If event already processed: ignore."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-17-webhook-arrives-before-your-original-response",
+      "text": "Scenario 17 — Webhook arrives before your original response"
+    },
+    {
+      "type": "paragraph",
+      "text": "Possible:"
+    },
+    {
+      "type": "code",
+      "code": "Server → Receiver\n             │\n             ├── SUCCESS\n             │\n             └── webhook ──→ Server"
+    },
+    {
+      "type": "paragraph",
+      "text": "Webhook arrives before the synchronous response. That's okay. Your payment state machine must allow events to arrive in different orders."
+    },
+    {
+      "type": "code",
+      "code": "PROCESSING\n    ↓\nSUCCESS"
+    },
+    {
+      "type": "paragraph",
+      "text": "and later the original API response can simply confirm `SUCCESS`."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-18-webhook-says-success-but-db-update-fails",
+      "text": "Scenario 18 — Webhook says SUCCESS but DB update fails"
+    },
+    {
+      "type": "code",
+      "code": "Receiver\n   │\n   │ webhook\n   ▼\nServer\n   │\n   X\n  DB"
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Don't lose the webhook. Use:"
+    },
+    {
+      "type": "code",
+      "code": "Webhook → Queue → Worker → DB"
+    },
+    {
+      "type": "paragraph",
+      "text": "or persist the event before processing it. Then retry DB processing."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-19-server-processes-payment-but-response-is-lost",
+      "text": "Scenario 19 — Server processes payment but response is lost"
+    },
+    {
+      "type": "paragraph",
+      "text": "This is essentially `SUCCESS`, but Sender doesn't know. Sender retries."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Idempotency key. `ABC123 → PAY123 → SUCCESS`. Return the previously stored result."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-20-server-crashes-halfway-through-multiple-db-operations",
+      "text": "Scenario 20 — Server crashes halfway through multiple DB operations"
+    },
+    {
+      "type": "paragraph",
+      "text": "Suppose:"
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        "deduct balance",
+        "create payment",
+        "create transaction"
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "Server crashes after step 1. Now: `balance = ₹0`, `payment = missing`, `transaction = missing`. Bad."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** Use a DB transaction:"
+    },
+    {
+      "type": "code",
+      "code": "BEGIN;\n\ndeduct balance;\ncreate payment;\ncreate transaction;\n\nCOMMIT;"
+    },
+    {
+      "type": "paragraph",
+      "text": "If anything fails: `ROLLBACK`. So either ALL happen or NONE happen."
+    },
+    {
+      "type": "heading",
+      "level": 3,
+      "id": "scenario-21-db-update-and-message-publishing-problem",
+      "text": "Scenario 21 — DB update and message publishing problem"
+    },
+    {
+      "type": "code",
+      "code": "Server\n  │\n  ├── DB ✓\n  │\n  └── Queue X"
+    },
+    {
+      "type": "paragraph",
+      "text": "DB transaction succeeds but queue publish fails. Your payment exists but the worker doesn't know about it."
+    },
+    {
+      "type": "paragraph",
+      "text": "**Solution:** This is where the **Transactional Outbox Pattern** becomes useful."
+    },
+    {
+      "type": "paragraph",
+      "text": "Instead of DB + Queue independently:"
+    },
+    {
+      "type": "code",
+      "code": "BEGIN TRANSACTION\n\npayment = PROCESSING\noutbox_event = \"PROCESS_PAYMENT\"\n\nCOMMIT"
+    },
+    {
+      "type": "paragraph",
+      "text": "Then an outbox worker publishes: `outbox → queue → payment worker`. Now the event isn't lost just because the server crashed."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-complete-architecture",
+      "text": "The Complete Architecture"
+    },
+    {
+      "type": "paragraph",
+      "text": "A reasonably robust payment system starts looking like:"
+    },
+    {
+      "type": "code",
+      "code": "                     ┌───────────────┐\n                     │    Sender     │\n                     └───────┬───────┘\n                             │\n                    idempotency key\n                             │\n                             ▼\n                     ┌───────────────┐\n                     │     API       │\n                     │    Server     │\n                     └───────┬───────┘\n                             │\n                       DB transaction\n                             │\n                             ▼\n                     ┌───────────────┐\n                     │      DB       │\n                     │               │\n                     │ Payment       │\n                     │ Idempotency   │\n                     │ Outbox        │\n                     └───────┬───────┘\n                             │\n                       Outbox worker\n                             │\n                             ▼\n                     ┌───────────────┐\n                     │     Queue     │\n                     └───────┬───────┘\n                             │\n                          Worker\n                             │\n                     retry + backoff\n                             │\n                             ▼\n                     ┌───────────────┐\n                     │   Receiver    │\n                     └───────┬───────┘\n                             │\n                   ┌─────────┴─────────┐\n                   │                   │\n                Response             Webhook\n                   │                   │\n                   └─────────┬─────────┘\n                             ▼\n                            DB\n                             │\n                       Reconciliation"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "the-8-tools-you-should-remember",
+      "text": "The 8 Tools You Should Remember"
+    },
+    {
+      "type": "paragraph",
+      "text": "When you're given a payment failure scenario in a system-design interview/exercise, think about these:"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Problem",
+          "Tool"
+        ],
+        [
+          "Request duplicated",
+          "Idempotency key"
+        ],
+        [
+          "Concurrent modification",
+          "Atomic update"
+        ],
+        [
+          "Multi-step DB consistency",
+          "DB transaction"
+        ],
+        [
+          "Need to protect row while doing multiple operations",
+          "Row lock (`SELECT FOR UPDATE`)"
+        ],
+        [
+          "Server crashes between DB and queue",
+          "Transactional outbox"
+        ],
+        [
+          "Receiver temporarily unavailable",
+          "Retry + exponential backoff"
+        ],
+        [
+          "Receiver continuously unavailable",
+          "Circuit breaker"
+        ],
+        [
+          "Unknown payment outcome",
+          "Status API + webhook + reconciliation"
+        ]
+      ]
+    },
+    {
+      "type": "label",
+      "text": "The golden rule for payment systems:"
+    },
+    {
+      "type": "callout",
+      "variant": "tip",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Never interpret a timeout as a failure when the operation may have reached the Receiver."
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "A timeout means `UNKNOWN`, not `FAILED`. That single idea explains why idempotency keys + payment state machines + retries + reconciliation are so important."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "failure-scenarios-solutions-full-table",
+      "text": "Failure Scenarios → Solutions (Full Table)"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "#",
+          "Failure scenario",
+          "What can go wrong?",
+          "Correct solution",
+          "Why?"
+        ],
+        [
+          "1",
+          "Sender → Server fails",
+          "Server never receives request",
+          "Client retry + Idempotency Key",
+          "Safe to retry without creating duplicates"
+        ],
+        [
+          "2",
+          "Server crashes before DB write",
+          "Request is lost",
+          "Idempotency Key + Retry",
+          "Sender can safely retry"
+        ],
+        [
+          "3",
+          "Server writes DB, then crashes before Receiver call",
+          "Payment stuck in DB",
+          "Payment state machine + Background Worker",
+          "Worker can resume CREATED/PROCESSING payments"
+        ],
+        [
+          "4",
+          "Server → Receiver timeout",
+          "Receiver may have processed payment, but Server doesn't know",
+          "Idempotency Key + Status API/Webhook",
+          "Never assume timeout = failure"
+        ],
+        [
+          "5",
+          "Receiver succeeds, Server crashes before DB update",
+          "Receiver says SUCCESS, DB says PROCESSING",
+          "Idempotent retry + Webhook + Reconciliation",
+          "Eventually discover true payment state"
+        ],
+        [
+          "6",
+          "DB crashes before Receiver call",
+          "Payment state may not be persisted",
+          "DB Transaction + Durable State",
+          "Don't lose payment intent"
+        ],
+        [
+          "7",
+          "DB crashes after Receiver succeeds",
+          "Money transferred but DB doesn't show it",
+          "Webhook + Reconciliation",
+          "Recover inconsistent state"
+        ],
+        [
+          "8",
+          "Sender doesn't receive Server response",
+          "User thinks payment failed",
+          "Same Idempotency Key on retry",
+          "Prevents duplicate payment"
+        ],
+        [
+          "9",
+          "Sender sends same request twice",
+          "Two payments may be created",
+          "Idempotency Key + UNIQUE constraint",
+          "Same logical request produces one result"
+        ],
+        [
+          "10",
+          "Two requests modify same balance",
+          "Race condition / negative balance",
+          "Atomic UPDATE",
+          "Database performs check + update atomically"
+        ],
+        [
+          "11",
+          "Two Server instances process same payment",
+          "Duplicate processing",
+          "DB UNIQUE constraint + Idempotency Key",
+          "DB guarantees uniqueness"
+        ],
+        [
+          "12",
+          "Receiver is down",
+          "Repeated requests fail",
+          "Retry + Exponential Backoff",
+          "Gives Receiver time to recover"
+        ],
+        [
+          "13",
+          "Receiver continuously fails",
+          "Server gets overloaded by retries",
+          "Circuit Breaker",
+          "Temporarily stop calling unhealthy Receiver"
+        ],
+        [
+          "14",
+          "Receiver is very slow",
+          "Server connections/threads get exhausted",
+          "Timeout + Async Processing/Queue",
+          "Don't keep HTTP requests waiting"
+        ],
+        [
+          "15",
+          "Server retries after Receiver timeout",
+          "Could charge twice",
+          "Same Idempotency Key to Receiver",
+          "Receiver recognizes duplicate"
+        ],
+        [
+          "16",
+          "Receiver returns FAILED but response is lost",
+          "Server doesn't know final result",
+          "Retry using same Payment ID / Status API",
+          "Retry doesn't create another payment"
+        ],
+        [
+          "17",
+          "Receiver sends webhook multiple times",
+          "Payment processed multiple times",
+          "Webhook Idempotency + UNIQUE event_id",
+          "Duplicate webhook becomes harmless"
+        ],
+        [
+          "18",
+          "Webhook arrives before API response",
+          "Events arrive out of order",
+          "Payment State Machine",
+          "System handles asynchronous ordering"
+        ],
+        [
+          "19",
+          "Webhook received but DB update fails",
+          "Webhook information could be lost",
+          "Queue + Retry / Durable Event",
+          "Process webhook again"
+        ],
+        [
+          "20",
+          "Server crashes halfway through DB operations",
+          "Partial DB state",
+          "DB Transaction",
+          "All-or-nothing DB changes"
+        ],
+        [
+          "21",
+          "DB succeeds but Queue publish fails",
+          "Payment exists but worker doesn't know",
+          "Transactional Outbox",
+          "DB and event become reliably linked"
+        ],
+        [
+          "22",
+          "Concurrent balance withdrawals",
+          "Both requests read same balance",
+          "Atomic Update / Row Lock",
+          "Prevents lost updates/overspending"
+        ],
+        [
+          "23",
+          "Need read → validate → modify multiple times",
+          "Another transaction can change row in between",
+          "Row Lock (SELECT FOR UPDATE)",
+          "Keeps row protected during transaction"
+        ],
+        [
+          "24",
+          "Payment remains PROCESSING forever",
+          "System doesn't know what happened",
+          "Timeout policy + Reconciliation",
+          "Periodically resolve stuck payments"
+        ],
+        [
+          "25",
+          "Receiver and DB disagree",
+          "Money state differs between systems",
+          "Reconciliation job",
+          "Compare both systems and repair discrepancies"
+        ]
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "quick-reference-if-the-problem-is",
+      "text": "Quick Reference: If the Problem Is..."
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "If the problem is...",
+          "Think of..."
+        ],
+        [
+          "🔁 Same request comes again",
+          "Idempotency Key"
+        ],
+        [
+          "⚔️ Two requests modify same data",
+          "Atomic Update"
+        ],
+        [
+          "🔒 Need to protect a row during multiple operations",
+          "Row Lock"
+        ],
+        [
+          "💾 Multiple DB operations must succeed together",
+          "DB Transaction"
+        ],
+        [
+          "📤 DB succeeded but event/queue failed",
+          "Transactional Outbox"
+        ],
+        [
+          "🔄 Temporary external failure",
+          "Retry + Exponential Backoff"
+        ],
+        [
+          "🚨 External service keeps failing",
+          "Circuit Breaker"
+        ],
+        [
+          "❓ Don't know whether payment succeeded",
+          "Status API + Webhook + Reconciliation"
+        ],
+        [
+          "📩 Webhook can arrive multiple times",
+          "Webhook Idempotency"
+        ],
+        [
+          "🕐 Payment stuck in processing",
+          "State Machine + Reconciliation"
+        ]
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "decision-matrix-idempotency-key-vs-atomic-update-vs-row-lock",
+      "text": "Decision Matrix: Idempotency Key vs Atomic Update vs Row Lock"
+    },
+    {
+      "type": "table",
+      "rows": [
+        [
+          "Situation",
+          "Idempotency Key",
+          "Atomic Update",
+          "Row Lock"
+        ],
+        [
+          "Same API request repeated",
+          "✅",
+          "❌",
+          "❌"
+        ],
+        [
+          "Network timeout + retry",
+          "✅",
+          "❌",
+          "❌"
+        ],
+        [
+          "Double-click \"Pay\"",
+          "✅",
+          "❌",
+          "❌"
+        ],
+        [
+          "Two users spend same balance",
+          "❌",
+          "✅",
+          "Sometimes"
+        ],
+        [
+          "Prevent stock going below 0",
+          "❌",
+          "✅",
+          "Sometimes"
+        ],
+        [
+          "Increment/decrement counter",
+          "❌",
+          "✅",
+          "❌"
+        ],
+        [
+          "Read → check → modify row",
+          "❌",
+          "Sometimes",
+          "✅"
+        ],
+        [
+          "Multiple operations need protected row",
+          "❌",
+          "Sometimes",
+          "✅"
+        ],
+        [
+          "Prevent duplicate payment creation",
+          "✅",
+          "❌",
+          "❌"
+        ],
+        [
+          "Prevent duplicate DB records",
+          "✅ + UNIQUE constraint",
+          "❌",
+          "❌"
+        ]
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "id": "where-to-go-next",
+      "text": "Where to Go Next"
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        "Put it together in a full design: [Payment System](/learn/system-design/problem-breakdowns/payment-system).",
+        "The concurrency tools in more depth: [Dealing with Contention](/learn/system-design/patterns/dealing-with-contention).",
+        "State machines, workers and sagas: [Multi-step Processes](/learn/system-design/patterns/multi-step-processes)."
+      ]
+    }
+  ],
+  "quiz": []
+}
